@@ -164,10 +164,18 @@ Key points:
 
 ### Server (`backitup-server`)
 
-| Variable        | Default               | Description                              |
-|-----------------|-----------------------|------------------------------------------|
-| `BACKITUP_DB`   | `/data/backitup.db`   | SQLite database path                     |
-| `BACKITUP_ADDR` | `:8080`               | HTTP listen address                      |
+| Variable                   | Default             | Description                                            |
+|----------------------------|---------------------|--------------------------------------------------------|
+| `BACKITUP_DB`              | `/data/backitup.db` | SQLite database path                                   |
+| `BACKITUP_ADDR`            | `:8080`             | HTTP listen address                                    |
+| `BACKITUP_ADMIN_USER`      | (unset)             | Admin username; upserts the admin on start when set    |
+| `BACKITUP_ADMIN_PASSWORD`  | (unset)             | Admin password (hashed argon2id); set with the user    |
+| `BACKITUP_TLS_CERT`        | (unset)             | TLS cert path; serves HTTPS when cert+key are set       |
+| `BACKITUP_TLS_KEY`         | (unset)             | TLS key path                                           |
+
+> Set `BACKITUP_ADMIN_USER` + `BACKITUP_ADMIN_PASSWORD` to create the webgui login.
+> Set `BACKITUP_TLS_CERT` + `BACKITUP_TLS_KEY` to serve HTTPS (required in production —
+> the login and client tokens must not cross plaintext).
 
 ### Client (`backitup-client`)
 
@@ -258,8 +266,9 @@ docker-compose.yml app + sshd ingest topology
 backitup is built in lanes (see the design doc). Lane 0 is done.
 
 - [x] **Lane 0** — foundation: model, store, mode seam, server skeleton, Docker, tests
+- [x] **Lane B** — webgui: admin login (argon2id + session), fleet dashboard (status
+      language, empty state, responsive), `/api/v1/config` + `/api/v1/status`, optional TLS
 - [ ] **Lane A** — sshd ingest container + authorized_keys generation (key-sync seam)
-- [ ] **Lane B** — webgui: admin login, fleet dashboard, `/api/v1/config` + `/status`, TLS
 - [ ] **Lane C** — client modes: tar.gz end-to-end, then rsync (hardlink snapshots)
 - [ ] **Lane D** — lifecycle worker: rclone offsite + prune + integrity verify
 

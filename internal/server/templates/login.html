@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>backitup — sign in</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="login-wrap">
+    <form class="login" method="post" action="/login">
+      <span class="brand"><span class="sq">▣</span> backitup</span>
+      {{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" autofocus required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button class="btn" type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>

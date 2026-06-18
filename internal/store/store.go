@@ -114,6 +114,35 @@ func (s *Store) LatestRun(ctx context.Context, clientID int64) (*model.Run, erro
 	return &r, nil
 }
 
+// SetAdmin upserts the single admin row (id=1).
+func (s *Store) SetAdmin(ctx context.Context, a model.Admin) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO admin (id, username, password_hash, created_at)
+		VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash`,
+		a.Username, a.PasswordHash, time.Now().UTC().Format(rfc3339))
+	if err != nil {
+		return fmt.Errorf("upsert admin: %w", err)
+	}
+	return nil
+}
+
+// GetAdmin returns the admin account, or (nil, nil) if none has been set.
+func (s *Store) GetAdmin(ctx context.Context) (*model.Admin, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT username, password_hash, created_at FROM admin WHERE id=1`)
+	var a model.Admin
+	var created string
+	switch err := row.Scan(&a.Username, &a.PasswordHash, &created); err {
+	case sql.ErrNoRows:
+		return nil, nil
+	case nil:
+		a.CreatedAt, _ = time.Parse(rfc3339, created)
+		return &a, nil
+	default:
+		return nil, err
+	}
+}
+
 func b2i(b bool) int {
 	if b {
 		return 1

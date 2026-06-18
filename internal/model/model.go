@@ -102,6 +102,13 @@ type OffsiteObject struct {
 	UploadedAt time.Time
 }
 
+// Admin is the single webgui admin account (D3). PasswordHash is argon2id.
+type Admin struct {
+	Username     string
+	PasswordHash string
+	CreatedAt    time.Time
+}
+
 const maxLogTail = 4 * 1024
 
 // CapLogTail trims a log to the last maxLogTail bytes (DD4 / eng review).

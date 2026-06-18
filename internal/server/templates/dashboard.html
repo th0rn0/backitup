@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>backitup — fleet</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="Primary">
+      <span class="brand"><span class="sq">▣</span> backitup</span>
+      <div class="nav">
+        <a href="/" class="active" aria-current="page">Dashboard</a>
+        <a href="/clients">Clients</a>
+        <a href="/settings">Settings</a>
+      </div>
+    </nav>
+    <main class="main">
+      <div class="topbar">
+        <div class="summary" role="status">
+          Fleet
+          <b class="ok">{{.Summary.OK}} OK</b> ·
+          <b class="stale">{{.Summary.Stale}} stale</b> ·
+          <b class="failed">{{.Summary.Failed}} failed</b> ·
+          <b class="never">{{.Summary.Never}} never</b>
+        </div>
+        <a class="btn" href="/clients/new">+ Add client</a>
+      </div>
+
+      {{if .Clients}}
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Client</th><th>Mode</th><th>Last backup</th><th>Size</th><th>Retention</th><th>Offsite</th></tr>
+        </thead>
+        <tbody>
+          {{range .Clients}}
+          <tr>
+            <td data-label="Status">
+              <span class="status {{.Health}}"><span class="dot" aria-hidden="true">{{.Icon}}</span> {{.HealthLabel}}</span>
+            </td>
+            <td data-label="Client"><a href="/clients/{{.ID}}">{{.Name}}</a></td>
+            <td data-label="Mode"><span class="badge">{{.Mode}}</span></td>
+            <td data-label="Last backup" class="mono">{{.LastBackup}}</td>
+            <td data-label="Size" class="mono">{{.Size}}</td>
+            <td data-label="Retention" class="mono">{{.Retention}}</td>
+            <td data-label="Offsite" class="mono">{{.Offsite}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <section class="empty">
+        <h2>No clients yet</h2>
+        <p>A <strong>client</strong> backs up one directory on one machine. Add one here,
+           then paste the cron line it gives you onto that host.</p>
+        <ol>
+          <li>Add a client (you'll get a key + token)</li>
+          <li>Paste the cron line on the host you want backed up</li>
+          <li>Watch its row turn <span class="status ok">green</span></li>
+        </ol>
+        <br>
+        <a class="btn" href="/clients/new">+ Add your first client</a>
+      </section>
+      {{end}}
+    </main>
+  </div>
+</body>
+</html>
