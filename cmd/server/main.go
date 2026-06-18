@@ -35,6 +35,12 @@ func main() {
 	}
 
 	srv := server.New(st, secure)
+	srv.ConfigureIngest(
+		os.Getenv("BACKITUP_AUTHKEYS"),
+		os.Getenv("BACKITUP_BACKUP_DIR"),
+		os.Getenv("BACKITUP_PUBLIC_HOST"),
+		os.Getenv("BACKITUP_CLIENT_IMAGE"),
+	)
 	if secure {
 		log.Printf("backitup server: listening on %s (TLS)", addr)
 		err = http.ListenAndServeTLS(addr, tlsCert, tlsKey, srv.Handler())

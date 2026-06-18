@@ -1,0 +1,166 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/th0rn0/backitup/internal/auth"
+	"github.com/th0rn0/backitup/internal/authkeys"
+	"github.com/th0rn0/backitup/internal/keys"
+	"github.com/th0rn0/backitup/internal/model"
+)
+
+// getNewClient renders the add-client form.
+func (s *Server) getNewClient(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", nil)
+}
+
+// postClients creates a client: generate an SSH keypair + bearer token, store
+// the client (pubkey + token HASH only), regenerate authorized_keys, and show
+// the private key + token + cron line ONCE (D4, DD5).
+func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	name := r.PostFormValue("name")
+	mode := model.Mode(r.PostFormValue("mode"))
+	if name == "" || !mode.Valid() {
+		s.renderNewClientError(w, "Name is required and mode must be targz or rsync.")
+		return
+	}
+
+	privPEM, pubLine, err := keys.GenerateKeypair("backitup:" + name)
+	if err != nil {
+		http.Error(w, "keygen failed", http.StatusInternalServerError)
+		return
+	}
+	token, err := keys.GenerateToken()
+	if err != nil {
+		http.Error(w, "token gen failed", http.StatusInternalServerError)
+		return
+	}
+	tokenHash, err := auth.HashPassword(token)
+	if err != nil {
+		http.Error(w, "token hash failed", http.StatusInternalServerError)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	_, err = s.st.CreateClient(ctx, model.Client{
+		Name:                 name,
+		Mode:                 mode,
+		SourceLabel:          r.PostFormValue("source_label"),
+		RetentionDays:        atoiDefault(r.PostFormValue("retention_days"), 14),
+		OffsiteRetentionDays: atoiDefault(r.PostFormValue("offsite_retention_days"), 90),
+		ExpectedIntervalSecs: atoiDefault(r.PostFormValue("expected_interval_secs"), 0),
+		OffsiteRemote:        r.PostFormValue("offsite_remote"),
+		SSHPubKey:            pubLine,
+		TokenHash:            tokenHash,
+		Enabled:              true,
+	})
+	if err != nil {
+		// Most likely a duplicate name (UNIQUE) — report it as a form error.
+		s.renderNewClientError(w, "Could not create client (is the name already taken?).")
+		return
+	}
+
+	if err := s.regenAuthorizedKeys(ctx); err != nil {
+		log.Printf("authkeys regenerate failed: %v", err)
+		// The client exists; surface the issue but still show the secrets.
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
+		"Name":       name,
+		"Mode":       string(mode),
+		"PrivateKey": privPEM,
+		"Token":      token,
+		"Server":     s.publicHost,
+		"CronLine":   s.cronLine(token),
+	})
+}
+
+// getClient renders a minimal client detail page (run history comes in Lane D).
+func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	c, err := s.st.GetClient(ctx, id)
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	latest, _ := s.st.LatestRun(ctx, id)
+	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
+		"Client":      c,
+		"Health":      string(h),
+		"HealthLabel": healthLabel(h),
+		"Icon":        healthIcon(h),
+		"HasRun":      latest != nil,
+		"Latest":      latest,
+	})
+}
+
+func (s *Server) renderNewClientError(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{"Error": msg})
+}
+
+// regenAuthorizedKeys rewrites the sshd authorized_keys file from the current
+// client list, atomically (D4). A no-op if no path is configured.
+func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
+	if s.authKeysPath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(s.authKeysPath), 0o700); err != nil {
+		return err
+	}
+	clients, err := s.st.ListClients(ctx)
+	if err != nil {
+		return err
+	}
+	content, skipped := authkeys.Render(clients, s.backupBaseDir)
+	for _, sk := range skipped {
+		log.Printf("authkeys: skipped client %d: %s", sk.ClientID, sk.Reason)
+	}
+	return authkeys.WriteAtomic(s.authKeysPath, content)
+}
+
+func (s *Server) cronLine(token string) string {
+	return fmt.Sprintf("30 2 * * *  docker run --rm \\\n"+
+		"  --mount type=bind,src=/PATH/TO/BACKUP,dst=/source,readonly \\\n"+
+		"  -e BACKITUP_SERVER=%s \\\n"+
+		"  -e BACKITUP_TOKEN=%s \\\n"+
+		"  %s", s.publicHost, token, s.clientImage)
+}
+
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}

@@ -28,16 +28,44 @@ type Server struct {
 	sessions *auth.SessionStore
 	tmpl     *template.Template
 	secure   bool // set cookies Secure (true when served over TLS)
+
+	// Ingest config (Lane A): where to write authorized_keys, the per-client
+	// backup base dir, and what to show in the generated cron line.
+	authKeysPath  string
+	backupBaseDir string
+	publicHost    string
+	clientImage   string
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
 // Secure (use true behind TLS).
 func New(st *store.Store, secure bool) *Server {
 	return &Server{
-		st:       st,
-		sessions: auth.NewSessionStore(12 * time.Hour),
-		tmpl:     template.Must(template.ParseFS(templateFS, "templates/*.html")),
-		secure:   secure,
+		st:            st,
+		sessions:      auth.NewSessionStore(12 * time.Hour),
+		tmpl:          template.Must(template.ParseFS(templateFS, "templates/*.html")),
+		secure:        secure,
+		authKeysPath:  "/srv/authkeys/authorized_keys",
+		backupBaseDir: "/srv/backups",
+		publicHost:    "your-server:2222",
+		clientImage:   "ghcr.io/th0rn0/backitup-client:latest",
+	}
+}
+
+// ConfigureIngest sets the Lane A ingest parameters (called from cmd/server with
+// env values). Empty arguments leave the existing default in place.
+func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, clientImage string) {
+	if authKeysPath != "" {
+		s.authKeysPath = authKeysPath
+	}
+	if backupBaseDir != "" {
+		s.backupBaseDir = backupBaseDir
+	}
+	if publicHost != "" {
+		s.publicHost = publicHost
+	}
+	if clientImage != "" {
+		s.clientImage = clientImage
 	}
 }
 
@@ -51,6 +79,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.postLogin)
 	mux.HandleFunc("POST /logout", s.postLogout)
 	mux.HandleFunc("GET /{$}", s.requireAdmin(s.dashboard))
+	mux.HandleFunc("GET /clients/new", s.requireAdmin(s.getNewClient))
+	mux.HandleFunc("POST /clients", s.requireAdmin(s.postClients))
+	mux.HandleFunc("GET /clients/{id}", s.requireAdmin(s.getClient))
 
 	// Client API (bearer token), needed by Lane C. Control channel is HTTPS in
 	// production (cmd/server serves TLS when configured).

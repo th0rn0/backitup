@@ -1,0 +1,26 @@
+#!/bin/sh
+# Forced command for tar.gz clients (set in authorized_keys by the app as
+#   command="backitup-recv /srv/backups/<id>").
+# Reads the client's streamed tar.gz archive from stdin and writes it into that
+# client's directory. The directory comes from authorized_keys (server-derived
+# from the client ID), never from anything the client sends, so the client can
+# only ever write into its own directory.
+set -eu
+
+dir="${1:?usage: backitup-recv <dir>}"
+mkdir -p "$dir"
+
+ts="$(date -u +%Y%m%dT%H%M%SZ)"
+# Monotonic suffix avoids same-second collisions.
+n=0
+out="$dir/backup-$ts-$(printf '%03d' "$n").tar.gz"
+while [ -e "$out" ]; do
+  n=$((n + 1))
+  out="$dir/backup-$ts-$(printf '%03d' "$n").tar.gz"
+done
+
+# Write to a .part file then rename so a partial/interrupted upload is never
+# mistaken for a complete snapshot.
+tmp="$out.part"
+cat > "$tmp"
+mv "$tmp" "$out"

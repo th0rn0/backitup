@@ -71,6 +71,33 @@ func TestClientAndRunRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGetClient(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	// Not found -> (nil, nil).
+	got, err := st.GetClient(ctx, 123)
+	if err != nil || got != nil {
+		t.Fatalf("GetClient(missing) = %v, %v; want nil, nil", got, err)
+	}
+
+	id, err := st.CreateClient(ctx, model.Client{Name: "g", Mode: model.ModeTarGz, RetentionDays: 9, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err = st.GetClient(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("GetClient = %v, %v", got, err)
+	}
+	if got.Name != "g" || got.RetentionDays != 9 {
+		t.Fatalf("GetClient mismatch: %+v", got)
+	}
+}
+
 func TestUniqueClientName(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

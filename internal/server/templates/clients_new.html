@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>backitup — add client</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="Primary">
+      <span class="brand"><span class="sq">▣</span> backitup</span>
+      <div class="nav">
+        <a href="/">Dashboard</a>
+        <a href="/clients/new" class="active" aria-current="page">Add client</a>
+        <a href="/settings">Settings</a>
+      </div>
+    </nav>
+    <main class="main">
+      <h1>Add a client</h1>
+      <p class="summary">A client backs up one directory on one host. You'll get a key, a token, and a cron line to paste on that host.</p>
+      {{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
+      <form method="post" action="/clients" class="form">
+        <label for="name">Name</label>
+        <input id="name" name="name" required autofocus placeholder="laptop-docs">
+
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode">
+          <option value="targz">targz — dated snapshot archives</option>
+          <option value="rsync">rsync — hardlink incremental snapshots</option>
+        </select>
+
+        <label for="source_label">Source label (description)</label>
+        <input id="source_label" name="source_label" placeholder="~/Documents on my laptop">
+
+        <div class="row">
+          <div>
+            <label for="retention_days">Hot retention (days)</label>
+            <input id="retention_days" name="retention_days" type="number" min="1" value="14">
+          </div>
+          <div>
+            <label for="offsite_retention_days">Offsite retention (days)</label>
+            <input id="offsite_retention_days" name="offsite_retention_days" type="number" min="1" value="90">
+          </div>
+          <div>
+            <label for="expected_interval_secs">Expected interval (s, 0 = unknown)</label>
+            <input id="expected_interval_secs" name="expected_interval_secs" type="number" min="0" value="86400">
+          </div>
+        </div>
+
+        <label for="offsite_remote">Offsite remote (rclone, blank = none)</label>
+        <input id="offsite_remote" name="offsite_remote" placeholder="s3">
+
+        <button class="btn" type="submit">Create client</button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

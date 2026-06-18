@@ -116,6 +116,9 @@ docker build -t ghcr.io/th0rn0/backitup-server:dev -f Dockerfile .
 
 # Client (dumb uploader): Alpine + rsync + openssh-client, ~25 MB.
 docker build -t ghcr.io/th0rn0/backitup-client:dev -f Dockerfile.client .
+
+# SSH ingest (data plane): Debian + OpenSSH + rsync/rrsync.
+docker build -t ghcr.io/th0rn0/backitup-sshd:dev -f Dockerfile.sshd .
 ```
 
 Both are pure-Go (`CGO_ENABLED=0`) and build for `linux/amd64` and `linux/arm64`:
@@ -172,6 +175,10 @@ Key points:
 | `BACKITUP_ADMIN_PASSWORD`  | (unset)             | Admin password (hashed argon2id); set with the user    |
 | `BACKITUP_TLS_CERT`        | (unset)             | TLS cert path; serves HTTPS when cert+key are set       |
 | `BACKITUP_TLS_KEY`         | (unset)             | TLS key path                                           |
+| `BACKITUP_AUTHKEYS`        | `/srv/authkeys/authorized_keys` | Path the app rewrites for the sshd container (D4) |
+| `BACKITUP_BACKUP_DIR`      | `/srv/backups`      | Base dir for per-client backup directories             |
+| `BACKITUP_PUBLIC_HOST`     | `your-server:2222`  | Host:port shown in the generated client cron line      |
+| `BACKITUP_CLIENT_IMAGE`    | `ghcr.io/th0rn0/backitup-client:latest` | Client image used in the cron line |
 
 > Set `BACKITUP_ADMIN_USER` + `BACKITUP_ADMIN_PASSWORD` to create the webgui login.
 > Set `BACKITUP_TLS_CERT` + `BACKITUP_TLS_KEY` to serve HTTPS (required in production —
@@ -268,7 +275,10 @@ backitup is built in lanes (see the design doc). Lane 0 is done.
 - [x] **Lane 0** — foundation: model, store, mode seam, server skeleton, Docker, tests
 - [x] **Lane B** — webgui: admin login (argon2id + session), fleet dashboard (status
       language, empty state, responsive), `/api/v1/config` + `/api/v1/status`, optional TLS
-- [ ] **Lane A** — sshd ingest container + authorized_keys generation (key-sync seam)
+- [x] **Lane A** — SSH ingest container + per-client key/token issuance, atomic
+      `authorized_keys` generation with per-mode forced commands (injection-defended),
+      and the add-client flow (verified end-to-end: real SSH tar.gz upload, confined,
+      byte-identical roundtrip)
 - [ ] **Lane C** — client modes: tar.gz end-to-end, then rsync (hardlink snapshots)
 - [ ] **Lane D** — lifecycle worker: rclone offsite + prune + integrity verify
 

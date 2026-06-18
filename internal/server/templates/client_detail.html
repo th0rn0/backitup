@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>backitup — {{.Client.Name}}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="Primary">
+      <span class="brand"><span class="sq">▣</span> backitup</span>
+      <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a></div>
+    </nav>
+    <main class="main">
+      <div class="topbar">
+        <h1>{{.Client.Name}} <span class="status {{.Health}}"><span class="dot" aria-hidden="true">{{.Icon}}</span> {{.HealthLabel}}</span></h1>
+      </div>
+      <table>
+        <tbody>
+          <tr><td>Mode</td><td><span class="badge">{{.Client.Mode}}</span></td></tr>
+          <tr><td>Source</td><td>{{.Client.SourceLabel}}</td></tr>
+          <tr><td>Hot retention</td><td class="mono">{{.Client.RetentionDays}}d</td></tr>
+          <tr><td>Offsite retention</td><td class="mono">{{.Client.OffsiteRetentionDays}}d</td></tr>
+          <tr><td>Offsite remote</td><td class="mono">{{if .Client.OffsiteRemote}}{{.Client.OffsiteRemote}}{{else}}—{{end}}</td></tr>
+        </tbody>
+      </table>
+
+      <h2 style="margin-top:24px">Last run</h2>
+      {{if .HasRun}}
+      <table>
+        <tbody>
+          <tr><td>Status</td><td>{{.Latest.Status}}</td></tr>
+          <tr><td>Snapshot</td><td class="mono">{{.Latest.SnapshotID}}</td></tr>
+          <tr><td>Bytes</td><td class="mono">{{.Latest.Bytes}}</td></tr>
+          <tr><td>Files</td><td class="mono">{{.Latest.Files}}</td></tr>
+        </tbody>
+      </table>
+      {{else}}
+      <p class="summary">No runs yet. Paste the client's cron line on its host; this client will appear after its first backup.</p>
+      {{end}}
+    </main>
+  </div>
+</body>
+</html>

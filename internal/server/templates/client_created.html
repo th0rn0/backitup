@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>backitup — {{.Name}} created</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="Primary">
+      <span class="brand"><span class="sq">▣</span> backitup</span>
+      <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a></div>
+    </nav>
+    <main class="main">
+      <h1>Client “{{.Name}}” created</h1>
+      <div class="error" role="alert" style="background:rgba(210,153,34,0.12);border-color:var(--stale);color:var(--stale)">
+        ⚠ Save these now. The private key and token are shown <strong>once</strong> and cannot be retrieved later.
+      </div>
+
+      <h2>1. Client secrets</h2>
+      <label>SSH private key</label>
+      <textarea class="mono secret" id="privkey" rows="8" readonly>{{.PrivateKey}}</textarea>
+      <button class="btn copy" data-target="privkey" type="button">Copy private key</button>
+
+      <label style="margin-top:16px;display:block">Bearer token</label>
+      <input class="mono secret" id="token" value="{{.Token}}" readonly>
+      <button class="btn copy" data-target="token" type="button">Copy token</button>
+
+      <h2 style="margin-top:28px">2. Paste this on the host (cron)</h2>
+      <p class="summary">Edit the source path and schedule to taste. The schedule lives in cron — backitup never changes it for you.</p>
+      <textarea class="mono" id="cron" rows="6" readonly>{{.CronLine}}</textarea>
+      <button class="btn copy" data-target="cron" type="button">Copy cron line</button>
+
+      <h2 style="margin-top:28px">3. Done</h2>
+      <p class="summary">Once cron runs, “{{.Name}}” will appear on the dashboard and turn <span class="status ok">● OK</span> after its first backup.</p>
+      <a class="btn" id="done" href="/">I've saved everything — go to dashboard</a>
+    </main>
+  </div>
+  <script>
+    document.querySelectorAll('.copy').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var el = document.getElementById(b.dataset.target);
+        navigator.clipboard.writeText(el.value).then(function () {
+          var t = b.textContent; b.textContent = 'Copied ✓';
+          setTimeout(function () { b.textContent = t; }, 1200);
+        });
+      });
+    });
+    // Confirm before leaving until the admin clicks "done" (DD5: don't lose secrets).
+    var saved = false;
+    document.getElementById('done').addEventListener('click', function () { saved = true; });
+    window.addEventListener('beforeunload', function (e) {
+      if (!saved) { e.preventDefault(); e.returnValue = ''; }
+    });
+  </script>
+</body>
+</html>

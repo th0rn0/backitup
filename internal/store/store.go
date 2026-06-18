@@ -85,6 +85,23 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	return out, rows.Err()
 }
 
+// GetClient returns one client by ID, or (nil, nil) if not found.
+func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, mode, source_label, excludes, retention_days,
+			offsite_retention_days, expected_interval_secs, offsite_remote,
+			ssh_pubkey, token_hash, enabled, created_at
+		FROM clients WHERE id = ?`, id)
+	c, err := scanClient(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
 // RecordRun inserts a run, capping the log tail (DD4) before write.
 func (s *Store) RecordRun(ctx context.Context, r model.Run) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
