@@ -15,7 +15,9 @@ RUN apt-get update \
     # sshd refuse even pubkey auth: "account is locked").
     && useradd -u 10001 -m -s /bin/sh -p '*' backitup \
     && mkdir -p /srv/backups /srv/authkeys /run/sshd \
-    && chown backitup /srv/backups \
+    # Own both shared dirs as uid 10001 (matching the app image) so the named
+    # volumes are writable by the app regardless of which container inits them.
+    && chown backitup /srv/backups /srv/authkeys \
     && command -v rrsync   # fail the build if rrsync is missing
 
 COPY docker/sshd/sshd_config /etc/ssh/sshd_config

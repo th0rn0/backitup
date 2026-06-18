@@ -139,6 +139,22 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Each enabled client needs its backup directory to exist before its first
+	// run: rrsync (rsync mode) locks its jail root on connect, and rsync won't
+	// create the missing snapshots/ parent. tar.gz's receiver mkdir's as needed,
+	// but pre-creating is harmless and keeps the layout predictable.
+	for _, c := range clients {
+		if !c.Enabled {
+			continue
+		}
+		dir := filepath.Join(s.backupBaseDir, strconv.FormatInt(c.ID, 10))
+		if c.Mode == model.ModeRsync {
+			dir = filepath.Join(dir, "snapshots")
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create client dir %s: %w", dir, err)
+		}
+	}
 	content, skipped := authkeys.Render(clients, s.backupBaseDir)
 	for _, sk := range skipped {
 		log.Printf("authkeys: skipped client %d: %s", sk.ClientID, sk.Reason)

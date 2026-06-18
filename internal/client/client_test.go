@@ -7,7 +7,14 @@ import (
 )
 
 func validConfig() Config {
-	return Config{Server: "host:22", Token: "secret", Source: "/source", Mode: model.ModeTarGz}
+	return Config{
+		APIBase:   "https://host:8080",
+		Token:     "secret",
+		SSHServer: "host:2222",
+		SSHKey:    "/secrets/id",
+		Source:    "/source",
+		Mode:      model.ModeTarGz,
+	}
 }
 
 func TestConfigValidate(t *testing.T) {
@@ -20,8 +27,10 @@ func TestConfigValidate(t *testing.T) {
 		{"valid rsync", func(c *Config) { c.Mode = model.ModeRsync }, false},
 		{"bad mode", func(c *Config) { c.Mode = "zip" }, true},
 		{"empty mode", func(c *Config) { c.Mode = "" }, true},
-		{"missing server", func(c *Config) { c.Server = "" }, true},
+		{"missing api", func(c *Config) { c.APIBase = "" }, true},
 		{"missing token", func(c *Config) { c.Token = "" }, true},
+		{"missing ssh server", func(c *Config) { c.SSHServer = "" }, true},
+		{"missing ssh key", func(c *Config) { c.SSHKey = "" }, true},
 		{"missing source", func(c *Config) { c.Source = "" }, true},
 	}
 	for _, tc := range cases {

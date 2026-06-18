@@ -186,14 +186,25 @@ Key points:
 
 ### Client (`backitup-client`)
 
-| Variable / flag    | Default     | Description                                       |
-|--------------------|-------------|---------------------------------------------------|
-| `BACKITUP_SERVER`  | (required)  | sshd ingest `host:port`                           |
-| `BACKITUP_TOKEN`   | (required)  | bearer token for the control channel              |
-| `BACKITUP_SOURCE`  | `/source`   | read-only source mount inside the container       |
-| `BACKITUP_MODE`    | `targz`     | `targz` or `rsync` (normally fetched from server) |
+| Variable / flag         | Default       | Description                                              |
+|-------------------------|---------------|----------------------------------------------------------|
+| `BACKITUP_API`          | (required)    | control-channel base URL, e.g. `https://host:8080`       |
+| `BACKITUP_TOKEN`        | (required)    | bearer token for the control channel                     |
+| `BACKITUP_SERVER`       | (required)    | sshd ingest `host:port` (data channel)                   |
+| `BACKITUP_SSH_KEY`      | `/secrets/id` | path to the client's private key                         |
+| `BACKITUP_KNOWN_HOSTS`  | (unset)       | known_hosts file for host-key verification               |
+| `BACKITUP_CA`           | (unset)       | CA bundle to trust a self-signed control-channel cert    |
+| `BACKITUP_SOURCE`       | `/source`     | read-only source mount inside the container              |
+| `BACKITUP_MODE`         | `targz`       | fallback mode; the server's config is authoritative      |
+| `BACKITUP_INSECURE`     | (unset)       | set to `1` to skip host-key/TLS verification (dev only)  |
 
-Every variable has a matching flag (`-server`, `-token`, `-source`, `-mode`).
+The client takes the per-client key, token, and a copy-paste cron line from the
+webgui's "Add client" flow. It fetches its mode/excludes/retention from the server,
+runs the backup (reading the source **read-only**), and reports status back. Each run
+holds a per-client lock, so an overrun never collides with the next cron tick.
+
+> Production: set `BACKITUP_KNOWN_HOSTS` (and `BACKITUP_CA` if the control channel
+> uses a self-signed cert) rather than `BACKITUP_INSECURE=1`.
 
 ## Backup modes
 
@@ -279,7 +290,10 @@ backitup is built in lanes (see the design doc). Lane 0 is done.
       `authorized_keys` generation with per-mode forced commands (injection-defended),
       and the add-client flow (verified end-to-end: real SSH tar.gz upload, confined,
       byte-identical roundtrip)
-- [ ] **Lane C** — client modes: tar.gz end-to-end, then rsync (hardlink snapshots)
+- [x] **Lane C** — client run flow (lockfile, config fetch, status report) + both
+      backup modes: tar.gz (pure Go, streamed over SSH) and rsync (hardlink snapshots
+      via rrsync). Verified end-to-end through docker compose: both modes upload, the
+      dashboard goes green, and rsync produces real incremental hardlinked snapshots
 - [ ] **Lane D** — lifecycle worker: rclone offsite + prune + integrity verify
 
 See `TODOS.md` for deferred work (e.g. client credential rotation).

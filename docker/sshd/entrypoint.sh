@@ -11,14 +11,9 @@ if [ ! -f /srv/hostkeys/ssh_host_ed25519_key ]; then
 fi
 chmod 600 /srv/hostkeys/ssh_host_ed25519_key
 
-# Ensure the shared dirs exist with sane ownership/permissions. The app (same
-# uid) writes /srv/authkeys/authorized_keys atomically; sshd StrictModes
-# requires it to be non-group/world-writable.
-mkdir -p /srv/backups /srv/authkeys
-touch /srv/authkeys/authorized_keys
-chmod 700 /srv/authkeys
-chmod 600 /srv/authkeys/authorized_keys 2>/dev/null || true
-chown -R backitup /srv/backups 2>/dev/null || true
+# The app owns /srv/authkeys (mounted read-only here) and writes authorized_keys
+# atomically — sshd only reads it, and tolerates it not existing yet (no clients).
+# Do NOT write into /srv/authkeys from here; it would fail on the read-only mount.
 
 # Validate config, then run in the foreground.
 /usr/sbin/sshd -t -f /etc/ssh/sshd_config
