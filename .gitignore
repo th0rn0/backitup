@@ -1,0 +1,23 @@
+# build output
+/bin/
+/dist/
+*.test
+
+# local data / runtime
+*.db
+*.db-wal
+*.db-shm
+/data/
+
+# secrets (never commit)
+rclone.conf
+openai.json
+*.pem
+*.key
+
+# os
+.DS_Store
+
+# local tooling (machine-specific, not project)
+.claude/
+.gstack/

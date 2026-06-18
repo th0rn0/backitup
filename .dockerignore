@@ -1,0 +1,17 @@
+.git
+.gitignore
+/bin
+/dist
+/data
+*.db
+*.db-wal
+*.db-shm
+*.test
+rclone.conf
+openai.json
+*.pem
+*.key
+README.md
+TODOS.md
+.claude
+.gstack
