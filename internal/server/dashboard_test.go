@@ -136,7 +136,7 @@ func TestDashboardWithClients(t *testing.T) {
 		"just now", "3h ago", "2d ago", // relTime branches
 		"5.0 MB", "2.0 KB", "500 B", // humanBytes branches
 		"Failed", "Stale", "Never", "OK", // health labels (DD2)
-		"✓ s3", // offsite label
+		"⚠ s3 pending", // offsite configured but nothing tiered yet
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("dashboard missing %q", want)

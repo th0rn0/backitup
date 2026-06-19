@@ -11,9 +11,14 @@ import (
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
+	"github.com/th0rn0/backitup/internal/lifecycle"
 	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/server"
 	"github.com/th0rn0/backitup/internal/store"
+
+	// Register the server-side mode behaviours used by the lifecycle worker.
+	_ "github.com/th0rn0/backitup/internal/mode/rsync"
+	_ "github.com/th0rn0/backitup/internal/mode/targz"
 )
 
 func main() {
@@ -35,12 +40,23 @@ func main() {
 	}
 
 	srv := server.New(st, secure)
+	backupDir := getenv("BACKITUP_BACKUP_DIR", "/srv/backups")
 	srv.ConfigureIngest(
 		os.Getenv("BACKITUP_AUTHKEYS"),
-		os.Getenv("BACKITUP_BACKUP_DIR"),
+		backupDir,
 		os.Getenv("BACKITUP_PUBLIC_HOST"),
 		os.Getenv("BACKITUP_CLIENT_IMAGE"),
 	)
+
+	// Lifecycle worker: offsite tiering + retention + integrity, on the server's
+	// own schedule (D1/D8/D9). Per-client OffsiteRemote gates whether a client
+	// is tiered; rclone is only invoked for clients that opt in.
+	stopLifecycle := lifecycle.StartWorker(context.Background(), lifecycle.Deps{
+		Store:         st,
+		Offsite:       lifecycle.NewRclone(os.Getenv("BACKITUP_RCLONE_CONFIG")),
+		BackupBaseDir: backupDir,
+	}, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "1h")))
+	defer stopLifecycle()
 	if secure {
 		log.Printf("backitup server: listening on %s (TLS)", addr)
 		err = http.ListenAndServeTLS(addr, tlsCert, tlsKey, srv.Handler())
@@ -83,4 +99,13 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func parseInterval(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		log.Printf("backitup server: bad lifecycle interval %q, using 1h", s)
+		return time.Hour
+	}
+	return d
 }

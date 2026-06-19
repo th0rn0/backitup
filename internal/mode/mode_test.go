@@ -25,8 +25,8 @@ func (f fakeServerMode) List(context.Context, string) ([]Snapshot, error) {
 func (f fakeServerMode) PrepareOffsite(context.Context, string, Snapshot) (string, error) {
 	return "", ErrNotImplemented
 }
-func (f fakeServerMode) PruneHot(context.Context, string, int) ([]string, error) {
-	return nil, ErrNotImplemented
+func (f fakeServerMode) DeleteSnapshot(context.Context, string, string) error {
+	return ErrNotImplemented
 }
 
 func TestRegistryRoundTrip(t *testing.T) {

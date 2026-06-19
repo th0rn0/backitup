@@ -27,6 +27,10 @@ services:
       # Shown in the generated client cron line.
       BACKITUP_PUBLIC_HOST: ${BACKITUP_PUBLIC_HOST:-your-server:2222}
       BACKITUP_CLIENT_IMAGE: ${BACKITUP_CLIENT_IMAGE:-ghcr.io/th0rn0/backitup-client:dev}
+      # Lifecycle worker (offsite + retention + integrity). rclone.conf defines
+      # the encrypted crypt remote(s) a client's OffsiteRemote points at.
+      BACKITUP_RCLONE_CONFIG: ${BACKITUP_RCLONE_CONFIG:-/data/rclone.conf}
+      BACKITUP_LIFECYCLE_INTERVAL: ${BACKITUP_LIFECYCLE_INTERVAL:-1h}
       # For production, mount certs and set these to serve HTTPS:
       # BACKITUP_TLS_CERT: /certs/cert.pem
       # BACKITUP_TLS_KEY: /certs/key.pem

@@ -160,6 +160,86 @@ func (s *Store) GetAdmin(ctx context.Context) (*model.Admin, error) {
 	}
 }
 
+// RecordOffsiteObject records that a snapshot was uploaded offsite (idempotent
+// on client+snapshot+remote).
+func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) error {
+	uploaded := o.UploadedAt
+	if uploaded.IsZero() {
+		uploaded = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at)
+		VALUES (?,?,?,?,?)
+		ON CONFLICT(client_id, snapshot_id, remote) DO UPDATE SET bytes=excluded.bytes, uploaded_at=excluded.uploaded_at`,
+		o.ClientID, o.SnapshotID, o.Remote, o.Bytes, uploaded.UTC().Format(rfc3339))
+	if err != nil {
+		return fmt.Errorf("record offsite object: %w", err)
+	}
+	return nil
+}
+
+// ListOffsiteObjects returns the offsite objects for a client, newest first.
+func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model.OffsiteObject, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, client_id, snapshot_id, remote, bytes, uploaded_at
+		FROM offsite_objects WHERE client_id = ? ORDER BY uploaded_at DESC`, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.OffsiteObject
+	for rows.Next() {
+		var o model.OffsiteObject
+		var uploaded string
+		if err := rows.Scan(&o.ID, &o.ClientID, &o.SnapshotID, &o.Remote, &o.Bytes, &uploaded); err != nil {
+			return nil, err
+		}
+		o.UploadedAt, _ = time.Parse(rfc3339, uploaded)
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// DeleteOffsiteObject removes an offsite record (after the remote object is gone).
+func (s *Store) DeleteOffsiteObject(ctx context.Context, clientID int64, snapshotID, remote string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM offsite_objects WHERE client_id=? AND snapshot_id=? AND remote=?`,
+		clientID, snapshotID, remote)
+	return err
+}
+
+// LatestOffsite returns the most recent offsite upload time for a client, or
+// (nil, nil) if it has never been offsited. Drives the dashboard offsite state.
+func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT uploaded_at FROM offsite_objects WHERE client_id=? ORDER BY uploaded_at DESC LIMIT 1`, clientID)
+	var uploaded string
+	switch err := row.Scan(&uploaded); err {
+	case sql.ErrNoRows:
+		return nil, nil
+	case nil:
+		t, _ := time.Parse(rfc3339, uploaded)
+		return &t, nil
+	default:
+		return nil, err
+	}
+}
+
+// PruneRuns deletes run records older than keepDays for a client (0 = keep all).
+func (s *Store) PruneRuns(ctx context.Context, clientID int64, keepDays int) (int64, error) {
+	if keepDays <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(keepDays) * 24 * time.Hour).Format(rfc3339)
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM runs WHERE client_id=? AND started_at < ?`, clientID, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 func b2i(b bool) int {
 	if b {
 		return 1

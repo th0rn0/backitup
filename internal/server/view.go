@@ -44,11 +44,15 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 			return dashboardView{}, err
 		}
 		h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, now)
+		lastOffsite, err := s.st.LatestOffsite(ctx, c.ID)
+		if err != nil {
+			return dashboardView{}, err
+		}
 		row := clientRow{
 			ID: c.ID, Name: c.Name, Mode: string(c.Mode),
 			Health: string(h), HealthLabel: healthLabel(h), Icon: healthIcon(h),
 			Retention: fmt.Sprintf("%dd", c.RetentionDays),
-			Offsite:   offsiteLabel(c),
+			Offsite:   offsiteLabel(c, lastOffsite),
 		}
 		switch {
 		case latest == nil:
@@ -117,13 +121,16 @@ func healthIcon(h model.Health) string {
 	}
 }
 
-// offsiteLabel shows the configured remote. Real per-snapshot offsite freshness
-// arrives with Lane D (offsite_objects); for now configured vs not.
-func offsiteLabel(c model.Client) string {
+// offsiteLabel reflects real offsite state: not configured (—), configured but
+// nothing tiered yet (⚠ pending), or last upload time + remote (✓).
+func offsiteLabel(c model.Client, lastOffsite *time.Time) string {
 	if c.OffsiteRemote == "" {
 		return "—"
 	}
-	return "✓ " + c.OffsiteRemote
+	if lastOffsite == nil {
+		return "⚠ " + c.OffsiteRemote + " pending"
+	}
+	return "✓ " + c.OffsiteRemote + " " + relTime(time.Since(*lastOffsite))
 }
 
 func relTime(d time.Duration) string {

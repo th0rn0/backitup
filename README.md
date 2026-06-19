@@ -179,6 +179,32 @@ Key points:
 | `BACKITUP_BACKUP_DIR`      | `/srv/backups`      | Base dir for per-client backup directories             |
 | `BACKITUP_PUBLIC_HOST`     | `your-server:2222`  | Host:port shown in the generated client cron line      |
 | `BACKITUP_CLIENT_IMAGE`    | `ghcr.io/th0rn0/backitup-client:latest` | Client image used in the cron line |
+| `BACKITUP_RCLONE_CONFIG`   | `/data/rclone.conf` | rclone config defining the encrypted crypt remote(s)   |
+| `BACKITUP_LIFECYCLE_INTERVAL` | `1h`             | How often the lifecycle worker runs (offsite + prune)  |
+
+### Offsite (cold storage)
+
+Offsite tiering is per-client: set a client's **offsite remote** to an rclone remote
+name. Point `BACKITUP_RCLONE_CONFIG` at an `rclone.conf` that defines an encrypted
+**crypt** remote wrapping your provider (so the provider only ever sees ciphertext):
+
+```ini
+[gdrive]
+type = drive
+# ... your provider auth ...
+
+[cold]
+type = crypt
+remote = gdrive:backitup
+password = <rclone obscure output>
+```
+
+The lifecycle worker (every `BACKITUP_LIFECYCLE_INTERVAL`) tiers each client's new
+snapshots to its remote **offsite-first** (never prunes a hot snapshot that isn't
+offsited yet), prunes offsite on its own `offsite_retention_days` horizon, prunes the
+hot store (never the newest), trims run history, and integrity-checks the latest
+snapshot. tar.gz archives upload as-is; rsync snapshots are tar'd into one immutable
+object each (no hardlink inflation, no destructive `sync`).
 
 > Set `BACKITUP_ADMIN_USER` + `BACKITUP_ADMIN_PASSWORD` to create the webgui login.
 > Set `BACKITUP_TLS_CERT` + `BACKITUP_TLS_KEY` to serve HTTPS (required in production —
@@ -294,6 +320,14 @@ backitup is built in lanes (see the design doc). Lane 0 is done.
       backup modes: tar.gz (pure Go, streamed over SSH) and rsync (hardlink snapshots
       via rrsync). Verified end-to-end through docker compose: both modes upload, the
       dashboard goes green, and rsync produces real incremental hardlinked snapshots
-- [ ] **Lane D** — lifecycle worker: rclone offsite + prune + integrity verify
+- [x] **Lane D** — lifecycle worker: encrypted offsite via rclone crypt
+      (offsite-first, independent retention, immutable per-snapshot objects),
+      hot pruning (protect-newest, offsite-first), runs-table trim, and integrity
+      verification of the latest snapshot. Verified end-to-end: the worker tiers a
+      backup to an encrypted crypt remote (ciphertext on disk, decrypts correctly)
+      and the dashboard reflects offsite freshness.
+
+**All lanes complete.** The full path works: client → SSH ingest → hot store →
+encrypted offsite, managed from the dashboard.
 
 See `TODOS.md` for deferred work (e.g. client credential rotation).

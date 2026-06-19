@@ -68,11 +68,13 @@ type ServerMode interface {
 	List(ctx context.Context, clientDir string) ([]Snapshot, error)
 	// PrepareOffsite returns a path to an immutable object to upload for the given
 	// snapshot (D8): tar.gz -> the archive itself; rsync -> a tar of the snapshot
-	// dir created once. Never an rclone sync of a hardlink tree.
+	// dir created once. Never an rclone sync of a hardlink tree. For modes that
+	// build a temp object (rsync), the caller removes it after upload.
 	PrepareOffsite(ctx context.Context, clientDir string, snap Snapshot) (objectPath string, err error)
-	// PruneHot deletes snapshots older than retentionDays from the hot store.
-	// Callers MUST ensure a snapshot is offsited before pruning it (offsite-first).
-	PruneHot(ctx context.Context, clientDir string, retentionDays int) (pruned []string, err error)
+	// DeleteSnapshot removes one snapshot from the hot store. Retention POLICY
+	// (age, offsite-first, protect-newest) lives in the lifecycle worker, which
+	// decides which snapshots are safe to delete and calls this per snapshot.
+	DeleteSnapshot(ctx context.Context, clientDir, id string) error
 }
 
 // registry wires modes by name so the rest of the code stays mode-agnostic.

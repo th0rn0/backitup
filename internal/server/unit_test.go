@@ -1,6 +1,29 @@
 package server
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/th0rn0/backitup/internal/model"
+)
+
+func TestOffsiteLabel(t *testing.T) {
+	// not configured
+	if got := offsiteLabel(model.Client{OffsiteRemote: ""}, nil); got != "—" {
+		t.Errorf("no remote = %q, want —", got)
+	}
+	// configured, never tiered
+	if got := offsiteLabel(model.Client{OffsiteRemote: "s3"}, nil); !strings.Contains(got, "pending") {
+		t.Errorf("never-tiered = %q, want pending", got)
+	}
+	// configured and tiered
+	ago := time.Now().Add(-2 * time.Hour)
+	got := offsiteLabel(model.Client{OffsiteRemote: "gdrive"}, &ago)
+	if !strings.HasPrefix(got, "✓ gdrive") {
+		t.Errorf("tiered = %q, want ✓ gdrive ...", got)
+	}
+}
 
 func TestConfigureIngest(t *testing.T) {
 	s := New(nil, false)
