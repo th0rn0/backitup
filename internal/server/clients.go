@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
@@ -80,12 +82,13 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
-		"Name":       name,
-		"Mode":       string(mode),
-		"PrivateKey": privPEM,
-		"Token":      token,
-		"Server":     s.publicHost,
-		"CronLine":   s.cronLine(token),
+		"Name":         name,
+		"Mode":         string(mode),
+		"PrivateKey":   privPEM,
+		"Token":        token,
+		"Server":       s.publicHost,
+		"CronLine":     s.cronLine(token),
+		"KnownHostsLine": knownHostsLine(s.publicHost, s.sshHostKeyPath),
 	})
 }
 
@@ -179,4 +182,35 @@ func atoiDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// knownHostsLine reads the sshd host public key from keyPath and formats it
+// as a known_hosts entry for publicHost (host:port). Returns "" if the file
+// is missing or unparseable — callers treat "" as "host key not yet available".
+func knownHostsLine(publicHost, keyPath string) string {
+	if keyPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		return ""
+	}
+	// File format: "ssh-ed25519 AAAA... comment\n"
+	// known_hosts format: "[host]:port keytype base64key"
+	fields := strings.Fields(strings.TrimSpace(string(data)))
+	if len(fields) < 2 {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(publicHost)
+	if err != nil {
+		host = publicHost
+		port = "22"
+	}
+	var addr string
+	if port == "22" {
+		addr = host
+	} else {
+		addr = fmt.Sprintf("[%s]:%s", host, port)
+	}
+	return fmt.Sprintf("%s %s %s", addr, fields[0], fields[1])
 }

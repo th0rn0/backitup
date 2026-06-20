@@ -43,6 +43,10 @@ func (s *Server) renderLogin(w http.ResponseWriter, code int, errMsg string) {
 }
 
 func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow(r) {
+		http.Error(w, "Too many login attempts. Try again in a minute.", http.StatusTooManyRequests)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		s.renderLogin(w, http.StatusBadRequest, "Invalid form.")
 		return
@@ -56,11 +60,13 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 	// Generic message on every failure path — no user enumeration (design doc).
 	const invalid = "Invalid username or password."
 	if err != nil || admin == nil || admin.Username != username {
+		s.limiter.record(r)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
 	}
 	ok, err := auth.VerifyPassword(password, admin.PasswordHash)
 	if err != nil || !ok {
+		s.limiter.record(r)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
 	}

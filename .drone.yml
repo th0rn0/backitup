@@ -1,0 +1,447 @@
+kind: pipeline
+type: docker
+name: ci
+
+trigger:
+  event:
+    - push
+    - pull_request
+    - tag
+
+steps:
+
+# ── Lint ─────────────────────────────────────────────────────────────────────
+
+  - name: discord-lint-start
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Lint Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+
+  - name: lint
+    image: golangci/golangci-lint:latest
+    commands:
+      - golangci-lint run --timeout 5m ./...
+
+  - name: discord-lint-success
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Lint Success!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      status:
+        - success
+
+  - name: discord-lint-failure
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Lint Failure!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      status:
+        - failure
+
+# ── Go Tests ──────────────────────────────────────────────────────────────────
+
+  - name: discord-test-start
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Test Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+
+  - name: test
+    # Pinned to 1.26.2: go.mod requires >= 1.26.2. The floating golang:1.26
+    # tag can stay cached at an older patch on Drone runners with
+    # GOTOOLCHAIN=local, which refuses to auto-fetch a newer toolchain.
+    image: golang:1.26.2
+    commands:
+      - go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - go tool cover -func=coverage.out | tail -1
+
+  - name: discord-test-success
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Test Success!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      status:
+        - success
+
+  - name: discord-test-failure
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Test Failure!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      status:
+        - failure
+
+# ── Docker Build & Push ───────────────────────────────────────────────────────
+# Three images: server (control plane), client (dumb uploader), sshd (data plane).
+# Push :latest on main; push :latest + :<tag> on v* tags.
+
+  - name: discord-build-start
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Build Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      branch:
+        - main
+      event:
+        - push
+        - tag
+
+  - name: build-push-server
+    image: plugins/docker
+    settings:
+      repo: th0rn0/backitup-server
+      dockerfile: Dockerfile
+      username:
+        from_secret: dockerhub_username
+      password:
+        from_secret: dockerhub_token
+      tags:
+        - latest
+    when:
+      branch:
+        - main
+      event:
+        - push
+
+  - name: build-push-client
+    image: plugins/docker
+    settings:
+      repo: th0rn0/backitup-client
+      dockerfile: Dockerfile.client
+      username:
+        from_secret: dockerhub_username
+      password:
+        from_secret: dockerhub_token
+      tags:
+        - latest
+    when:
+      branch:
+        - main
+      event:
+        - push
+
+  - name: build-push-sshd
+    image: plugins/docker
+    settings:
+      repo: th0rn0/backitup-sshd
+      dockerfile: Dockerfile.sshd
+      username:
+        from_secret: dockerhub_username
+      password:
+        from_secret: dockerhub_token
+      tags:
+        - latest
+    when:
+      branch:
+        - main
+      event:
+        - push
+
+  - name: build-push-server-release
+    image: plugins/docker
+    settings:
+      repo: th0rn0/backitup-server
+      dockerfile: Dockerfile
+      username:
+        from_secret: dockerhub_username
+      password:
+        from_secret: dockerhub_token
+      tags:
+        - latest
+        - ${DRONE_TAG}
+    when:
+      event:
+        - tag
+
+  - name: build-push-client-release
+    image: plugins/docker
+    settings:
+      repo: th0rn0/backitup-client
+      dockerfile: Dockerfile.client
+      username:
+        from_secret: dockerhub_username
+      password:
+        from_secret: dockerhub_token
+      tags:
+        - latest
+        - ${DRONE_TAG}
+    when:
+      event:
+        - tag
+
+  - name: build-push-sshd-release
+    image: plugins/docker
+    settings:
+      repo: th0rn0/backitup-sshd
+      dockerfile: Dockerfile.sshd
+      username:
+        from_secret: dockerhub_username
+      password:
+        from_secret: dockerhub_token
+      tags:
+        - latest
+        - ${DRONE_TAG}
+    when:
+      event:
+        - tag
+
+  - name: discord-build-success
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Build Success!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      branch:
+        - main
+      event:
+        - push
+        - tag
+      status:
+        - success
+
+  - name: discord-build-failure
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Build Failure!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      branch:
+        - main
+      event:
+        - push
+        - tag
+      status:
+        - failure
+
+# ── Smoke Test ────────────────────────────────────────────────────────────────
+# Pulls the freshly pushed server image, starts it, and hits /healthz.
+# Only runs on push to main or tags (after the Docker push steps).
+
+  - name: discord-smoke-start
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Smoke Test Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      branch:
+        - main
+      event:
+        - push
+        - tag
+
+  - name: smoke-test
+    image: docker:27
+    volumes:
+      - name: docker-sock
+        path: /var/run/docker.sock
+    commands:
+      - docker pull th0rn0/backitup-server:latest
+      - |
+        STEP_NET=$(docker inspect "$(cat /etc/hostname)" \
+          -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
+          2>/dev/null | awk '{print $1}')
+        echo "Step network: ${STEP_NET:-bridge}"
+        docker rm -f backitup-smoke 2>/dev/null || true
+        docker run -d --name backitup-smoke \
+          ${STEP_NET:+--network "$STEP_NET"} \
+          --tmpfs /data \
+          -e BACKITUP_ADMIN_PASSWORD=smoketest \
+          th0rn0/backitup-server:latest
+        IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' backitup-smoke)
+        echo "Container IP: $IP"
+        for i in $(seq 1 30); do
+          wget -qO- --timeout=3 "http://$IP:8080/healthz" > /dev/null 2>&1 && echo "Server up (attempt $i)" && docker stop backitup-smoke && docker rm backitup-smoke && exit 0
+          echo "Waiting... ($i/30)"
+          sleep 2
+        done
+        echo "Server did not respond"
+        docker logs backitup-smoke
+        docker stop backitup-smoke
+        docker rm backitup-smoke
+        exit 1
+    when:
+      branch:
+        - main
+      event:
+        - push
+        - tag
+
+  - name: discord-smoke-success
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Smoke Test Success!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      branch:
+        - main
+      event:
+        - push
+        - tag
+      status:
+        - success
+
+  - name: discord-smoke-failure
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Smoke Test Failure!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      branch:
+        - main
+      event:
+        - push
+        - tag
+      status:
+        - failure
+
+# ── Linux Server Binary ───────────────────────────────────────────────────────
+# Builds a static linux/amd64 server binary. Only runs on v* tags.
+
+  - name: build-linux-binary
+    image: golang:1.26.2
+    commands:
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o backitup-server-linux-amd64 ./cmd/server
+    when:
+      event:
+        - tag
+
+# ── GitHub Release ────────────────────────────────────────────────────────────
+# Creates (or updates) the GitHub release and uploads the server binary.
+# Only runs on v* tags.
+
+  - name: release
+    image: alpine:latest
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - apk add -q curl jq
+      - |
+        PAYLOAD="{\"tag_name\":\"$DRONE_TAG\",\"name\":\"$DRONE_TAG\",\"body\":\"## Downloads\n\n| File | Description |\n|------|-------------|\n| \`backitup-server-linux-amd64\` | Static server binary for Linux (amd64). No dependencies — download, chmod +x, and run. |\n\nSee the [README](https://github.com/$DRONE_REPO#readme) for full configuration reference.\"}"
+        HTTP=$(curl -s -o /tmp/rel.json -w "%{http_code}" \
+          -X POST \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          "https://api.github.com/repos/$DRONE_REPO/releases" \
+          -d "$PAYLOAD")
+        echo "create HTTP $HTTP"
+        if [ "$HTTP" = "422" ]; then
+          RID=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$DRONE_REPO/releases/tags/$DRONE_TAG" \
+            | jq -r .id)
+          curl -s --fail \
+            -X PATCH \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$DRONE_REPO/releases/$RID" \
+            -d "$PAYLOAD" > /dev/null
+          echo "updated existing release"
+        elif [ "$HTTP" != "201" ]; then
+          cat /tmp/rel.json
+          exit 1
+        fi
+    when:
+      event:
+        - tag
+
+  - name: release-server-binary
+    image: alpine:latest
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - apk add -q curl jq
+      - |
+        UPLOAD_URL=$(curl -s --fail \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          "https://api.github.com/repos/$DRONE_REPO/releases/tags/$DRONE_TAG" \
+          | jq -r ".upload_url" | sed "s/{?name,label}//")
+        if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
+          echo "ERROR: no upload_url from GitHub API"
+          exit 1
+        fi
+        curl -s --fail \
+          -X POST \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/octet-stream" \
+          --data-binary @backitup-server-linux-amd64 \
+          "$UPLOAD_URL?name=backitup-server-linux-amd64"
+    when:
+      event:
+        - tag
+
+  - name: discord-released
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_TAG Released!\",\"url\":\"https://github.com/$DRONE_REPO/releases/tag/$DRONE_TAG\"}]}"
+    when:
+      event:
+        - tag
+      status:
+        - success
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+
+volumes:
+  - name: docker-sock
+    host:
+      path: /var/run/docker.sock

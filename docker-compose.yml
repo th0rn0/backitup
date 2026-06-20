@@ -31,6 +31,9 @@ services:
       # the encrypted crypt remote(s) a client's OffsiteRemote points at.
       BACKITUP_RCLONE_CONFIG: ${BACKITUP_RCLONE_CONFIG:-/data/rclone.conf}
       BACKITUP_LIFECYCLE_INTERVAL: ${BACKITUP_LIFECYCLE_INTERVAL:-1h}
+      # SSH host key path (read from the shared volume; used to generate known_hosts
+      # entries in the add-client UI so clients don't need BACKITUP_INSECURE=1).
+      BACKITUP_SSH_HOST_KEY: /srv/hostkeys/ssh_host_ed25519_key.pub
       # For production, mount certs and set these to serve HTTPS:
       # BACKITUP_TLS_CERT: /certs/cert.pem
       # BACKITUP_TLS_KEY: /certs/key.pem
@@ -40,6 +43,7 @@ services:
       - app-data:/data
       - backups:/srv/backups
       - authkeys:/srv/authkeys
+      - sshd-hostkeys:/srv/hostkeys:ro # app reads host pubkey for known_hosts generation
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 30s
