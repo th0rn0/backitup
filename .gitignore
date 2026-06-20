@@ -21,3 +21,4 @@ openai.json
 # local tooling (machine-specific, not project)
 .claude/
 .gstack/
+.playwright-mcp/

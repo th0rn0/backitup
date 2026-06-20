@@ -10,6 +10,22 @@ watch the whole fleet's backup health from a single dashboard.
 
 ---
 
+## Screenshots
+
+| Dashboard | Add a client |
+|-----------|-------------|
+| ![Fleet dashboard showing three clients](docs/screenshots/dashboard.png) | ![Add client form](docs/screenshots/add-client.png) |
+
+| Client created — one-time secrets | Client detail |
+|----------------------------------|---------------|
+| ![Client created page with SSH key, token, and known_hosts line](docs/screenshots/client-created.png) | ![Client detail page](docs/screenshots/client-detail.png) |
+
+| Login | Empty dashboard |
+|-------|----------------|
+| ![Sign-in page](docs/screenshots/login.png) | ![Empty fleet dashboard](docs/screenshots/dashboard-empty.png) |
+
+---
+
 ## Table of contents
 
 - [Why](#why)
