@@ -27,14 +27,16 @@ type Server struct {
 	st       *store.Store
 	sessions *auth.SessionStore
 	tmpl     *template.Template
+	limiter  *loginLimiter
 	secure   bool // set cookies Secure (true when served over TLS)
 
 	// Ingest config (Lane A): where to write authorized_keys, the per-client
 	// backup base dir, and what to show in the generated cron line.
-	authKeysPath  string
-	backupBaseDir string
-	publicHost    string
-	clientImage   string
+	authKeysPath   string
+	backupBaseDir  string
+	publicHost     string
+	clientImage    string
+	sshHostKeyPath string // path to sshd host public key for known_hosts generation
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
@@ -44,6 +46,7 @@ func New(st *store.Store, secure bool) *Server {
 		st:            st,
 		sessions:      auth.NewSessionStore(12 * time.Hour),
 		tmpl:          template.Must(template.ParseFS(templateFS, "templates/*.html")),
+		limiter:       newLoginLimiter(),
 		secure:        secure,
 		authKeysPath:  "/srv/authkeys/authorized_keys",
 		backupBaseDir: "/srv/backups",
@@ -54,7 +57,7 @@ func New(st *store.Store, secure bool) *Server {
 
 // ConfigureIngest sets the Lane A ingest parameters (called from cmd/server with
 // env values). Empty arguments leave the existing default in place.
-func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, clientImage string) {
+func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, clientImage, sshHostKeyPath string) {
 	if authKeysPath != "" {
 		s.authKeysPath = authKeysPath
 	}
@@ -66,6 +69,9 @@ func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, client
 	}
 	if clientImage != "" {
 		s.clientImage = clientImage
+	}
+	if sshHostKeyPath != "" {
+		s.sshHostKeyPath = sshHostKeyPath
 	}
 }
 

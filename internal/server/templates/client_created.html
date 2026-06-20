@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>backitup — {{.Name}} created</title>
+  <title>Back! It! Up! — {{.Name}} created</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <div class="app">
     <nav class="sidebar" aria-label="Primary">
-      <span class="brand"><span class="sq">▣</span> backitup</span>
+      <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
       <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a></div>
     </nav>
     <main class="main">
@@ -27,12 +27,20 @@
       <input class="mono secret" id="token" value="{{.Token}}" readonly>
       <button class="btn copy" data-target="token" type="button">Copy token</button>
 
-      <h2 style="margin-top:28px">2. Paste this on the host (cron)</h2>
-      <p class="summary">Edit the source path and schedule to taste. The schedule lives in cron — backitup never changes it for you.</p>
+      {{if .KnownHostsLine}}
+      <h2 style="margin-top:28px">2. Add the server's SSH fingerprint (known_hosts)</h2>
+      <p class="summary">Run this on the backup host before the first cron run. It pins the server's host key so the client rejects man-in-the-middle substitutions.</p>
+      <textarea class="mono" id="knownhosts" rows="2" readonly>{{.KnownHostsLine}}</textarea>
+      <button class="btn copy" data-target="knownhosts" type="button">Copy known_hosts line</button>
+      <p class="summary" style="margin-top:8px">Append it to <code>~/.ssh/known_hosts</code> on the host (or to the file you point <code>BACKITUP_KNOWN_HOSTS</code> at). Then set <code>BACKITUP_KNOWN_HOSTS=/path/to/known_hosts</code> in the cron line below — no need for <code>BACKITUP_INSECURE=1</code>.</p>
+      {{end}}
+
+      <h2 style="margin-top:28px">{{if .KnownHostsLine}}3{{else}}2{{end}}. Paste this on the host (cron)</h2>
+      <p class="summary">Edit the source path and schedule to taste. The schedule lives in cron — Back! It! Up! never changes it for you.</p>
       <textarea class="mono" id="cron" rows="6" readonly>{{.CronLine}}</textarea>
       <button class="btn copy" data-target="cron" type="button">Copy cron line</button>
 
-      <h2 style="margin-top:28px">3. Done</h2>
+      <h2 style="margin-top:28px">{{if .KnownHostsLine}}4{{else}}3{{end}}. Done</h2>
       <p class="summary">Once cron runs, “{{.Name}}” will appear on the dashboard and turn <span class="status ok">● OK</span> after its first backup.</p>
       <a class="btn" id="done" href="/">I've saved everything — go to dashboard</a>
     </main>

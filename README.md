@@ -1,4 +1,4 @@
-# backitup
+# Back! It! Up!
 
 Self-hosted, centralized **fleet backup** for Linux + macOS. A clean control plane
 on top of proven tools (rsync, OpenSSH, rclone): one server, one webgui, many dumb
@@ -7,11 +7,6 @@ to Google Drive / S3 / 40+ providers.
 
 Add a machine by issuing a key in the webgui, paste one cron line on the host, and
 watch the whole fleet's backup health from a single dashboard.
-
-> **Status: in active development.** Lane 0 (foundation: domain model, SQLite store,
-> mode seam, server skeleton, Docker images) is complete and tested. The webgui,
-> SSH ingest, client modes, and lifecycle worker are in progress — see [Roadmap](#roadmap).
-> The `app` container builds and runs today (`/healthz` is live).
 
 ---
 
@@ -37,12 +32,12 @@ watch the whole fleet's backup health from a single dashboard.
 ## Why
 
 restic / Borg / Kopia are excellent backup *engines* with no clean centralized fleet
-control. UrBackup has fleet control but a clunky UI and a heavy client. backitup is
-the clean **control plane**: the server owns all configuration, the client is a dumb
+control. UrBackup has fleet control but a clunky UI and a heavy client. Back! It! Up!
+is the clean **control plane**: the server owns all configuration, the client is a dumb
 uploader you drop on any host, and one dashboard answers the only question that
 matters — *are my backups OK?*
 
-backitup deliberately does **not** reinvent the data engine. Transfer is rsync +
+Back! It! Up! deliberately does **not** reinvent the data engine. Transfer is rsync +
 OpenSSH, offsite + encryption is rclone, storage is plain files you can browse. The
 code we write is the control plane, because that is where the value is.
 
@@ -89,7 +84,7 @@ Requirements: Docker + the Compose plugin.
 
 ```sh
 git clone https://github.com/th0rn0/backitup.git
-cd backitup
+cd backitup   # repo name stays "backitup"; the product name is Back! It! Up!
 docker compose up -d --build      # builds the app image and starts the stack
 curl http://127.0.0.1:8080/healthz   # -> ok
 docker compose logs -f app
@@ -161,7 +156,7 @@ Key points:
   modify the host even in principle.
 - Run **multiple clients on one host** by adding more cron lines, each with its own
   source directory and its own secrets.
-- The schedule lives here, in cron — backitup never changes it for you.
+- The schedule lives here, in cron — Back! It! Up! never changes it for you.
 
 ## Configuration reference
 
@@ -181,6 +176,7 @@ Key points:
 | `BACKITUP_CLIENT_IMAGE`    | `ghcr.io/th0rn0/backitup-client:latest` | Client image used in the cron line |
 | `BACKITUP_RCLONE_CONFIG`   | `/data/rclone.conf` | rclone config defining the encrypted crypt remote(s)   |
 | `BACKITUP_LIFECYCLE_INTERVAL` | `1h`             | How often the lifecycle worker runs (offsite + prune)  |
+| `BACKITUP_SSH_HOST_KEY`    | `/srv/hostkeys/ssh_host_ed25519_key.pub` | sshd host public key path; generates `known_hosts` entries in the add-client UI |
 
 ### Offsite (cold storage)
 
@@ -307,7 +303,7 @@ docker-compose.yml app + sshd ingest topology
 
 ## Roadmap
 
-backitup is built in lanes (see the design doc). Lane 0 is done.
+Back! It! Up! is built in lanes (see the design doc). Lane 0 is done.
 
 - [x] **Lane 0** — foundation: model, store, mode seam, server skeleton, Docker, tests
 - [x] **Lane B** — webgui: admin login (argon2id + session), fleet dashboard (status
