@@ -3,7 +3,7 @@
 # amd64 + arm64. Final image is Alpine + rclone (offsite engine) + CA certs.
 
 # --- build ---
-FROM golang:1.26-alpine AS build
+FROM golang:1.26.4-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
