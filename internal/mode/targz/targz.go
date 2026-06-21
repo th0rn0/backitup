@@ -37,13 +37,12 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	if err != nil {
 		return mode.BackupResult{}, err
 	}
-	defer conn.Close()
-
+	defer conn.Close() //nolint:errcheck
 	sess, err := conn.NewSession()
 	if err != nil {
 		return mode.BackupResult{}, fmt.Errorf("ssh session: %w", err)
 	}
-	defer sess.Close()
+	defer sess.Close() //nolint:errcheck
 
 	stdin, err := sess.StdinPipe()
 	if err != nil {

@@ -32,7 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	log.Printf("backitup server: store ready at %s", dbPath)
 
 	if err := bootstrapAdmin(st); err != nil {

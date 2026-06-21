@@ -70,7 +70,7 @@ func TestVerifyGzip(t *testing.T) {
 	// Truncated gzip (valid header, broken stream) → fail.
 	raw, _ := os.ReadFile(good)
 	trunc := filepath.Join(dir, "trunc.tar.gz")
-	os.WriteFile(trunc, raw[:len(raw)-10], 0o644)
+	_ = os.WriteFile(trunc, raw[:len(raw)-10], 0o644)
 	if err := VerifyGzip(trunc); err == nil {
 		t.Fatal("truncated archive passed verify")
 	}

@@ -14,7 +14,7 @@ func TestClientAndRunRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ctx := context.Background()
 
 	id, err := st.CreateClient(ctx, model.Client{
@@ -76,7 +76,7 @@ func TestGetClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ctx := context.Background()
 
 	// Not found -> (nil, nil).
@@ -103,7 +103,7 @@ func TestUniqueClientName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ctx := context.Background()
 	c := model.Client{Name: "dup", Mode: model.ModeTarGz, Enabled: true}
 	if _, err := st.CreateClient(ctx, c); err != nil {

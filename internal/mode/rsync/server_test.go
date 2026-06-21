@@ -29,7 +29,7 @@ func TestServerListSkipsLatest(t *testing.T) {
 	makeSnap(t, dir, "T1", "one")
 	makeSnap(t, dir, "T2", "twotwo")
 	// latest symlink must be excluded from List.
-	os.Symlink("T2", filepath.Join(dir, "snapshots", "latest"))
+	_ = os.Symlink("T2", filepath.Join(dir, "snapshots", "latest"))
 
 	snaps, err := Server{}.List(context.Background(), dir)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestServerDeleteRefusesLatest(t *testing.T) {
 	dir := t.TempDir()
 	makeSnap(t, dir, "T1", "x")
 	makeSnap(t, dir, "T2", "y")
-	os.Symlink("T2", filepath.Join(dir, "snapshots", "latest"))
+	_ = os.Symlink("T2", filepath.Join(dir, "snapshots", "latest"))
 
 	// Deleting the latest target must be refused (protects the --link-dest base).
 	if err := (Server{}).DeleteSnapshot(context.Background(), dir, "T2"); err == nil {

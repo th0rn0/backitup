@@ -27,7 +27,7 @@ func TestLoadSignerErrors(t *testing.T) {
 		t.Error("expected error for missing key file")
 	}
 	bad := filepath.Join(t.TempDir(), "bad")
-	os.WriteFile(bad, []byte("not a key"), 0o600)
+	_ = os.WriteFile(bad, []byte("not a key"), 0o600)
 	if _, err := LoadSigner(bad); err == nil {
 		t.Error("expected parse error for garbage key")
 	}

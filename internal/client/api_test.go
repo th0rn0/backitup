@@ -16,7 +16,7 @@ func TestFetchConfig(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer tok" {
 			t.Errorf("missing/wrong bearer: %q", r.Header.Get("Authorization"))
 		}
-		json.NewEncoder(w).Encode(ConfigResp{Mode: "rsync", Excludes: []string{"*.tmp"}, RetentionDays: 14})
+		_ = json.NewEncoder(w).Encode(ConfigResp{Mode: "rsync", Excludes: []string{"*.tmp"}, RetentionDays: 14})
 	}))
 	defer ts.Close()
 
@@ -50,7 +50,7 @@ func TestPostStatus(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/status" {
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewDecoder(r.Body).Decode(&got)
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer ts.Close()

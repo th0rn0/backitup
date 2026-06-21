@@ -24,7 +24,7 @@ func ingestStack(t *testing.T) (*store.Store, *httptest.Server, string) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	srv := New(st, false)
 	tmp := t.TempDir()
 	authKeys := filepath.Join(tmp, "authkeys", "authorized_keys")

@@ -160,7 +160,7 @@ func TestConfigEmptyExcludes(t *testing.T) {
 	st, ts := testStack(t)
 	token := "tok"
 	hash, _ := auth.HashPassword(token)
-	st.CreateClient(context.Background(), model.Client{
+	_, _ = st.CreateClient(context.Background(), model.Client{
 		Name: "c", Mode: model.ModeTarGz, RetentionDays: 7, TokenHash: hash, Enabled: true,
 	}) // Excludes nil
 	resp := doAuthed(t, ts, "GET", "/api/v1/config", token, "")

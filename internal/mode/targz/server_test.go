@@ -16,7 +16,7 @@ func TestServerListAndDelete(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "backup-A.tar.gz"), "a")
 	writeFile(t, filepath.Join(dir, "backup-B.tar.gz"), "bb")
 	writeFile(t, filepath.Join(dir, "notes.txt"), "ignore")
-	os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
+	_ = os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
 
 	var sm mode.ServerMode = Server{}
 	snaps, err := sm.List(context.Background(), dir)

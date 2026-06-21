@@ -24,7 +24,7 @@ func testStack(t *testing.T) (*store.Store, *httptest.Server) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	ts := httptest.NewServer(New(st, false).Handler())
 	t.Cleanup(ts.Close)
 	return st, ts
@@ -145,7 +145,7 @@ func TestClientAPIConfigAndStatus(t *testing.T) {
 		t.Fatalf("config status = %d, want 200", cfg.StatusCode)
 	}
 	var got map[string]any
-	json.NewDecoder(cfg.Body).Decode(&got)
+	_ = json.NewDecoder(cfg.Body).Decode(&got)
 	cfg.Body.Close()
 	if got["mode"] != "rsync" || got["retention_days"].(float64) != 14 {
 		t.Fatalf("config mismatch: %v", got)
@@ -170,7 +170,7 @@ func TestClientAPIConfigAndStatus(t *testing.T) {
 func TestClientAPIRejectsBadToken(t *testing.T) {
 	st, ts := testStack(t)
 	hash, _ := auth.HashPassword("real-token")
-	st.CreateClient(context.Background(), model.Client{Name: "c", Mode: model.ModeTarGz, TokenHash: hash, Enabled: true})
+	_, _ = st.CreateClient(context.Background(), model.Client{Name: "c", Mode: model.ModeTarGz, TokenHash: hash, Enabled: true})
 
 	// No token.
 	if r := doAuthed(t, ts, "GET", "/api/v1/config", "", ""); r.StatusCode != http.StatusUnauthorized {
@@ -186,7 +186,7 @@ func TestPostStatusInvalidStatus(t *testing.T) {
 	st, ts := testStack(t)
 	token := "tok"
 	hash, _ := auth.HashPassword(token)
-	st.CreateClient(context.Background(), model.Client{Name: "c", Mode: model.ModeTarGz, TokenHash: hash, Enabled: true})
+	_, _ = st.CreateClient(context.Background(), model.Client{Name: "c", Mode: model.ModeTarGz, TokenHash: hash, Enabled: true})
 	r := doAuthed(t, ts, "POST", "/api/v1/status", token, `{"status":"bogus"}`)
 	if r.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d, want 400", r.StatusCode)
