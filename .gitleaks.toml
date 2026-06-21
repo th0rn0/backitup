@@ -1,0 +1,27 @@
+title = "backitup"
+
+# Extend the upstream default ruleset (AWS, GCP, GitHub tokens, etc.).
+[extend]
+useDefault = true
+
+# Project-specific rules
+[[rules]]
+description = "backitup admin password set in environment"
+id = "backitup-admin-password"
+regex = '''(?i)BACKITUP_ADMIN_PASSWORD\s*=\s*["']?(?!smoketest|changeme|yourpassword|example)[^'"\s]+'''
+tags = ["backitup", "secret"]
+
+# Known non-secret occurrences
+[allowlist]
+description = "project-wide allowlist"
+paths = [
+    '''README\.md''',
+    '''CLAUDE\.md''',
+    '''docs/''',
+]
+regexes = [
+    # Smoke-test placeholder value in CI pipeline
+    '''BACKITUP_ADMIN_PASSWORD=smoketest''',
+    # Docker Compose example placeholder
+    '''BACKITUP_ADMIN_PASSWORD:\s*changeme''',
+]

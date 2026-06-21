@@ -100,6 +100,27 @@ steps:
       status:
         - failure
 
+# ── Vulnerability Scan ────────────────────────────────────────────────────────
+
+  - name: vuln
+    image: golang:1.26.2
+    commands:
+      - go install golang.org/x/vuln/cmd/govulncheck@latest
+      - govulncheck ./...
+
+  - name: discord-vuln-failure
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Vuln Scan Failure!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      status:
+        - failure
+
 # ── Docker Build & Push ───────────────────────────────────────────────────────
 # Three images: server (control plane), client (dumb uploader), sshd (data plane).
 # Push :latest on main; push :latest + :<tag> on v* tags.
