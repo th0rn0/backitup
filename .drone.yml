@@ -290,20 +290,20 @@ steps:
         docker rm -f backitup-smoke 2>/dev/null || true
         docker run -d --name backitup-smoke \
           ${STEP_NET:+--network "$STEP_NET"} \
-          --tmpfs /data \
+          -e BACKITUP_DB=/tmp/smoke.db \
           -e BACKITUP_ADMIN_PASSWORD=smoketest \
           th0rn0/backitup-server:latest
         IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' backitup-smoke)
         echo "Container IP: $IP"
         for i in $(seq 1 30); do
-          wget -qO- --timeout=3 "http://$IP:8080/healthz" > /dev/null 2>&1 && echo "Server up (attempt $i)" && docker stop backitup-smoke && docker rm backitup-smoke && exit 0
+          wget -qO- --timeout=3 "http://$IP:8080/healthz" > /dev/null 2>&1 && echo "Server up (attempt $i)" && docker stop backitup-smoke && docker rm -v backitup-smoke && exit 0
           echo "Waiting... ($i/30)"
           sleep 2
         done
         echo "Server did not respond"
         docker logs backitup-smoke
         docker stop backitup-smoke
-        docker rm backitup-smoke
+        docker rm -v backitup-smoke
         exit 1
     when:
       branch:
