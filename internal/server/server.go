@@ -17,7 +17,7 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-//go:embed assets/*.css
+//go:embed assets/*.css assets/*.js
 var assetFS embed.FS
 
 const sessionCookie = "backitup_session"
@@ -94,7 +94,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/config", s.requireClient(s.getConfig))
 	mux.HandleFunc("POST /api/v1/status", s.requireClient(s.postStatus))
 
-	return securityHeaders(mux)
+	return s.securityHeaders(mux)
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
@@ -107,13 +107,19 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
-// securityHeaders applies conservative defaults to every response.
-func securityHeaders(next http.Handler) http.Handler {
+// securityHeaders applies hardened defaults to every response.
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if s.secure {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

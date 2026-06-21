@@ -69,7 +69,7 @@ steps:
     # Pinned to 1.26.2: go.mod requires >= 1.26.2. The floating golang:1.26
     # tag can stay cached at an older patch on Drone runners with
     # GOTOOLCHAIN=local, which refuses to auto-fetch a newer toolchain.
-    image: golang:1.26.2
+    image: golang:1.26.4
     commands:
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out | tail -1
@@ -96,6 +96,27 @@ steps:
     commands:
       - |
         curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Test Failure!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
+    when:
+      status:
+        - failure
+
+# ── Vulnerability Scan ────────────────────────────────────────────────────────
+
+  - name: vuln
+    image: golang:1.26.4
+    commands:
+      - go install golang.org/x/vuln/cmd/govulncheck@latest
+      - govulncheck ./...
+
+  - name: discord-vuln-failure
+    image: curlimages/curl:8.7.1
+    failure: ignore
+    environment:
+      DISCORD_WEBHOOK_URL:
+        from_secret: discord_webhook_url
+    commands:
+      - |
+        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Vuln Scan Failure!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
     when:
       status:
         - failure
@@ -352,7 +373,7 @@ steps:
 # Builds a static linux/amd64 server binary. Only runs on v* tags.
 
   - name: build-linux-binary
-    image: golang:1.26.2
+    image: golang:1.26.4
     commands:
       - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o backitup-server-linux-amd64 ./cmd/server
     when:
