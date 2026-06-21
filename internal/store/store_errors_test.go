@@ -23,7 +23,7 @@ func TestDisabledClientRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ctx := context.Background()
 
 	if _, err := st.CreateClient(ctx, model.Client{Name: "off", Mode: model.ModeTarGz, Enabled: false}); err != nil {
@@ -45,7 +45,7 @@ func TestRecordRunForeignKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	_, err = st.RecordRun(context.Background(), model.Run{
 		ClientID: 9999, StartedAt: time.Now(), FinishedAt: time.Now(), Status: model.StatusOK,
@@ -60,7 +60,7 @@ func TestListClientsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	clients, err := st.ListClients(context.Background())
 	if err != nil {
 		t.Fatalf("list empty: %v", err)

@@ -46,7 +46,7 @@ func (f *fakeOffsite) Delete(_ context.Context, _, obj string) error {
 func mkArchive(t *testing.T, path string, mtime time.Time) {
 	t.Helper()
 	src := t.TempDir()
-	os.WriteFile(filepath.Join(src, "f.txt"), []byte("payload"), 0o644)
+	_ = os.WriteFile(filepath.Join(src, "f.txt"), []byte("payload"), 0o644)
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func mkArchive(t *testing.T, path string, mtime time.Time) {
 		t.Fatal(err)
 	}
 	f.Close()
-	os.Chtimes(path, mtime, mtime)
+	_ = os.Chtimes(path, mtime, mtime)
 }
 
 func newClient(t *testing.T, st *store.Store, c model.Client) (int64, string, string) {
@@ -66,7 +66,7 @@ func newClient(t *testing.T, st *store.Store, c model.Client) (int64, string, st
 		t.Fatal(err)
 	}
 	clientDir := filepath.Join(base, strconv.FormatInt(id, 10))
-	os.MkdirAll(clientDir, 0o755)
+	_ = os.MkdirAll(clientDir, 0o755)
 	return id, base, clientDir
 }
 
@@ -76,7 +76,7 @@ func openStore(t *testing.T) *store.Store {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	return st
 }
 
@@ -156,7 +156,7 @@ func TestRunOnceNoOffsitePrunesByAge(t *testing.T) {
 	mkArchive(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour))
 
 	off := &fakeOffsite{}
-	RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }})
+	_ = RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }})
 	if len(off.up) != 0 {
 		t.Fatal("no offsite remote -> no uploads")
 	}
@@ -178,11 +178,11 @@ func TestRunOnceOffsiteRetention(t *testing.T) {
 		RetentionDays: 14, OffsiteRetentionDays: 7, Enabled: true,
 	})
 	// No hot snapshots; pre-seed two offsite objects (one stale, one fresh).
-	st.RecordOffsiteObject(context.Background(), model.OffsiteObject{ClientID: id, SnapshotID: "stale", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour)})
-	st.RecordOffsiteObject(context.Background(), model.OffsiteObject{ClientID: id, SnapshotID: "fresh", Remote: "local", UploadedAt: now.Add(-1 * time.Hour)})
+	_ = st.RecordOffsiteObject(context.Background(), model.OffsiteObject{ClientID: id, SnapshotID: "stale", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour)})
+	_ = st.RecordOffsiteObject(context.Background(), model.OffsiteObject{ClientID: id, SnapshotID: "fresh", Remote: "local", UploadedAt: now.Add(-1 * time.Hour)})
 
 	off := &fakeOffsite{}
-	RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }})
+	_ = RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }})
 
 	if len(off.del) != 1 || off.del[0] != objectPath(id, model.ModeTarGz, "stale") {
 		t.Fatalf("expected stale offsite object deleted, got %v", off.del)

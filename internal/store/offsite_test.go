@@ -14,7 +14,7 @@ func TestOffsiteObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ctx := context.Background()
 	id, _ := st.CreateClient(ctx, model.Client{Name: "c", Mode: model.ModeRsync, Enabled: true})
 
@@ -24,8 +24,8 @@ func TestOffsiteObjects(t *testing.T) {
 	}
 
 	old := time.Now().UTC().Add(-40 * 24 * time.Hour)
-	st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s-old", Remote: "r", Bytes: 10, UploadedAt: old})
-	st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s-new", Remote: "r", Bytes: 20})
+	_ = st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s-old", Remote: "r", Bytes: 10, UploadedAt: old})
+	_ = st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s-new", Remote: "r", Bytes: 20})
 
 	objs, err := st.ListOffsiteObjects(ctx, id)
 	if err != nil || len(objs) != 2 {
@@ -40,13 +40,13 @@ func TestOffsiteObjects(t *testing.T) {
 	}
 
 	// Idempotent upsert (same client+snapshot+remote).
-	st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s-new", Remote: "r", Bytes: 99})
+	_ = st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s-new", Remote: "r", Bytes: 99})
 	objs, _ = st.ListOffsiteObjects(ctx, id)
 	if len(objs) != 2 {
 		t.Fatalf("upsert created a dup: %d", len(objs))
 	}
 
-	st.DeleteOffsiteObject(ctx, id, "s-old", "r")
+	_ = st.DeleteOffsiteObject(ctx, id, "s-old", "r")
 	objs, _ = st.ListOffsiteObjects(ctx, id)
 	if len(objs) != 1 || objs[0].SnapshotID != "s-new" {
 		t.Fatalf("delete failed: %+v", objs)
@@ -58,13 +58,13 @@ func TestPruneRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ctx := context.Background()
 	id, _ := st.CreateClient(ctx, model.Client{Name: "c", Mode: model.ModeTarGz, Enabled: true})
 
 	now := time.Now().UTC()
-	st.RecordRun(ctx, model.Run{ClientID: id, StartedAt: now.Add(-200 * 24 * time.Hour), FinishedAt: now.Add(-200 * 24 * time.Hour), Status: model.StatusOK})
-	st.RecordRun(ctx, model.Run{ClientID: id, StartedAt: now, FinishedAt: now, Status: model.StatusOK})
+	_, _ = st.RecordRun(ctx, model.Run{ClientID: id, StartedAt: now.Add(-200 * 24 * time.Hour), FinishedAt: now.Add(-200 * 24 * time.Hour), Status: model.StatusOK})
+	_, _ = st.RecordRun(ctx, model.Run{ClientID: id, StartedAt: now, FinishedAt: now, Status: model.StatusOK})
 
 	n, err := st.PruneRuns(ctx, id, 90)
 	if err != nil || n != 1 {

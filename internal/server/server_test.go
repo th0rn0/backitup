@@ -16,7 +16,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	ts := httptest.NewServer(New(st, false).Handler())
 	t.Cleanup(ts.Close)
 	return ts
@@ -45,7 +45,7 @@ func TestHealthzAfterStoreClosed(t *testing.T) {
 	}
 	ts := httptest.NewServer(New(st, false).Handler())
 	defer ts.Close()
-	st.Close() // simulate a dead DB; healthz must NOT report a false green
+	_ = st.Close() // simulate a dead DB; healthz must NOT report a false green
 
 	resp, err := http.Get(ts.URL + "/healthz")
 	if err != nil {

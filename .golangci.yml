@@ -1,0 +1,24 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # Idiomatic deferred-close and cleanup patterns where the error cannot be
+      # usefully propagated. Explicit _ = assignments handle remaining cases.
+      exclude-functions:
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*os.File).Close
+        - (*compress/gzip.Reader).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+        - (net.Conn).Close
+        - os.Remove
+        - os.RemoveAll
+        - io.Copy
