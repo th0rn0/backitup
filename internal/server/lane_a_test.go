@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/th0rn0/backitup/internal/auth"
+	"github.com/th0rn0/backitup/internal/keys"
 	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/store"
 )
@@ -171,6 +173,206 @@ func TestClientDetail(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown client = %d, want 404", resp2.StatusCode)
+	}
+}
+
+func TestRotateClientFlow(t *testing.T) {
+	st, ts, authKeys := ingestStack(t)
+	ctx := context.Background()
+
+	// Create a client to rotate.
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "rotateme", Mode: model.ModeRsync, RetentionDays: 14,
+		SSHPubKey: "ssh-ed25519 AAAA original", TokenHash: "originalhash", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	c := loggedInClient(t, st, ts)
+
+	// Happy path: rotate with confirmation.
+	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rotate status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+	for _, want := range []string{
+		"credentials rotated", "OPENSSH PRIVATE KEY", "Bearer token",
+		"old credentials are now invalid",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rotated page missing %q", want)
+		}
+	}
+
+	// Credentials in DB must have changed.
+	got, err := st.GetClient(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("get client: %v", err)
+	}
+	if got.SSHPubKey == "ssh-ed25519 AAAA original" || got.TokenHash == "originalhash" {
+		t.Fatal("credentials were not rotated in the DB")
+	}
+	if got.RetentionDays != 14 {
+		t.Fatalf("unrelated field clobbered after rotate: %+v", got)
+	}
+
+	// authorized_keys must reflect the new public key.
+	data, err := os.ReadFile(authKeys)
+	if err != nil {
+		t.Fatalf("read authorized_keys: %v", err)
+	}
+	if !strings.Contains(string(data), got.SSHPubKey) {
+		t.Fatal("authorized_keys does not contain the new public key after rotate")
+	}
+}
+
+func TestRotateClientMissingConfirm(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	ctx := context.Background()
+	id, err := st.CreateClient(ctx, model.Client{Name: "x", Mode: model.ModeTarGz, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c := loggedInClient(t, st, ts)
+	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing confirm = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRotateClientUnknown(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	c := loggedInClient(t, st, ts)
+	resp, err := c.PostForm(ts.URL+"/clients/99999/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown client rotate = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestRotateClientRequiresAuth(t *testing.T) {
+	_, ts, _ := ingestStack(t)
+	c := noRedirectClient()
+	resp, err := c.PostForm(ts.URL+"/clients/1/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
+		t.Fatalf("unauth rotate = %d -> %q; want 303 -> /login", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// TestRotateClientBadID verifies that a non-numeric path segment returns 404.
+func TestRotateClientBadID(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	c := loggedInClient(t, st, ts)
+	resp, err := c.PostForm(ts.URL+"/clients/notanumber/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("bad id rotate = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestRotateClientStoreError verifies that a DB failure after the client lookup
+// returns 500 rather than panicking.
+func TestRotateClientStoreError(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	ctx := context.Background()
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "storedown", Mode: model.ModeTarGz, Enabled: true,
+		SSHPubKey: "ssh-ed25519 AAAA original", TokenHash: "originalhash",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c := loggedInClient(t, st, ts)
+
+	// Close the underlying store so the RotateClientCreds call fails.
+	_ = st.Close()
+
+	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("store-down rotate = %d, want 500", resp.StatusCode)
+	}
+}
+
+// TestRotateClientInvalidatesOldToken verifies that a bearer token is rejected
+// immediately after the client's credentials are rotated.
+func TestRotateClientInvalidatesOldToken(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	ctx := context.Background()
+
+	oldToken, err := keys.GenerateToken()
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+	hash, err := auth.HashPassword(oldToken)
+	if err != nil {
+		t.Fatalf("hash token: %v", err)
+	}
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "tok-test", Mode: model.ModeRsync, RetentionDays: 7,
+		SSHPubKey: "ssh-ed25519 AAAA tok-test", TokenHash: hash, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	// Old token must be accepted before rotation.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/config", nil)
+	req.Header.Set("Authorization", "Bearer "+oldToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("pre-rotate api call: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("old token pre-rotate = %d, want 200", resp.StatusCode)
+	}
+
+	// Rotate via the admin UI.
+	c := loggedInClient(t, st, ts)
+	resp2, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("rotate status = %d, want 200", resp2.StatusCode)
+	}
+
+	// Old token must be rejected after rotation.
+	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/config", nil)
+	req2.Header.Set("Authorization", "Bearer "+oldToken)
+	resp3, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("post-rotate api call: %v", err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old token post-rotate = %d, want 401", resp3.StatusCode)
 	}
 }
 

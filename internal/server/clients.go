@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"github.com/th0rn0/backitup/internal/authkeys"
 	"github.com/th0rn0/backitup/internal/keys"
 	"github.com/th0rn0/backitup/internal/model"
+	"github.com/th0rn0/backitup/internal/store"
 )
 
 // getNewClient renders the add-client form.
@@ -39,25 +41,14 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	privPEM, pubLine, err := keys.GenerateKeypair("backitup:" + name)
-	if err != nil {
-		http.Error(w, "keygen failed", http.StatusInternalServerError)
-		return
-	}
-	token, err := keys.GenerateToken()
-	if err != nil {
-		http.Error(w, "token gen failed", http.StatusInternalServerError)
-		return
-	}
-	tokenHash, err := auth.HashPassword(token)
-	if err != nil {
-		http.Error(w, "token hash failed", http.StatusInternalServerError)
+	privPEM, pubLine, token, tokenHash, ok := generateClientCreds(w, name)
+	if !ok {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	_, err = s.st.CreateClient(ctx, model.Client{
+	_, err := s.st.CreateClient(ctx, model.Client{
 		Name:                 name,
 		Mode:                 mode,
 		SourceLabel:          r.PostFormValue("source_label"),
@@ -121,6 +112,99 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"HasRun":      latest != nil,
 		"Latest":      latest,
 	})
+}
+
+// postRotateClient reissues the SSH key + bearer token for an existing client.
+// Run history and all other settings are preserved. The old credentials are
+// invalidated atomically; the operator must redeploy the new cron line.
+func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	if r.PostFormValue("confirm") != "1" {
+		http.Error(w, "confirmation required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	c, err := s.st.GetClient(ctx, id)
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	privPEM, pubLine, token, tokenHash, ok := generateClientCreds(w, c.Name)
+	if !ok {
+		return
+	}
+
+	if err := s.st.RotateClientCreds(ctx, id, pubLine, tokenHash, c.Version); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			http.Error(w, "concurrent rotation detected — reload the page and try again", http.StatusConflict)
+			return
+		}
+		http.Error(w, "rotate failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Use a fresh context for the authkeys write: it is a local filesystem
+	// operation that must not be bounded by the already-partially-spent HTTP
+	// request context (the DB write above may have consumed most of the 5s).
+	akCtx, akCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer akCancel()
+	authKeysFailed := false
+	if err := s.regenAuthorizedKeys(akCtx); err != nil {
+		log.Printf("authkeys regenerate failed after rotate client %d: %v", id, err)
+		authKeysFailed = true
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
+		"Name":           c.Name,
+		"Mode":           string(c.Mode),
+		"PrivateKey":     privPEM,
+		"Token":          token,
+		"Server":         s.publicHost,
+		"CronLine":       s.cronLine(token),
+		"KnownHostsLine": knownHostsLine(s.publicHost, s.sshHostKeyPath),
+		"Rotated":        true,
+		"AuthKeysFailed": authKeysFailed,
+	})
+}
+
+// generateClientCreds generates a new SSH keypair and bearer token for the
+// named client, writing errors directly to w. Returns ok=false on any error.
+func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, token, tokenHash string, ok bool) {
+	var err error
+	privPEM, pubLine, err = keys.GenerateKeypair("backitup:" + name)
+	if err != nil {
+		http.Error(w, "keygen failed", http.StatusInternalServerError)
+		return
+	}
+	token, err = keys.GenerateToken()
+	if err != nil {
+		http.Error(w, "token gen failed", http.StatusInternalServerError)
+		return
+	}
+	tokenHash, err = auth.HashPassword(token)
+	if err != nil {
+		http.Error(w, "token hash failed", http.StatusInternalServerError)
+		return
+	}
+	ok = true
+	return
 }
 
 func (s *Server) renderNewClientError(w http.ResponseWriter, msg string) {

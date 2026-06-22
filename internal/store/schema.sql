@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS clients (
     ssh_pubkey              TEXT    NOT NULL DEFAULT '',
     token_hash              TEXT    NOT NULL DEFAULT '',     -- argon2id of bearer token (D4)
     enabled                 INTEGER NOT NULL DEFAULT 1,
-    created_at              TEXT    NOT NULL
+    created_at              TEXT    NOT NULL,
+    version                 INTEGER NOT NULL DEFAULT 1  -- CAS guard for credential rotation
 );
 
 CREATE TABLE IF NOT EXISTS runs (

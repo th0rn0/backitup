@@ -75,6 +75,7 @@ type Client struct {
 
 	Enabled   bool
 	CreatedAt time.Time
+	Version   int // compare-and-swap guard for credential rotation
 }
 
 // Run is one execution of a client backup, recorded from POST /api/v1/status.
