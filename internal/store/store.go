@@ -10,6 +10,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,6 +29,11 @@ type Store struct{ db *sql.DB }
 // Open opens (or creates) the SQLite database at dsn and applies the schema.
 // dsn is a file path; busy_timeout keeps brief writer contention from erroring.
 func Open(dsn string) (*Store, error) {
+	if dir := filepath.Dir(dsn); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create db dir: %w", err)
+		}
+	}
 	db, err := sql.Open("sqlite", dsn+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)

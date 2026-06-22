@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,10 +11,15 @@ import (
 )
 
 func TestOpenBadPath(t *testing.T) {
-	// A path under a nonexistent directory cannot be created.
-	_, err := Open(filepath.Join(t.TempDir(), "no-such-dir", "x.db"))
+	// A path whose parent component is an existing *file* (not a dir) cannot be
+	// opened — os.MkdirAll fails with ENOTDIR, not silently creates it.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte{}, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, err := Open(filepath.Join(blocker, "x.db"))
 	if err == nil {
-		t.Fatal("expected error opening db in nonexistent directory, got nil")
+		t.Fatal("expected error when parent path is a file, got nil")
 	}
 }
 
