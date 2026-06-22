@@ -98,6 +98,44 @@ func TestGetClient(t *testing.T) {
 	}
 }
 
+func TestRotateClientCreds(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "rotate-me", Mode: model.ModeTarGz, RetentionDays: 7,
+		SSHPubKey: "ssh-ed25519 AAAA old", TokenHash: "oldhash", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := st.RotateClientCreds(ctx, id, "ssh-ed25519 BBBB new", "newhash"); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	got, err := st.GetClient(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("get after rotate: %v, nil=%v", err, got == nil)
+	}
+	if got.SSHPubKey != "ssh-ed25519 BBBB new" || got.TokenHash != "newhash" {
+		t.Fatalf("creds not updated: pubkey=%q hash=%q", got.SSHPubKey, got.TokenHash)
+	}
+	// Other fields must be untouched.
+	if got.Name != "rotate-me" || got.RetentionDays != 7 {
+		t.Fatalf("unrelated fields clobbered: %+v", got)
+	}
+
+	// Rotating a nonexistent client must return an error.
+	if err := st.RotateClientCreds(ctx, 9999, "key", "hash"); err == nil {
+		t.Fatal("expected error for missing client, got nil")
+	}
+}
+
 func TestUniqueClientName(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

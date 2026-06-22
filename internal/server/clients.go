@@ -123,6 +123,75 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// postRotateClient reissues the SSH key + bearer token for an existing client.
+// Run history and all other settings are preserved. The old credentials are
+// invalidated atomically; the operator must redeploy the new cron line.
+func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	if r.PostFormValue("confirm") != "1" {
+		http.Error(w, "confirmation required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	c, err := s.st.GetClient(ctx, id)
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	privPEM, pubLine, err := keys.GenerateKeypair("backitup:" + c.Name)
+	if err != nil {
+		http.Error(w, "keygen failed", http.StatusInternalServerError)
+		return
+	}
+	token, err := keys.GenerateToken()
+	if err != nil {
+		http.Error(w, "token gen failed", http.StatusInternalServerError)
+		return
+	}
+	tokenHash, err := auth.HashPassword(token)
+	if err != nil {
+		http.Error(w, "token hash failed", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.st.RotateClientCreds(ctx, id, pubLine, tokenHash); err != nil {
+		http.Error(w, "rotate failed", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.regenAuthorizedKeys(ctx); err != nil {
+		log.Printf("authkeys regenerate failed after rotate client %d: %v", id, err)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
+		"Name":           c.Name,
+		"Mode":           string(c.Mode),
+		"PrivateKey":     privPEM,
+		"Token":          token,
+		"Server":         s.publicHost,
+		"CronLine":       s.cronLine(token),
+		"KnownHostsLine": knownHostsLine(s.publicHost, s.sshHostKeyPath),
+		"Rotated":        true,
+	})
+}
+
 func (s *Server) renderNewClientError(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)

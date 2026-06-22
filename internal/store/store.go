@@ -225,6 +225,23 @@ func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, 
 	}
 }
 
+// RotateClientCreds replaces a client's SSH public key and token hash atomically.
+// All other fields and run history are preserved. Returns an error if the client
+// does not exist.
+func (s *Store) RotateClientCreds(ctx context.Context, id int64, pubKey, tokenHash string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE clients SET ssh_pubkey=?, token_hash=? WHERE id=?`,
+		pubKey, tokenHash, id)
+	if err != nil {
+		return fmt.Errorf("rotate client creds: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("client %d: not found", id)
+	}
+	return nil
+}
+
 // PruneRuns deletes run records older than keepDays for a client (0 = keep all).
 func (s *Store) PruneRuns(ctx context.Context, clientID int64, keepDays int) (int64, error) {
 	if keepDays <= 0 {

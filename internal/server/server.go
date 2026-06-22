@@ -88,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /clients/new", s.requireAdmin(s.getNewClient))
 	mux.HandleFunc("POST /clients", s.requireAdmin(s.postClients))
 	mux.HandleFunc("GET /clients/{id}", s.requireAdmin(s.getClient))
+	mux.HandleFunc("POST /clients/{id}/rotate", s.requireAdmin(s.postRotateClient))
 
 	// Client API (bearer token), needed by Lane C. Control channel is HTTPS in
 	// production (cmd/server serves TLS when configured).

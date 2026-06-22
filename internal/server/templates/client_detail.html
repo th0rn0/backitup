@@ -39,6 +39,16 @@
       {{else}}
       <p class="summary">No runs yet. Paste the client's cron line on its host; this client will appear after its first backup.</p>
       {{end}}
+
+      <h2 style="margin-top:32px">Rotate credentials</h2>
+      <p class="summary">Issues a new SSH key and bearer token. The old credentials stop working immediately — redeploy the cron line on the host after rotating.</p>
+      <form method="POST" action="/clients/{{.Client.ID}}/rotate" style="margin-top:12px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer">
+          <input type="checkbox" name="confirm" value="1" required>
+          I understand the old credentials will stop working immediately.
+        </label>
+        <button type="submit" class="btn" style="margin-top:12px;background:var(--failed);color:#fff">Rotate credentials</button>
+      </form>
     </main>
   </div>
 </body>

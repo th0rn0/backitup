@@ -174,4 +174,105 @@ func TestClientDetail(t *testing.T) {
 	}
 }
 
+func TestRotateClientFlow(t *testing.T) {
+	st, ts, authKeys := ingestStack(t)
+	ctx := context.Background()
+
+	// Create a client to rotate.
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "rotateme", Mode: model.ModeRsync, RetentionDays: 14,
+		SSHPubKey: "ssh-ed25519 AAAA original", TokenHash: "originalhash", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	c := loggedInClient(t, st, ts)
+
+	// Happy path: rotate with confirmation.
+	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rotate status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+	for _, want := range []string{
+		"credentials rotated", "OPENSSH PRIVATE KEY", "Bearer token",
+		"old credentials are now invalid",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rotated page missing %q", want)
+		}
+	}
+
+	// Credentials in DB must have changed.
+	got, err := st.GetClient(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("get client: %v", err)
+	}
+	if got.SSHPubKey == "ssh-ed25519 AAAA original" || got.TokenHash == "originalhash" {
+		t.Fatal("credentials were not rotated in the DB")
+	}
+	if got.RetentionDays != 14 {
+		t.Fatalf("unrelated field clobbered after rotate: %+v", got)
+	}
+
+	// authorized_keys must reflect the new public key.
+	data, err := os.ReadFile(authKeys)
+	if err != nil {
+		t.Fatalf("read authorized_keys: %v", err)
+	}
+	if !strings.Contains(string(data), got.SSHPubKey) {
+		t.Fatal("authorized_keys does not contain the new public key after rotate")
+	}
+}
+
+func TestRotateClientMissingConfirm(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	ctx := context.Background()
+	id, err := st.CreateClient(ctx, model.Client{Name: "x", Mode: model.ModeTarGz, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c := loggedInClient(t, st, ts)
+	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing confirm = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRotateClientUnknown(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	c := loggedInClient(t, st, ts)
+	resp, err := c.PostForm(ts.URL+"/clients/99999/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown client rotate = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestRotateClientRequiresAuth(t *testing.T) {
+	_, ts, _ := ingestStack(t)
+	c := noRedirectClient()
+	resp, err := c.PostForm(ts.URL+"/clients/1/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
+		t.Fatalf("unauth rotate = %d -> %q; want 303 -> /login", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }

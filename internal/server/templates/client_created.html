@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Back! It! Up! — {{.Name}} created</title>
+  <title>Back! It! Up! — {{.Name}} {{if .Rotated}}credentials rotated{{else}}created{{end}}</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -13,10 +13,16 @@
       <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a></div>
     </nav>
     <main class="main">
-      <h1>Client “{{.Name}}” created</h1>
-      <div class="error" role="alert" style="background:rgba(210,153,34,0.12);border-color:var(--stale);color:var(--stale)">
+      <h1>{{if .Rotated}}Client “{{.Name}}” — credentials rotated{{else}}Client “{{.Name}}” created{{end}}</h1>
+      {{if .Rotated}}
+      <div class=”error” role=”alert”>
+        ⚠ The old credentials are now invalid. Save these new ones before leaving this page — they are shown <strong>once</strong> and cannot be retrieved later.
+      </div>
+      {{else}}
+      <div class=”error” role=”alert” style=”background:rgba(210,153,34,0.12);border-color:var(--stale);color:var(--stale)”>
         ⚠ Save these now. The private key and token are shown <strong>once</strong> and cannot be retrieved later.
       </div>
+      {{end}}
 
       <h2>1. Client secrets</h2>
       <label>SSH private key</label>
