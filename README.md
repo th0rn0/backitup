@@ -98,26 +98,67 @@ process avoids cross-process lock coordination.
 
 Requirements: Docker + the Compose plugin.
 
-```sh
-git clone https://github.com/th0rn0/backitup.git
-cd backitup   # repo name stays "backitup"; the product name is Back! It! Up!
-docker compose up -d --build      # builds the app image and starts the stack
-curl http://127.0.0.1:8080/healthz   # -> ok
-docker compose logs -f app
+Save this as `docker-compose.yml` (or clone the repo and use the one included):
+
+```yaml
+services:
+  app:
+    image: ghcr.io/th0rn0/backitup-server:latest
+    restart: unless-stopped
+    environment:
+      BACKITUP_ADMIN_USER: admin
+      BACKITUP_ADMIN_PASSWORD: changeme          # required — set before first start
+      BACKITUP_PUBLIC_HOST: your-server:2222     # host:port shown in cron lines
+      BACKITUP_AUTHKEYS: /srv/authkeys/authorized_keys
+      BACKITUP_BACKUP_DIR: /srv/backups
+      BACKITUP_SSH_HOST_KEY: /srv/hostkeys/ssh_host_ed25519_key.pub
+      # BACKITUP_TLS_CERT: /certs/cert.pem      # uncomment for HTTPS
+      # BACKITUP_TLS_KEY:  /certs/key.pem
+      # BACKITUP_RCLONE_CONFIG: /data/rclone.conf  # needed for offsite tiering
+    ports:
+      - "127.0.0.1:8080:8080"   # put behind a TLS reverse proxy in production
+    volumes:
+      - app-data:/data
+      - backups:/srv/backups
+      - authkeys:/srv/authkeys
+      - sshd-hostkeys:/srv/hostkeys:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  sshd:
+    image: ghcr.io/th0rn0/backitup-sshd:latest
+    restart: unless-stopped
+    ports:
+      - "2222:2222"             # data channel — clients SSH into this port
+    volumes:
+      - backups:/srv/backups
+      - authkeys:/srv/authkeys:ro
+      - sshd-hostkeys:/srv/hostkeys
+
+volumes:
+  app-data:       # SQLite database + rclone config
+  backups:        # hot backup store (per-client confined dirs)
+  authkeys:       # authorized_keys file shared between app and sshd
+  sshd-hostkeys:  # sshd host key; app reads the .pub for known_hosts generation
 ```
 
-The compose stack defines three volumes — `app-data` (SQLite + config), `backups`
-(hot store), `authkeys` (the authorized_keys file the app writes for sshd) — and
-binds the app to `127.0.0.1:8080` by default. Put it behind your own TLS reverse
-proxy (or wait for built-in TLS) before exposing it.
+Then:
+
+```sh
+docker compose up -d
+curl http://127.0.0.1:8080/healthz   # -> ok
+```
+
+Open `http://127.0.0.1:8080` and sign in with the admin credentials you set above.
+Put a TLS reverse proxy in front before exposing it — the login and client tokens must not cross plaintext.
 
 ```sh
 docker compose down          # stop
 docker compose down -v       # stop and DELETE all volumes (destroys backups!)
 ```
-
-> The `sshd` service in `docker-compose.yml` is a placeholder for the SSH ingest
-> plane (Lane A). The `app` service is fully functional today.
 
 ## Building the images
 
@@ -342,4 +383,4 @@ Back! It! Up! is built in lanes (see the design doc). Lane 0 is done.
 **All lanes complete.** The full path works: client → SSH ingest → hot store →
 encrypted offsite, managed from the dashboard.
 
-See `TODOS.md` for deferred work (e.g. client credential rotation).
+See `TODOS.md` for deferred work.
