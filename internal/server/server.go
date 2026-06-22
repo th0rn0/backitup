@@ -51,7 +51,7 @@ func New(st *store.Store, secure bool) *Server {
 		authKeysPath:  "/srv/authkeys/authorized_keys",
 		backupBaseDir: "/srv/backups",
 		publicHost:    "your-server:2222",
-		clientImage:   "ghcr.io/th0rn0/backitup-client:latest",
+		clientImage:   "th0rn0/backitup-client:latest",
 	}
 }
 

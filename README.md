@@ -103,7 +103,7 @@ Save this as `docker-compose.yml` (or clone the repo and use the one included):
 ```yaml
 services:
   app:
-    image: ghcr.io/th0rn0/backitup-server:latest
+    image: th0rn0/backitup-server:latest
     restart: unless-stopped
     environment:
       BACKITUP_ADMIN_USER: admin
@@ -129,7 +129,7 @@ services:
       retries: 3
 
   sshd:
-    image: ghcr.io/th0rn0/backitup-sshd:latest
+    image: th0rn0/backitup-sshd:latest
     restart: unless-stopped
     ports:
       - "2222:2222"             # data channel — clients SSH into this port
@@ -164,20 +164,20 @@ docker compose down -v       # stop and DELETE all volumes (destroys backups!)
 
 ```sh
 # Server (control plane): Alpine + rclone, ~145 MB, cgo-free.
-docker build -t ghcr.io/th0rn0/backitup-server:dev -f Dockerfile .
+docker build -t th0rn0/backitup-server:dev -f Dockerfile .
 
 # Client (dumb uploader): Alpine + rsync + openssh-client, ~25 MB.
-docker build -t ghcr.io/th0rn0/backitup-client:dev -f Dockerfile.client .
+docker build -t th0rn0/backitup-client:dev -f Dockerfile.client .
 
 # SSH ingest (data plane): Debian + OpenSSH + rsync/rrsync.
-docker build -t ghcr.io/th0rn0/backitup-sshd:dev -f Dockerfile.sshd .
+docker build -t th0rn0/backitup-sshd:dev -f Dockerfile.sshd .
 ```
 
 Both are pure-Go (`CGO_ENABLED=0`) and build for `linux/amd64` and `linux/arm64`:
 
 ```sh
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/th0rn0/backitup-server:dev -f Dockerfile .
+  -t th0rn0/backitup-server:dev -f Dockerfile .
 ```
 
 ## Running the server with `docker run`
@@ -187,7 +187,7 @@ docker run -d --name backitup \
   -p 127.0.0.1:8080:8080 \
   -v backitup-data:/data \
   -v backitup-backups:/srv/backups \
-  ghcr.io/th0rn0/backitup-server:dev
+  th0rn0/backitup-server:dev
 
 curl http://127.0.0.1:8080/healthz   # -> ok
 ```
@@ -204,7 +204,7 @@ and the exact cron line for each client. The shape of that line:
   -v /etc/backitup/laptop-docs:/secrets:ro \
   -e BACKITUP_SERVER=backup.example.com:2222 \
   -e BACKITUP_TOKEN_FILE=/secrets/token \
-  ghcr.io/th0rn0/backitup-client:dev
+  th0rn0/backitup-client:dev
 ```
 
 Key points:
@@ -230,7 +230,7 @@ Key points:
 | `BACKITUP_AUTHKEYS`        | `/srv/authkeys/authorized_keys` | Path the app rewrites for the sshd container (D4) |
 | `BACKITUP_BACKUP_DIR`      | `/srv/backups`      | Base dir for per-client backup directories             |
 | `BACKITUP_PUBLIC_HOST`     | `your-server:2222`  | Host:port shown in the generated client cron line      |
-| `BACKITUP_CLIENT_IMAGE`    | `ghcr.io/th0rn0/backitup-client:latest` | Client image used in the cron line |
+| `BACKITUP_CLIENT_IMAGE`    | `th0rn0/backitup-client:latest` | Client image used in the cron line |
 | `BACKITUP_RCLONE_CONFIG`   | `/data/rclone.conf` | rclone config defining the encrypted crypt remote(s)   |
 | `BACKITUP_LIFECYCLE_INTERVAL` | `1h`             | How often the lifecycle worker runs (offsite + prune)  |
 | `BACKITUP_SSH_HOST_KEY`    | `/srv/hostkeys/ssh_host_ed25519_key.pub` | sshd host public key path; generates `known_hosts` entries in the add-client UI |

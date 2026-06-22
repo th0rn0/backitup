@@ -33,7 +33,7 @@ func ingestStack(t *testing.T) (*store.Store, *httptest.Server, string) {
 	srv.authKeysPath = authKeys
 	srv.backupBaseDir = filepath.Join(tmp, "backups")
 	srv.publicHost = "backup.test:2222"
-	srv.clientImage = "ghcr.io/th0rn0/backitup-client:test"
+	srv.clientImage = "th0rn0/backitup-client:test"
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return st, ts, authKeys

@@ -13,7 +13,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/th0rn0/backitup-server:dev
+    image: th0rn0/backitup-server:dev
     restart: unless-stopped
     environment:
       BACKITUP_DB: /data/backitup.db
@@ -26,7 +26,7 @@ services:
       BACKITUP_BACKUP_DIR: /srv/backups
       # Shown in the generated client cron line.
       BACKITUP_PUBLIC_HOST: ${BACKITUP_PUBLIC_HOST:-your-server:2222}
-      BACKITUP_CLIENT_IMAGE: ${BACKITUP_CLIENT_IMAGE:-ghcr.io/th0rn0/backitup-client:dev}
+      BACKITUP_CLIENT_IMAGE: ${BACKITUP_CLIENT_IMAGE:-th0rn0/backitup-client:dev}
       # Lifecycle worker (offsite + retention + integrity). rclone.conf defines
       # the encrypted crypt remote(s) a client's OffsiteRemote points at.
       BACKITUP_RCLONE_CONFIG: ${BACKITUP_RCLONE_CONFIG:-/data/rclone.conf}
@@ -54,7 +54,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.sshd
-    image: ghcr.io/th0rn0/backitup-sshd:dev
+    image: th0rn0/backitup-sshd:dev
     restart: unless-stopped
     ports:
       - "2222:2222" # the data channel clients connect to
