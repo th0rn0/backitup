@@ -10,6 +10,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -35,6 +36,16 @@ func Open(dsn string) (*Store, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	// Additive migration: add version column to existing databases.
+	// CREATE TABLE IF NOT EXISTS already adds it for new databases; this handles
+	// upgrades. SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS, so we ignore
+	// the "duplicate column name" error that fires when the column already exists.
+	if _, err := db.Exec(`ALTER TABLE clients ADD COLUMN version INTEGER NOT NULL DEFAULT 1`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("migrate version column: %w", err)
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -68,7 +79,7 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote,
-			ssh_pubkey, token_hash, enabled, created_at
+			ssh_pubkey, token_hash, enabled, created_at, version
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -90,7 +101,7 @@ func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote,
-			ssh_pubkey, token_hash, enabled, created_at
+			ssh_pubkey, token_hash, enabled, created_at, version
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -225,19 +236,35 @@ func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, 
 	}
 }
 
+// ErrConflict is returned by RotateClientCreds when a concurrent rotation
+// has already incremented the client's version since the caller read it.
+var ErrConflict = fmt.Errorf("concurrent modification: version mismatch")
+
 // RotateClientCreds replaces a client's SSH public key and token hash atomically.
-// All other fields and run history are preserved. Returns an error if the client
-// does not exist.
-func (s *Store) RotateClientCreds(ctx context.Context, id int64, pubKey, tokenHash string) error {
+// oldVersion is the version observed by the caller via GetClient; the UPDATE only
+// applies if the version has not changed (compare-and-swap). Returns ErrConflict
+// if a concurrent rotation already incremented the version.
+func (s *Store) RotateClientCreds(ctx context.Context, id int64, pubKey, tokenHash string, oldVersion int) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET ssh_pubkey=?, token_hash=? WHERE id=?`,
-		pubKey, tokenHash, id)
+		`UPDATE clients SET ssh_pubkey=?, token_hash=?, version=version+1 WHERE id=? AND version=?`,
+		pubKey, tokenHash, id, oldVersion)
 	if err != nil {
 		return fmt.Errorf("rotate client creds: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("client %d: not found", id)
+		// Either the client was deleted or a concurrent rotation already ran.
+		// Disambiguate by checking existence.
+		row := s.db.QueryRowContext(ctx, `SELECT version FROM clients WHERE id=?`, id)
+		var v int
+		switch err := row.Scan(&v); err {
+		case sql.ErrNoRows:
+			return fmt.Errorf("client %d: not found", id)
+		case nil:
+			return ErrConflict
+		default:
+			return fmt.Errorf("rotate client creds disambiguate: %w", err)
+		}
 	}
 	return nil
 }
@@ -272,7 +299,7 @@ func scanClient(sc scanner) (model.Client, error) {
 	var enabled int
 	if err := sc.Scan(&c.ID, &c.Name, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.OffsiteRetentionDays, &c.ExpectedIntervalSecs, &c.OffsiteRemote,
-		&c.SSHPubKey, &c.TokenHash, &enabled, &createdAt); err != nil {
+		&c.SSHPubKey, &c.TokenHash, &enabled, &createdAt, &c.Version); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)

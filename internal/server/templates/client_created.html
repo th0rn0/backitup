@@ -18,6 +18,11 @@
       <div class=”error” role=”alert”>
         ⚠ The old credentials are now invalid. Save these new ones before leaving this page — they are shown <strong>once</strong> and cannot be retrieved later.
       </div>
+      {{if .AuthKeysFailed}}
+      <div class=”error” role=”alert” style=”background:rgba(210,34,34,0.12);border-color:var(--failed);color:var(--failed);margin-top:8px”>
+        ⚠ Warning: credentials were rotated in the database but the SSH authorized_keys file could not be updated. SSH connections for this client may fail until authorized_keys is refreshed (e.g. by re-enabling the client or restarting the server).
+      </div>
+      {{end}}
       {{else}}
       <div class=”error” role=”alert” style=”background:rgba(210,153,34,0.12);border-color:var(--stale);color:var(--stale)”>
         ⚠ Save these now. The private key and token are shown <strong>once</strong> and cannot be retrieved later.

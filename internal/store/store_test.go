@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -114,7 +115,11 @@ func TestRotateClientCreds(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	if err := st.RotateClientCreds(ctx, id, "ssh-ed25519 BBBB new", "newhash"); err != nil {
+	cl0, err := st.GetClient(ctx, id)
+	if err != nil || cl0 == nil {
+		t.Fatalf("get before rotate: %v", err)
+	}
+	if err := st.RotateClientCreds(ctx, id, "ssh-ed25519 BBBB new", "newhash", cl0.Version); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 
@@ -129,9 +134,18 @@ func TestRotateClientCreds(t *testing.T) {
 	if got.Name != "rotate-me" || got.RetentionDays != 7 {
 		t.Fatalf("unrelated fields clobbered: %+v", got)
 	}
+	// Version must have incremented.
+	if got.Version != cl0.Version+1 {
+		t.Fatalf("version not incremented: want %d, got %d", cl0.Version+1, got.Version)
+	}
+
+	// Stale version must return ErrConflict.
+	if err := st.RotateClientCreds(ctx, id, "key", "hash", cl0.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale version: want ErrConflict, got %v", err)
+	}
 
 	// Rotating a nonexistent client must return an error.
-	if err := st.RotateClientCreds(ctx, 9999, "key", "hash"); err == nil {
+	if err := st.RotateClientCreds(ctx, 9999, "key", "hash", 1); err == nil {
 		t.Fatal("expected error for missing client, got nil")
 	}
 }

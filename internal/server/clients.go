@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"github.com/th0rn0/backitup/internal/authkeys"
 	"github.com/th0rn0/backitup/internal/keys"
 	"github.com/th0rn0/backitup/internal/model"
+	"github.com/th0rn0/backitup/internal/store"
 )
 
 // getNewClient renders the add-client form.
@@ -148,15 +150,24 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.st.RotateClientCreds(ctx, id, pubLine, tokenHash); err != nil {
+	if err := s.st.RotateClientCreds(ctx, id, pubLine, tokenHash, c.Version); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			http.Error(w, "concurrent rotation detected — reload the page and try again", http.StatusConflict)
+			return
+		}
 		http.Error(w, "rotate failed", http.StatusInternalServerError)
 		return
 	}
 
-	if err := s.regenAuthorizedKeys(ctx); err != nil {
+	// Use a fresh context for the authkeys write: it is a local filesystem
+	// operation that must not be bounded by the already-partially-spent HTTP
+	// request context (the DB write above may have consumed most of the 5s).
+	akCtx, akCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer akCancel()
+	authKeysFailed := false
+	if err := s.regenAuthorizedKeys(akCtx); err != nil {
 		log.Printf("authkeys regenerate failed after rotate client %d: %v", id, err)
-		http.Error(w, "credentials rotated but authorized_keys update failed — SSH access may be disrupted", http.StatusInternalServerError)
-		return
+		authKeysFailed = true
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -169,6 +180,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		"CronLine":       s.cronLine(token),
 		"KnownHostsLine": knownHostsLine(s.publicHost, s.sshHostKeyPath),
 		"Rotated":        true,
+		"AuthKeysFailed": authKeysFailed,
 	})
 }
 
