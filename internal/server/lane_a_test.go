@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/th0rn0/backitup/internal/auth"
+	"github.com/th0rn0/backitup/internal/keys"
 	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/store"
 )
@@ -272,6 +274,105 @@ func TestRotateClientRequiresAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
 		t.Fatalf("unauth rotate = %d -> %q; want 303 -> /login", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// TestRotateClientBadID verifies that a non-numeric path segment returns 404.
+func TestRotateClientBadID(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	c := loggedInClient(t, st, ts)
+	resp, err := c.PostForm(ts.URL+"/clients/notanumber/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("bad id rotate = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestRotateClientStoreError verifies that a DB failure after the client lookup
+// returns 500 rather than panicking.
+func TestRotateClientStoreError(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	ctx := context.Background()
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "storedown", Mode: model.ModeTarGz, Enabled: true,
+		SSHPubKey: "ssh-ed25519 AAAA original", TokenHash: "originalhash",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c := loggedInClient(t, st, ts)
+
+	// Close the underlying store so the RotateClientCreds call fails.
+	_ = st.Close()
+
+	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("store-down rotate = %d, want 500", resp.StatusCode)
+	}
+}
+
+// TestRotateClientInvalidatesOldToken verifies that a bearer token is rejected
+// immediately after the client's credentials are rotated.
+func TestRotateClientInvalidatesOldToken(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	ctx := context.Background()
+
+	oldToken, err := keys.GenerateToken()
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+	hash, err := auth.HashPassword(oldToken)
+	if err != nil {
+		t.Fatalf("hash token: %v", err)
+	}
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "tok-test", Mode: model.ModeRsync, RetentionDays: 7,
+		SSHPubKey: "ssh-ed25519 AAAA tok-test", TokenHash: hash, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	// Old token must be accepted before rotation.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/config", nil)
+	req.Header.Set("Authorization", "Bearer "+oldToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("pre-rotate api call: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("old token pre-rotate = %d, want 200", resp.StatusCode)
+	}
+
+	// Rotate via the admin UI.
+	c := loggedInClient(t, st, ts)
+	resp2, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("rotate status = %d, want 200", resp2.StatusCode)
+	}
+
+	// Old token must be rejected after rotation.
+	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/config", nil)
+	req2.Header.Set("Authorization", "Bearer "+oldToken)
+	resp3, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("post-rotate api call: %v", err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old token post-rotate = %d, want 401", resp3.StatusCode)
 	}
 }
 

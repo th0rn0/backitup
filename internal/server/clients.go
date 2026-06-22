@@ -39,25 +39,14 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	privPEM, pubLine, err := keys.GenerateKeypair("backitup:" + name)
-	if err != nil {
-		http.Error(w, "keygen failed", http.StatusInternalServerError)
-		return
-	}
-	token, err := keys.GenerateToken()
-	if err != nil {
-		http.Error(w, "token gen failed", http.StatusInternalServerError)
-		return
-	}
-	tokenHash, err := auth.HashPassword(token)
-	if err != nil {
-		http.Error(w, "token hash failed", http.StatusInternalServerError)
+	privPEM, pubLine, token, tokenHash, ok := generateClientCreds(w, name)
+	if !ok {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	_, err = s.st.CreateClient(ctx, model.Client{
+	_, err := s.st.CreateClient(ctx, model.Client{
 		Name:                 name,
 		Mode:                 mode,
 		SourceLabel:          r.PostFormValue("source_label"),
@@ -154,19 +143,8 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	privPEM, pubLine, err := keys.GenerateKeypair("backitup:" + c.Name)
-	if err != nil {
-		http.Error(w, "keygen failed", http.StatusInternalServerError)
-		return
-	}
-	token, err := keys.GenerateToken()
-	if err != nil {
-		http.Error(w, "token gen failed", http.StatusInternalServerError)
-		return
-	}
-	tokenHash, err := auth.HashPassword(token)
-	if err != nil {
-		http.Error(w, "token hash failed", http.StatusInternalServerError)
+	privPEM, pubLine, token, tokenHash, ok := generateClientCreds(w, c.Name)
+	if !ok {
 		return
 	}
 
@@ -177,6 +155,8 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.regenAuthorizedKeys(ctx); err != nil {
 		log.Printf("authkeys regenerate failed after rotate client %d: %v", id, err)
+		http.Error(w, "credentials rotated but authorized_keys update failed — SSH access may be disrupted", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -190,6 +170,29 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		"KnownHostsLine": knownHostsLine(s.publicHost, s.sshHostKeyPath),
 		"Rotated":        true,
 	})
+}
+
+// generateClientCreds generates a new SSH keypair and bearer token for the
+// named client, writing errors directly to w. Returns ok=false on any error.
+func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, token, tokenHash string, ok bool) {
+	var err error
+	privPEM, pubLine, err = keys.GenerateKeypair("backitup:" + name)
+	if err != nil {
+		http.Error(w, "keygen failed", http.StatusInternalServerError)
+		return
+	}
+	token, err = keys.GenerateToken()
+	if err != nil {
+		http.Error(w, "token gen failed", http.StatusInternalServerError)
+		return
+	}
+	tokenHash, err = auth.HashPassword(token)
+	if err != nil {
+		http.Error(w, "token hash failed", http.StatusInternalServerError)
+		return
+	}
+	ok = true
+	return
 }
 
 func (s *Server) renderNewClientError(w http.ResponseWriter, msg string) {
