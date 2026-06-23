@@ -90,14 +90,9 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 
 // getClient renders the client detail page with run history.
 func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	c, err := s.st.GetClient(ctx, id)
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
@@ -106,7 +101,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	runs, _ := s.st.ListRuns(ctx, id, 20)
+	runs, _ := s.st.ListRuns(ctx, c.ID, 20)
 	var latest *model.Run
 	if len(runs) > 0 {
 		latest = &runs[0]
@@ -124,11 +119,6 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 
 // getRunLog renders the log output for a single run.
 func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
-	clientID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
 	runID, err := strconv.ParseInt(r.PathValue("runID"), 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
@@ -136,17 +126,17 @@ func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil || c == nil {
+		http.NotFound(w, r)
+		return
+	}
 	run, err := s.st.GetRun(ctx, runID)
 	if err != nil {
 		http.Error(w, "failed to load run", http.StatusInternalServerError)
 		return
 	}
-	if run == nil || run.ClientID != clientID {
-		http.NotFound(w, r)
-		return
-	}
-	c, err := s.st.GetClient(ctx, clientID)
-	if err != nil || c == nil {
+	if run == nil || run.ClientID != c.ID {
 		http.NotFound(w, r)
 		return
 	}
@@ -161,11 +151,6 @@ func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
 // Run history and all other settings are preserved. The old credentials are
 // invalidated atomically; the operator must redeploy the new cron line.
 func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -178,7 +163,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	c, err := s.st.GetClient(ctx, id)
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
@@ -193,7 +178,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.st.RotateClientCreds(ctx, id, pubLine, tokenHash, c.Version); err != nil {
+	if err := s.st.RotateClientCreds(ctx, c.ID, pubLine, tokenHash, c.Version); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			http.Error(w, "concurrent rotation detected — reload the page and try again", http.StatusConflict)
 			return
@@ -209,7 +194,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	defer akCancel()
 	authKeysFailed := false
 	if err := s.regenAuthorizedKeys(akCtx); err != nil {
-		log.Printf("authkeys regenerate failed after rotate client %d: %v", id, err)
+		log.Printf("authkeys regenerate failed after rotate client %d: %v", c.ID, err)
 		authKeysFailed = true
 	}
 
@@ -234,11 +219,6 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 // postDeleteClient removes a client and all its run history, regenerates
 // authorized_keys, then redirects to the dashboard.
 func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -251,7 +231,17 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	if err := s.st.DeleteClient(ctx, id); err != nil {
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := s.st.DeleteClient(ctx, c.ID); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.NotFound(w, r)
 			return
@@ -263,7 +253,7 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 	akCtx, akCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer akCancel()
 	if err := s.regenAuthorizedKeys(akCtx); err != nil {
-		log.Printf("authkeys regenerate failed after delete client %d: %v", id, err)
+		log.Printf("authkeys regenerate failed after delete client %d: %v", c.ID, err)
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -319,7 +309,7 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 		if !c.Enabled {
 			continue
 		}
-		dir := filepath.Join(s.backupBaseDir, strconv.FormatInt(c.ID, 10))
+		dir := filepath.Join(s.backupBaseDir, model.Slug(c.Name))
 		if c.Mode == model.ModeRsync {
 			dir = filepath.Join(dir, "snapshots")
 		}

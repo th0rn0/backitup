@@ -7,7 +7,28 @@
 //   - D7/D8: retention is bounded; offsite retention is INDEPENDENT of hot retention.
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
+
+// Slug converts a client name into a URL/filesystem-safe identifier:
+// lowercase, non-alphanumeric characters replaced with hyphens, consecutive
+// hyphens collapsed, leading/trailing hyphens trimmed.
+func Slug(name string) string {
+	var b strings.Builder
+	prevHyphen := true // suppress leading hyphens
+	for _, r := range strings.ToLower(name) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			prevHyphen = false
+		} else if !prevHyphen {
+			b.WriteByte('-')
+			prevHyphen = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
+}
 
 // Mode is how a client captures and ships a backup. The two modes are different
 // architectures, not two flags (see design doc Premise 2):
@@ -23,6 +44,9 @@ const (
 )
 
 func (m Mode) Valid() bool { return m == ModeTarGz || m == ModeRsync }
+
+// Slug returns the URL/filesystem-safe identifier for this client.
+func (c Client) Slug() string { return Slug(c.Name) }
 
 // RunStatus is the outcome of a single client backup run, as reported back over
 // the control channel. "overlap" means a prior run of the same client was still

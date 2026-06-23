@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -149,7 +148,7 @@ func TestGetNewClientForm(t *testing.T) {
 
 func TestClientDetail(t *testing.T) {
 	st, ts, _ := ingestStack(t)
-	id, err := st.CreateClient(context.Background(), model.Client{
+	_, err := st.CreateClient(context.Background(), model.Client{
 		Name: "detail-me", Mode: model.ModeTarGz, RetentionDays: 14, Enabled: true,
 	})
 	if err != nil {
@@ -157,7 +156,7 @@ func TestClientDetail(t *testing.T) {
 	}
 	c := loggedInClient(t, st, ts)
 
-	resp, err := c.Get(ts.URL + "/clients/" + itoa(id))
+	resp, err := c.Get(ts.URL + "/clients/detail-me")
 	if err != nil {
 		t.Fatalf("get detail: %v", err)
 	}
@@ -167,8 +166,8 @@ func TestClientDetail(t *testing.T) {
 		t.Fatalf("detail page wrong (status %d)", resp.StatusCode)
 	}
 
-	// Unknown id -> 404.
-	resp2, err := c.Get(ts.URL + "/clients/99999")
+	// Unknown name -> 404.
+	resp2, err := c.Get(ts.URL + "/clients/nonexistent")
 	if err != nil {
 		t.Fatalf("get unknown: %v", err)
 	}
@@ -194,7 +193,7 @@ func TestRotateClientFlow(t *testing.T) {
 	c := loggedInClient(t, st, ts)
 
 	// Happy path: rotate with confirmation.
-	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	resp, err := c.PostForm(ts.URL+"/clients/rotateme/rotate", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
@@ -238,12 +237,12 @@ func TestRotateClientFlow(t *testing.T) {
 func TestRotateClientMissingConfirm(t *testing.T) {
 	st, ts, _ := ingestStack(t)
 	ctx := context.Background()
-	id, err := st.CreateClient(ctx, model.Client{Name: "x", Mode: model.ModeTarGz, Enabled: true})
+	_, err := st.CreateClient(ctx, model.Client{Name: "x", Mode: model.ModeTarGz, Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	c := loggedInClient(t, st, ts)
-	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{})
+	resp, err := c.PostForm(ts.URL+"/clients/x/rotate", url.Values{})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -256,7 +255,7 @@ func TestRotateClientMissingConfirm(t *testing.T) {
 func TestRotateClientUnknown(t *testing.T) {
 	st, ts, _ := ingestStack(t)
 	c := loggedInClient(t, st, ts)
-	resp, err := c.PostForm(ts.URL+"/clients/99999/rotate", url.Values{"confirm": {"1"}})
+	resp, err := c.PostForm(ts.URL+"/clients/nonexistent/rotate", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -269,7 +268,7 @@ func TestRotateClientUnknown(t *testing.T) {
 func TestRotateClientRequiresAuth(t *testing.T) {
 	_, ts, _ := ingestStack(t)
 	c := noRedirectClient()
-	resp, err := c.PostForm(ts.URL+"/clients/1/rotate", url.Values{"confirm": {"1"}})
+	resp, err := c.PostForm(ts.URL+"/clients/nonexistent/rotate", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -279,17 +278,17 @@ func TestRotateClientRequiresAuth(t *testing.T) {
 	}
 }
 
-// TestRotateClientBadID verifies that a non-numeric path segment returns 404.
-func TestRotateClientBadID(t *testing.T) {
+// TestRotateClientUnknownSlug verifies that a non-existent slug returns 404.
+func TestRotateClientUnknownSlug(t *testing.T) {
 	st, ts, _ := ingestStack(t)
 	c := loggedInClient(t, st, ts)
-	resp, err := c.PostForm(ts.URL+"/clients/notanumber/rotate", url.Values{"confirm": {"1"}})
+	resp, err := c.PostForm(ts.URL+"/clients/nonexistent-slug/rotate", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("bad id rotate = %d, want 404", resp.StatusCode)
+		t.Fatalf("unknown slug rotate = %d, want 404", resp.StatusCode)
 	}
 }
 
@@ -298,7 +297,7 @@ func TestRotateClientBadID(t *testing.T) {
 func TestRotateClientStoreError(t *testing.T) {
 	st, ts, _ := ingestStack(t)
 	ctx := context.Background()
-	id, err := st.CreateClient(ctx, model.Client{
+	_, err := st.CreateClient(ctx, model.Client{
 		Name: "storedown", Mode: model.ModeTarGz, Enabled: true,
 		SSHPubKey: "ssh-ed25519 AAAA original", TokenHash: "originalhash",
 	})
@@ -310,7 +309,7 @@ func TestRotateClientStoreError(t *testing.T) {
 	// Close the underlying store so the RotateClientCreds call fails.
 	_ = st.Close()
 
-	resp, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	resp, err := c.PostForm(ts.URL+"/clients/storedown/rotate", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -334,7 +333,7 @@ func TestRotateClientInvalidatesOldToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash token: %v", err)
 	}
-	id, err := st.CreateClient(ctx, model.Client{
+	_, err = st.CreateClient(ctx, model.Client{
 		Name: "tok-test", Mode: model.ModeRsync, RetentionDays: 7,
 		SSHPubKey: "ssh-ed25519 AAAA tok-test", TokenHash: hash, Enabled: true,
 	})
@@ -356,7 +355,7 @@ func TestRotateClientInvalidatesOldToken(t *testing.T) {
 
 	// Rotate via the admin UI.
 	c := loggedInClient(t, st, ts)
-	resp2, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/rotate", url.Values{"confirm": {"1"}})
+	resp2, err := c.PostForm(ts.URL+"/clients/tok-test/rotate", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
@@ -393,7 +392,7 @@ func TestDeleteClientFlow(t *testing.T) {
 	c := loggedInClient(t, st, ts)
 
 	// Confirm required.
-	r, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/delete", url.Values{})
+	r, err := c.PostForm(ts.URL+"/clients/bye/delete", url.Values{})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -403,7 +402,7 @@ func TestDeleteClientFlow(t *testing.T) {
 	}
 
 	// Happy path: delete with confirmation → redirect to dashboard.
-	r2, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/delete", url.Values{"confirm": {"1"}})
+	r2, err := c.PostForm(ts.URL+"/clients/bye/delete", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -428,7 +427,7 @@ func TestDeleteClientFlow(t *testing.T) {
 func TestDeleteClientUnknown(t *testing.T) {
 	st, ts, _ := ingestStack(t)
 	c := loggedInClient(t, st, ts)
-	r, err := c.PostForm(ts.URL+"/clients/99999/delete", url.Values{"confirm": {"1"}})
+	r, err := c.PostForm(ts.URL+"/clients/nonexistent/delete", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -441,7 +440,7 @@ func TestDeleteClientUnknown(t *testing.T) {
 func TestDeleteClientRequiresAuth(t *testing.T) {
 	_, ts, _ := ingestStack(t)
 	c := noRedirectClient()
-	r, err := c.PostForm(ts.URL+"/clients/1/delete", url.Values{"confirm": {"1"}})
+	r, err := c.PostForm(ts.URL+"/clients/nonexistent/delete", url.Values{"confirm": {"1"}})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -451,4 +450,3 @@ func TestDeleteClientRequiresAuth(t *testing.T) {
 	}
 }
 
-func itoa(n int64) string { return strconv.FormatInt(n, 10) }

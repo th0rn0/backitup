@@ -41,7 +41,7 @@ type Skipped struct {
 }
 
 // Render builds the authorized_keys body for all ENABLED clients with a key,
-// confining each to baseDir/<id>. Invalid entries are skipped and returned.
+// confining each to baseDir/<slug>. Invalid entries are skipped and returned.
 func Render(clients []model.Client, baseDir string) (content string, skipped []Skipped) {
 	var b strings.Builder
 	b.WriteString(Header)
@@ -57,7 +57,7 @@ func Render(clients []model.Client, baseDir string) (content string, skipped []S
 			skipped = append(skipped, Skipped{ClientID: c.ID, Reason: reason})
 			continue
 		}
-		cmd, ok := forcedCommand(c.Mode, baseDir, c.ID)
+		cmd, ok := forcedCommand(c.Mode, baseDir, model.Slug(c.Name))
 		if !ok {
 			skipped = append(skipped, Skipped{ClientID: c.ID, Reason: "unknown mode " + string(c.Mode)})
 			continue
@@ -69,8 +69,8 @@ func Render(clients []model.Client, baseDir string) (content string, skipped []S
 	return b.String(), skipped
 }
 
-func forcedCommand(m model.Mode, baseDir string, id int64) (string, bool) {
-	dir := filepath.Join(baseDir, fmt.Sprintf("%d", id))
+func forcedCommand(m model.Mode, baseDir, slug string) (string, bool) {
+	dir := filepath.Join(baseDir, slug)
 	switch m {
 	case model.ModeRsync:
 		// rrsync confines reads+writes to dir (needed for --link-dest + latest).

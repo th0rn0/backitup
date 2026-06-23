@@ -107,6 +107,21 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	return out, rows.Err()
 }
 
+// GetClientBySlug returns the client whose name's slug matches, or (nil, nil)
+// if none found. Fleet sizes are small so a linear scan over ListClients is fine.
+func (s *Store) GetClientBySlug(ctx context.Context, slug string) (*model.Client, error) {
+	clients, err := s.ListClients(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range clients {
+		if model.Slug(c.Name) == slug {
+			return &c, nil
+		}
+	}
+	return nil, nil
+}
+
 // GetClient returns one client by ID, or (nil, nil) if not found.
 func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) {
 	row := s.db.QueryRowContext(ctx, `
