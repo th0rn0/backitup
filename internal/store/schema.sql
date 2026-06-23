@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS clients (
     token_hash              TEXT    NOT NULL DEFAULT '',     -- argon2id of bearer token (D4)
     enabled                 INTEGER NOT NULL DEFAULT 1,
     created_at              TEXT    NOT NULL,
-    version                 INTEGER NOT NULL DEFAULT 1  -- CAS guard for credential rotation
+    version                 INTEGER NOT NULL DEFAULT 1,  -- CAS guard for credential rotation
+    skip_symlinks           INTEGER NOT NULL DEFAULT 0   -- omit symlinks from backup
 );
 
 CREATE TABLE IF NOT EXISTS runs (

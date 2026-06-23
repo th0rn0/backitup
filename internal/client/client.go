@@ -21,8 +21,9 @@ type Config struct {
 	KnownHosts string     // known_hosts path for host-key verification
 	CABundle   string     // optional CA cert file for the control channel (self-signed)
 	Source     string     // read-only source mount
-	Mode       model.Mode // fallback; the server's config is authoritative
-	Insecure   bool       // skip host-key / TLS verification (dev/test only)
+	Mode         model.Mode // fallback; the server's config is authoritative
+	Insecure     bool       // skip host-key / TLS verification (dev/test only)
+	SkipSymlinks bool       // local override: omit symlinks even if server didn't set it
 }
 
 // Validate checks a Config before a run. It does not touch the network.

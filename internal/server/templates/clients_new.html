@@ -51,6 +51,12 @@
         <label for="offsite_remote">Offsite remote (rclone, blank = none)</label>
         <input id="offsite_remote" name="offsite_remote" placeholder="s3">
 
+        <label style="margin-top:18px;display:block">
+          <input type="checkbox" name="skip_symlinks" value="1">
+          Skip symlinks — exclude symbolic links from the backup
+          <span style="color:var(--text-dim);font-weight:400">(also settable per-run with <code>BACKITUP_SKIP_SYMLINKS=1</code>)</span>
+        </label>
+
         <label style="margin-top:18px;display:block">API scheme <span style="color:var(--text-dim);font-weight:400">(for the generated docker run command)</span></label>
         <div class="radio-group">
           <label><input type="radio" name="api_scheme" value="http" checked> http — LAN / behind a TLS proxy</label>

@@ -56,7 +56,7 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 		return mode.BackupResult{}, fmt.Errorf("start remote: %w", err)
 	}
 
-	files, written, archiveErr := archiveutil.TarGz(ctx, stdin, o.SourceDir, o.Excludes)
+	files, written, archiveErr := archiveutil.TarGz(ctx, stdin, o.SourceDir, o.Excludes, o.SkipSymlinks)
 	// Always close stdin so the remote sees EOF, even on error.
 	_ = stdin.Close()
 	waitErr := sess.Wait()

@@ -48,10 +48,13 @@ func Open(dsn string) (*Store, error) {
 	// CREATE TABLE IF NOT EXISTS already adds it for new databases; this handles
 	// upgrades. SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS, so we ignore
 	// the "duplicate column name" error that fires when the column already exists.
-	if _, err := db.Exec(`ALTER TABLE clients ADD COLUMN version INTEGER NOT NULL DEFAULT 1`); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
+	for _, migration := range []string{
+		`ALTER TABLE clients ADD COLUMN version       INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE clients ADD COLUMN skip_symlinks INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
-			return nil, fmt.Errorf("migrate version column: %w", err)
+			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
 	return &Store{db: db}, nil
@@ -70,11 +73,12 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO clients (name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote,
-			ssh_pubkey, token_hash, enabled, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			ssh_pubkey, token_hash, enabled, created_at, skip_symlinks)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Name, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
 		c.OffsiteRetentionDays, c.ExpectedIntervalSecs, c.OffsiteRemote,
-		c.SSHPubKey, c.TokenHash, b2i(c.Enabled), time.Now().UTC().Format(rfc3339))
+		c.SSHPubKey, c.TokenHash, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
+		b2i(c.SkipSymlinks))
 	if err != nil {
 		return 0, fmt.Errorf("insert client: %w", err)
 	}
@@ -86,7 +90,7 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote,
-			ssh_pubkey, token_hash, enabled, created_at, version
+			ssh_pubkey, token_hash, enabled, created_at, version, skip_symlinks
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -108,7 +112,7 @@ func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote,
-			ssh_pubkey, token_hash, enabled, created_at, version
+			ssh_pubkey, token_hash, enabled, created_at, version, skip_symlinks
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -317,14 +321,15 @@ type scanner interface{ Scan(...any) error }
 func scanClient(sc scanner) (model.Client, error) {
 	var c model.Client
 	var mode, excludes, createdAt string
-	var enabled int
+	var enabled, skipSymlinks int
 	if err := sc.Scan(&c.ID, &c.Name, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.OffsiteRetentionDays, &c.ExpectedIntervalSecs, &c.OffsiteRemote,
-		&c.SSHPubKey, &c.TokenHash, &enabled, &createdAt, &c.Version); err != nil {
+		&c.SSHPubKey, &c.TokenHash, &enabled, &createdAt, &c.Version, &skipSymlinks); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)
 	c.Enabled = enabled != 0
+	c.SkipSymlinks = skipSymlinks != 0
 	if excludes != "" {
 		_ = json.Unmarshal([]byte(excludes), &c.Excludes)
 	}

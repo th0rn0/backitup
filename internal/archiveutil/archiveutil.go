@@ -18,8 +18,9 @@ import (
 // TarGz writes a gzip-compressed tar of srcDir (contents, not the root dir) to w,
 // returning the regular-file count and total uncompressed bytes. Entries matching
 // an exclude glob (by full relative path or base name) are skipped. srcDir is
-// only ever READ.
-func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string) (files, written int64, err error) {
+// only ever READ. Special files (sockets, devices, FIFOs) are always skipped;
+// symlinks are skipped when skipSymlinks is true.
+func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string, skipSymlinks bool) (files, written int64, err error) {
 	gw := gzip.NewWriter(w)
 	tw := tar.NewWriter(gw)
 
@@ -48,7 +49,11 @@ func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string) (
 			return err
 		}
 		// Skip file types that tar cannot represent: sockets, devices, FIFOs.
-		if m := info.Mode(); m&(os.ModeSocket|os.ModeDevice|os.ModeNamedPipe|os.ModeIrregular) != 0 {
+		m := info.Mode()
+		if m&(os.ModeSocket|os.ModeDevice|os.ModeNamedPipe|os.ModeIrregular) != 0 {
+			return nil
+		}
+		if skipSymlinks && m&os.ModeSymlink != 0 {
 			return nil
 		}
 		var link string

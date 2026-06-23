@@ -78,6 +78,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		"mode":           cl.Mode,
 		"excludes":       excludes,
 		"retention_days": cl.RetentionDays,
+		"skip_symlinks":  cl.SkipSymlinks,
 	})
 }
 

@@ -50,6 +50,9 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	target := fmt.Sprintf("%s@%s:snapshots/%s/", o.SSHUser, host, snap)
 
 	args := []string{"-a", "--delete", "--stats", "--link-dest=/snapshots/latest"}
+	if o.SkipSymlinks {
+		args = append(args, "--no-links")
+	}
 	for _, ex := range o.Excludes {
 		args = append(args, "--exclude="+ex)
 	}

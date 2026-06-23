@@ -56,6 +56,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		OffsiteRetentionDays: atoiDefault(r.PostFormValue("offsite_retention_days"), 90),
 		ExpectedIntervalSecs: atoiDefault(r.PostFormValue("expected_interval_secs"), 0),
 		OffsiteRemote:        r.PostFormValue("offsite_remote"),
+		SkipSymlinks:         r.PostFormValue("skip_symlinks") == "1",
 		SSHPubKey:            pubLine,
 		TokenHash:            tokenHash,
 		Enabled:              true,

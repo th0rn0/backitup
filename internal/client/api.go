@@ -53,6 +53,7 @@ type ConfigResp struct {
 	Mode          string   `json:"mode"`
 	Excludes      []string `json:"excludes"`
 	RetentionDays int      `json:"retention_days"`
+	SkipSymlinks  bool     `json:"skip_symlinks"`
 }
 
 // FetchConfig retrieves this client's config from the server.

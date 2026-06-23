@@ -56,7 +56,8 @@ type Client struct {
 	SourceLabel string // descriptive only; the real path lives in the host's docker run
 
 	// Behaviour (server-owned; D1). Returned to the client via GET /api/v1/config.
-	Excludes []string // glob excludes (rsync --exclude / tar --exclude)
+	Excludes     []string // glob excludes (rsync --exclude / tar --exclude)
+	SkipSymlinks bool     // omit symlinks from the backup (BACKITUP_SKIP_SYMLINKS)
 
 	// Retention (D7/D8). Hot and offsite are INDEPENDENT horizons.
 	RetentionDays        int // hot store: prune snapshots/archives older than this

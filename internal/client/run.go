@@ -47,13 +47,14 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 	}
 
 	res, backupErr := cm.Backup(ctx, mode.BackupOpts{
-		SourceDir:  cfg.Source,
-		Excludes:   scfg.Excludes,
-		SSHServer:  cfg.SSHServer,
-		SSHUser:    cfg.SSHUser,
-		SSHKey:     cfg.SSHKey,
-		KnownHosts: cfg.KnownHosts,
-		Insecure:   cfg.Insecure,
+		SourceDir:    cfg.Source,
+		Excludes:     scfg.Excludes,
+		SkipSymlinks: scfg.SkipSymlinks || cfg.SkipSymlinks,
+		SSHServer:    cfg.SSHServer,
+		SSHUser:      cfg.SSHUser,
+		SSHKey:       cfg.SSHKey,
+		KnownHosts:   cfg.KnownHosts,
+		Insecure:     cfg.Insecure,
 	})
 
 	sreq := buildStatus(res, backupErr)
