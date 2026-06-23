@@ -315,6 +315,7 @@ func (s *Server) apiBase(apiScheme string) string {
 func (s *Server) dockerCmds(token, apiBase string) (known, insecure string) {
 	base := []string{
 		"docker run --rm \\",
+		"  --user $(id -u):$(id -g) \\",
 		"  --mount type=bind,src=/PATH/TO/BACKUP,dst=/source,readonly \\",
 		"  -v /PATH/TO/SECRETS:/secrets:ro \\",
 		fmt.Sprintf("  -e BACKITUP_API=%s \\", apiBase),

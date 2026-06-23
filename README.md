@@ -251,11 +251,15 @@ and the exact cron line for each client. The shape of that line:
 ```sh
 # Back up /home/me/documents every night at 02:30 (tar.gz mode).
 30 2 * * *  docker run --rm \
+  --user $(id -u):$(id -g) \
   --mount type=bind,src=/home/me/documents,dst=/source,readonly \
   -v /etc/backitup/laptop-docs:/secrets:ro \
+  -e BACKITUP_API=https://backup.example.com:8080 \
   -e BACKITUP_SERVER=backup.example.com:2222 \
-  -e BACKITUP_TOKEN_FILE=/secrets/token \
-  th0rn0/backitup-client:dev
+  -e BACKITUP_TOKEN=... \
+  -e BACKITUP_SSH_KEY=/secrets/id \
+  -e BACKITUP_KNOWN_HOSTS=/secrets/known_hosts \
+  th0rn0/backitup-client:latest
 ```
 
 Key points:
