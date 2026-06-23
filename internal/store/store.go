@@ -294,6 +294,54 @@ func (s *Store) DeleteClient(ctx context.Context, id int64) error {
 	return nil
 }
 
+// ListRuns returns up to limit runs for a client, newest first.
+func (s *Store) ListRuns(ctx context.Context, clientID int64, limit int) ([]model.Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, client_id, started_at, finished_at, status, bytes, files, snapshot_id, log_tail
+		FROM runs WHERE client_id = ? ORDER BY started_at DESC LIMIT ?`, clientID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetRun returns one run by ID, or (nil, nil) if not found.
+func (s *Store) GetRun(ctx context.Context, id int64) (*model.Run, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, client_id, started_at, finished_at, status, bytes, files, snapshot_id, log_tail
+		FROM runs WHERE id = ?`, id)
+	r, err := scanRun(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// PruneRunLogs clears log_tail from runs finished before olderThan, preserving
+// all other run metadata (status, bytes, files, timestamps).
+func (s *Store) PruneRunLogs(ctx context.Context, olderThan time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE runs SET log_tail = '' WHERE log_tail != '' AND finished_at < ?`,
+		olderThan.UTC().Format(rfc3339))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // PruneRuns deletes run records older than keepDays for a client (0 = keep all).
 func (s *Store) PruneRuns(ctx context.Context, clientID int64, keepDays int) (int64, error) {
 	if keepDays <= 0 {

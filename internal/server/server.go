@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"embed"
+	"fmt"
 	"html/template"
 	"net/http"
 	"time"
@@ -43,10 +44,39 @@ type Server struct {
 // New returns a Server backed by the given store. secure marks session cookies
 // Secure (use true behind TLS).
 func New(st *store.Store, secure bool) *Server {
+	funcs := template.FuncMap{
+		"humanDuration": func(from, to time.Time) string {
+			d := to.Sub(from).Round(time.Second)
+			if d < 0 {
+				return "—"
+			}
+			if d < time.Minute {
+				return fmt.Sprintf("%ds", int(d.Seconds()))
+			}
+			m := int(d.Minutes())
+			s := int(d.Seconds()) % 60
+			if s == 0 {
+				return fmt.Sprintf("%dm", m)
+			}
+			return fmt.Sprintf("%dm %ds", m, s)
+		},
+		"humanBytes": func(n int64) string {
+			const unit = 1024
+			if n < unit {
+				return fmt.Sprintf("%d B", n)
+			}
+			div, exp := int64(unit), 0
+			for v := n / unit; v >= unit; v /= unit {
+				div *= unit
+				exp++
+			}
+			return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+		},
+	}
 	return &Server{
 		st:            st,
 		sessions:      auth.NewSessionStore(12 * time.Hour),
-		tmpl:          template.Must(template.ParseFS(templateFS, "templates/*.html")),
+		tmpl:          template.Must(template.New("").Funcs(funcs).ParseFS(templateFS, "templates/*.html")),
 		limiter:       newLoginLimiter(),
 		secure:        secure,
 		authKeysPath:  "/srv/authkeys/authorized_keys",
@@ -92,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /clients/new", s.requireAdmin(s.getNewClient))
 	mux.HandleFunc("POST /clients", s.requireAdmin(s.postClients))
 	mux.HandleFunc("GET /clients/{id}", s.requireAdmin(s.getClient))
+	mux.HandleFunc("GET /clients/{id}/runs/{runID}", s.requireAdmin(s.getRunLog))
 	mux.HandleFunc("POST /clients/{id}/rotate", s.requireAdmin(s.postRotateClient))
 	mux.HandleFunc("POST /clients/{id}/delete", s.requireAdmin(s.postDeleteClient))
 

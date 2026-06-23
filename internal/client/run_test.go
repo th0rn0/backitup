@@ -28,9 +28,7 @@ func TestBuildStatusFailed(t *testing.T) {
 	if s.Status != string(model.StatusFailed) {
 		t.Fatalf("status = %q, want failed", s.Status)
 	}
-	if s.LogTail != "boom" {
-		t.Fatalf("log tail = %q, want boom", s.LogTail)
-	}
+	// LogTail is set by Run (from the RunLogger buffer), not by buildStatus.
 }
 
 // TestRunOverlap exercises the held-lock path: Run should report "overlap" and

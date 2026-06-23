@@ -111,7 +111,7 @@ type Admin struct {
 	CreatedAt    time.Time
 }
 
-const maxLogTail = 4 * 1024
+const maxLogTail = 64 * 1024
 
 // CapLogTail trims a log to the last maxLogTail bytes (DD4 / eng review).
 func CapLogTail(s string) string {

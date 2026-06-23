@@ -26,6 +26,9 @@ import (
 // DefaultRunsKeepDays bounds the runs table (D7).
 const DefaultRunsKeepDays = 90
 
+// DefaultLogRetentionDays is how long log_tail is kept before being cleared.
+const DefaultLogRetentionDays = 7
+
 // Offsite is the cold-storage backend (rclone crypt in production). objectName
 // is the path within the remote, e.g. "client-3/20260618T....tar.gz".
 type Offsite interface {
@@ -35,11 +38,12 @@ type Offsite interface {
 
 // Deps are the worker's dependencies. Offsite nil disables cold tiering.
 type Deps struct {
-	Store         *store.Store
-	Offsite       Offsite
-	BackupBaseDir string
-	RunsKeepDays  int // 0 -> DefaultRunsKeepDays
-	Now           func() time.Time
+	Store            *store.Store
+	Offsite          Offsite
+	BackupBaseDir    string
+	RunsKeepDays     int // 0 -> DefaultRunsKeepDays
+	LogRetentionDays int // 0 -> DefaultLogRetentionDays; how long log_tail is kept
+	Now              func() time.Time
 }
 
 func (d Deps) now() time.Time {
@@ -68,6 +72,22 @@ func RunOnce(ctx context.Context, d Deps) error {
 			}
 		}
 	}
+
+	// Prune run logs globally (not per-client) on each tick.
+	logDays := d.LogRetentionDays
+	if logDays == 0 {
+		logDays = DefaultLogRetentionDays
+	}
+	cutoff := d.now().AddDate(0, 0, -logDays)
+	if n, err := d.Store.PruneRunLogs(ctx, cutoff); err != nil {
+		log.Printf("lifecycle: prune run logs: %v", err)
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else if n > 0 {
+		log.Printf("lifecycle: pruned logs from %d runs older than %d days", n, logDays)
+	}
+
 	return firstErr
 }
 

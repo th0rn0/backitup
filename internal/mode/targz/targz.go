@@ -31,8 +31,10 @@ func init() { mode.RegisterClient(Mode{}) }
 
 // Backup streams a tar.gz of o.SourceDir to the server over SSH.
 func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, error) {
+	logger := o.Log()
 	start := time.Now().UTC()
 
+	logger.Printf("connecting to %s", o.SSHServer)
 	conn, err := dial(o)
 	if err != nil {
 		return mode.BackupResult{}, err
@@ -56,6 +58,7 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 		return mode.BackupResult{}, fmt.Errorf("start remote: %w", err)
 	}
 
+	logger.Printf("archiving %s", o.SourceDir)
 	files, written, archiveErr := archiveutil.TarGz(ctx, stdin, o.SourceDir, o.Excludes, o.SkipSymlinks)
 	// Always close stdin so the remote sees EOF, even on error.
 	_ = stdin.Close()
@@ -67,6 +70,7 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	if waitErr != nil {
 		return mode.BackupResult{}, fmt.Errorf("remote upload failed: %w: %s", waitErr, remoteErr.String())
 	}
+	logger.Printf("archived %d files, %s", files, mode.HumanBytes(written))
 	return mode.BackupResult{
 		Bytes:      written,
 		Files:      files,

@@ -26,14 +26,30 @@
         </tbody>
       </table>
 
-      <h2 style="margin-top:24px">Last run</h2>
-      {{if .HasRun}}
+      <h2 style="margin-top:24px">Run history</h2>
+      {{if .Runs}}
       <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Files</th>
+            <th>Size</th>
+            <th></th>
+          </tr>
+        </thead>
         <tbody>
-          <tr><td>Status</td><td>{{.Latest.Status}}</td></tr>
-          <tr><td>Snapshot</td><td class="mono">{{.Latest.SnapshotID}}</td></tr>
-          <tr><td>Bytes</td><td class="mono">{{.Latest.Bytes}}</td></tr>
-          <tr><td>Files</td><td class="mono">{{.Latest.Files}}</td></tr>
+          {{range .Runs}}
+          <tr>
+            <td><span class="status {{.Status}}">{{.Status}}</span></td>
+            <td class="mono">{{.StartedAt.Format "2006-01-02 15:04:05"}}</td>
+            <td class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
+            <td class="mono">{{.Files}}</td>
+            <td class="mono">{{humanBytes .Bytes}}</td>
+            <td>{{if .LogTail}}<a href="/clients/{{$.Client.ID}}/runs/{{.ID}}">Log</a>{{end}}</td>
+          </tr>
+          {{end}}
         </tbody>
       </table>
       {{else}}
