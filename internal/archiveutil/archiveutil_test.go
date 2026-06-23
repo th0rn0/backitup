@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,34 @@ func TestTarGz(t *testing.T) {
 		if strings.HasPrefix(name, "node_modules") {
 			t.Errorf("node_modules leaked: %s", name)
 		}
+	}
+}
+
+func TestTarGzSkipsSpecialFiles(t *testing.T) {
+	src := t.TempDir()
+	write(t, filepath.Join(src, "normal.txt"), "keep")
+	if err := os.MkdirAll(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Create a Unix socket inside the source tree.
+	sockPath := filepath.Join(src, "sub", "app.sock")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", sockPath)
+	if err != nil {
+		t.Skipf("cannot create unix socket: %v", err)
+	}
+	ln.Close()
+
+	var buf bytes.Buffer
+	files, _, archErr := TarGz(context.Background(), &buf, src, nil)
+	if archErr != nil {
+		t.Fatalf("TarGz with socket: %v", archErr)
+	}
+	if files != 1 {
+		t.Fatalf("files = %d, want 1 (socket must be skipped)", files)
+	}
+	got := readArchive(t, &buf)
+	if _, ok := got["sub/app.sock"]; ok {
+		t.Error("socket leaked into archive")
 	}
 }
 

@@ -47,6 +47,10 @@ func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string) (
 		if err != nil {
 			return err
 		}
+		// Skip file types that tar cannot represent: sockets, devices, FIFOs.
+		if m := info.Mode(); m&(os.ModeSocket|os.ModeDevice|os.ModeNamedPipe|os.ModeIrregular) != 0 {
+			return nil
+		}
 		var link string
 		if info.Mode()&os.ModeSymlink != 0 {
 			if link, err = os.Readlink(p); err != nil {
