@@ -186,6 +186,25 @@ Then use host paths in your compose file instead of named volumes:
       - /servdata/backitup/sshd-hostkeys:/srv/hostkeys:ro
 ```
 
+#### Directory permissions
+
+Both containers run as uid **10001** (`backitup`). Set ownership and permissions before starting the stack:
+
+```sh
+chown -R 10001:10001 /servdata/backitup/{app-data,backups,authkeys,sshd-hostkeys}
+chmod 755 /servdata/backitup/app-data
+chmod 755 /servdata/backitup/backups
+chmod 755 /servdata/backitup/authkeys
+chmod 700 /servdata/backitup/sshd-hostkeys   # contains the private SSH host key
+```
+
+| Directory       | Mode  | Why                                                              |
+|-----------------|-------|------------------------------------------------------------------|
+| `app-data`      | `755` | SQLite database — only the app writes it                         |
+| `backups`       | `755` | Both containers write here; `755` lets you browse from the host  |
+| `authkeys`      | `755` | App writes, sshd reads (`:ro`); contains only public keys        |
+| `sshd-hostkeys` | `700` | Contains the private SSH host key — no other process needs it    |
+
 > **Symptom if you forget:** the app starts fine and you can create clients, but
 > `/srv/authkeys/authorized_keys` is never written, so the sshd container has no
 > authorized keys and every client SSH connection fails with
