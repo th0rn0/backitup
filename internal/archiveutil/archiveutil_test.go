@@ -64,11 +64,9 @@ func TestTarGzSkipSymlinks(t *testing.T) {
 	if files != 1 {
 		t.Fatalf("files=%d want 1 (symlink doesn't count as a regular file)", files)
 	}
-	got := readArchive(t, &buf)
-	if _, ok := got["link.txt"]; !ok {
-		// symlinks show as TypeSymlink not TypeReg, so readArchive won't include them
-		// — that's fine, just verify no error and file count is right.
-	}
+	// symlinks show as TypeSymlink not TypeReg so readArchive won't include them;
+	// just verify no error and file count is right.
+	_ = readArchive(t, &buf)
 
 	// With skipSymlinks=true, symlink is omitted entirely.
 	buf.Reset()
@@ -97,7 +95,9 @@ func TestTarGzSkipsSpecialFiles(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot create unix socket: %v", err)
 	}
-	ln.Close()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	var buf bytes.Buffer
 	files, _, archErr := TarGz(context.Background(), &buf, src, nil, false)
