@@ -24,6 +24,7 @@ type Config struct {
 	Mode         model.Mode // fallback; the server's config is authoritative
 	Insecure     bool       // skip host-key / TLS verification (dev/test only)
 	SkipSymlinks bool       // local override: omit symlinks even if server didn't set it
+	Quiet        bool       // suppress progress output to stderr (BACKITUP_QUIET=1)
 }
 
 // Validate checks a Config before a run. It does not touch the network.

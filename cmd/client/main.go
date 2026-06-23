@@ -34,6 +34,7 @@ func main() {
 		Mode:         model.Mode(client.Env("BACKITUP_MODE", "targz")),
 		Insecure:     client.Env("BACKITUP_INSECURE", "") == "1",
 		SkipSymlinks: client.Env("BACKITUP_SKIP_SYMLINKS", "") == "1",
+		Quiet:        client.Env("BACKITUP_QUIET", "") == "1",
 	}
 	flag.StringVar(&cfg.APIBase, "api", cfg.APIBase, "control-channel base URL (https://host:8080)")
 	flag.StringVar(&cfg.Token, "token", cfg.Token, "bearer token")
