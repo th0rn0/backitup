@@ -161,6 +161,37 @@ docker compose down          # stop
 docker compose down -v       # stop and DELETE all volumes (destroys backups!)
 ```
 
+### Named volumes vs bind mounts
+
+The example above uses **Docker named volumes** (`app-data:`, `backups:`, etc.). Named volumes are managed by Docker: it creates them with the right ownership automatically based on the image's built-in `chown`. This is the easiest setup and requires no extra steps.
+
+If you prefer **bind mounts** (host paths) so you control exactly where data lives on disk, you must pre-create the directories and set ownership to uid **10001** — the user both containers run as — before starting the stack. Docker creates missing host directories as root, and the app will silently fail to write `authorized_keys` (leaving SSH connections broken) or fail to open its database.
+
+```sh
+# Adjust the base path to wherever you want data to live.
+mkdir -p /servdata/backitup/{app-data,backups,authkeys,sshd-hostkeys}
+chown -R 10001:10001 /servdata/backitup/app-data \
+                     /servdata/backitup/backups \
+                     /servdata/backitup/authkeys \
+                     /servdata/backitup/sshd-hostkeys
+```
+
+Then use host paths in your compose file instead of named volumes:
+
+```yaml
+    volumes:
+      - /servdata/backitup/app-data:/data
+      - /servdata/backitup/backups:/srv/backups
+      - /servdata/backitup/authkeys:/srv/authkeys
+      - /servdata/backitup/sshd-hostkeys:/srv/hostkeys:ro
+```
+
+> **Symptom if you forget:** the app starts fine and you can create clients, but
+> `/srv/authkeys/authorized_keys` is never written, so the sshd container has no
+> authorized keys and every client SSH connection fails with
+> `no supported methods remain`. Fix: run the `chown` above, then restart the stack
+> or rotate any existing client's credentials to trigger a rewrite.
+
 ## Building the images
 
 ```sh
