@@ -45,6 +45,7 @@ func main() {
 		os.Getenv("BACKITUP_AUTHKEYS"),
 		backupDir,
 		os.Getenv("BACKITUP_PUBLIC_HOST"),
+		os.Getenv("BACKITUP_PUBLIC_API"),
 		os.Getenv("BACKITUP_CLIENT_IMAGE"),
 		getenv("BACKITUP_SSH_HOST_KEY", "/srv/hostkeys/ssh_host_ed25519_key.pub"),
 	)
