@@ -108,7 +108,8 @@ services:
     environment:
       BACKITUP_ADMIN_USER: admin
       BACKITUP_ADMIN_PASSWORD: changeme          # required — set before first start
-      BACKITUP_PUBLIC_HOST: your-server:2222     # host:port shown in cron lines
+      BACKITUP_PUBLIC_HOST: your-server:2222     # sshd host:port (BACKITUP_SERVER in docker run)
+      BACKITUP_PUBLIC_API: http://your-server:8080  # control-channel URL (BACKITUP_API in docker run)
       BACKITUP_AUTHKEYS: /srv/authkeys/authorized_keys
       BACKITUP_BACKUP_DIR: /srv/backups
       BACKITUP_SSH_HOST_KEY: /srv/hostkeys/ssh_host_ed25519_key.pub
@@ -229,7 +230,8 @@ Key points:
 | `BACKITUP_TLS_KEY`         | (unset)             | TLS key path                                           |
 | `BACKITUP_AUTHKEYS`        | `/srv/authkeys/authorized_keys` | Path the app rewrites for the sshd container (D4) |
 | `BACKITUP_BACKUP_DIR`      | `/srv/backups`      | Base dir for per-client backup directories             |
-| `BACKITUP_PUBLIC_HOST`     | `your-server:2222`  | Host:port shown in the generated client cron line      |
+| `BACKITUP_PUBLIC_HOST`     | `your-server:2222`  | SSH host:port shown as `BACKITUP_SERVER` in the generated docker run command |
+| `BACKITUP_PUBLIC_API`      | (unset)             | Full control-channel base URL shown as `BACKITUP_API` in generated commands (e.g. `http://10.0.0.1:8080`). If unset a placeholder is shown. |
 | `BACKITUP_CLIENT_IMAGE`    | `th0rn0/backitup-client:latest` | Client image used in the cron line |
 | `BACKITUP_RCLONE_CONFIG`   | `/data/rclone.conf` | rclone config defining the encrypted crypt remote(s)   |
 | `BACKITUP_LIFECYCLE_INTERVAL` | `1h`             | How often the lifecycle worker runs (offsite + prune)  |

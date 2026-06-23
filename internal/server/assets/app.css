@@ -77,6 +77,14 @@ textarea, .mono.secret, input.mono { font-family: var(--mono); font-size: 13px; 
 .login .btn { width: 100%; margin-top: 20px; }
 .error { background: rgba(248,81,73,0.12); border: 1px solid var(--failed); color: var(--failed); padding: 9px 12px; border-radius: 6px; font-size: 14px; margin-bottom: 12px; }
 /* responsive: dashboard table -> stacked status cards (DD7) */
+/* tabs (client-created docker run variants) */
+.tabs { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--border); }
+.tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 14px; font-size: 13px; font-family: var(--sans); color: var(--text-dim); cursor: pointer; margin-bottom: -1px; }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-panel { margin-top: 12px; }
+.radio-group { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 14px; margin-top: 6px; }
+.radio-group label { cursor: pointer; }
+
 @media (max-width: 640px) {
   .app { flex-direction: column; }
   .sidebar { width: auto; border-right: none; border-bottom: 1px solid var(--border); }

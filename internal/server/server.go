@@ -31,10 +31,11 @@ type Server struct {
 	secure   bool // set cookies Secure (true when served over TLS)
 
 	// Ingest config (Lane A): where to write authorized_keys, the per-client
-	// backup base dir, and what to show in the generated cron line.
+	// backup base dir, and what to show in the generated docker run command.
 	authKeysPath   string
 	backupBaseDir  string
-	publicHost     string
+	publicHost     string // sshd host:port shown as BACKITUP_SERVER in docker run
+	publicAPI      string // full control-channel base URL shown as BACKITUP_API (e.g. http://host:8080)
 	clientImage    string
 	sshHostKeyPath string // path to sshd host public key for known_hosts generation
 }
@@ -57,7 +58,7 @@ func New(st *store.Store, secure bool) *Server {
 
 // ConfigureIngest sets the Lane A ingest parameters (called from cmd/server with
 // env values). Empty arguments leave the existing default in place.
-func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, clientImage, sshHostKeyPath string) {
+func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, publicAPI, clientImage, sshHostKeyPath string) {
 	if authKeysPath != "" {
 		s.authKeysPath = authKeysPath
 	}
@@ -66,6 +67,9 @@ func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, client
 	}
 	if publicHost != "" {
 		s.publicHost = publicHost
+	}
+	if publicAPI != "" {
+		s.publicAPI = publicAPI
 	}
 	if clientImage != "" {
 		s.clientImage = clientImage

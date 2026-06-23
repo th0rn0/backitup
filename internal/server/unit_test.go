@@ -34,14 +34,14 @@ func TestConfigureIngest(t *testing.T) {
 	defAuth := s.authKeysPath
 
 	// Empty args preserve defaults.
-	s.ConfigureIngest("", "", "", "", "")
+	s.ConfigureIngest("", "", "", "", "", "")
 	if s.authKeysPath != defAuth {
 		t.Fatalf("empty arg overwrote default: %q", s.authKeysPath)
 	}
 
 	// Non-empty args override.
-	s.ConfigureIngest("/ak", "/b", "host:22", "img", "/hostkey.pub")
-	if s.authKeysPath != "/ak" || s.backupBaseDir != "/b" || s.publicHost != "host:22" || s.clientImage != "img" || s.sshHostKeyPath != "/hostkey.pub" {
+	s.ConfigureIngest("/ak", "/b", "host:22", "http://host:8080", "img", "/hostkey.pub")
+	if s.authKeysPath != "/ak" || s.backupBaseDir != "/b" || s.publicHost != "host:22" || s.publicAPI != "http://host:8080" || s.clientImage != "img" || s.sshHostKeyPath != "/hostkey.pub" {
 		t.Fatalf("ConfigureIngest did not apply: %+v", *s)
 	}
 }

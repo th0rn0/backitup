@@ -71,15 +71,19 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		// The client exists; surface the issue but still show the secrets.
 	}
 
+	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
+	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
-		"Name":         name,
-		"Mode":         string(mode),
-		"PrivateKey":   privPEM,
-		"Token":        token,
-		"Server":       s.publicHost,
-		"CronLine":     s.cronLine(token),
-		"KnownHostsLine": knownHostsLine(s.publicHost, s.sshHostKeyPath),
+		"Name":              name,
+		"Mode":              string(mode),
+		"PrivateKey":        privPEM,
+		"Token":             token,
+		"Server":            s.publicHost,
+		"APIBase":           apiBase,
+		"KnownHostsLine":    knownHostsLine(s.publicHost, s.sshHostKeyPath),
+		"DockerRunKnown":    dockerKnown,
+		"DockerRunInsecure": dockerInsecure,
 	})
 }
 
@@ -170,17 +174,21 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		authKeysFailed = true
 	}
 
+	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
+	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
-		"Name":           c.Name,
-		"Mode":           string(c.Mode),
-		"PrivateKey":     privPEM,
-		"Token":          token,
-		"Server":         s.publicHost,
-		"CronLine":       s.cronLine(token),
-		"KnownHostsLine": knownHostsLine(s.publicHost, s.sshHostKeyPath),
-		"Rotated":        true,
-		"AuthKeysFailed": authKeysFailed,
+		"Name":              c.Name,
+		"Mode":              string(c.Mode),
+		"PrivateKey":        privPEM,
+		"Token":             token,
+		"Server":            s.publicHost,
+		"APIBase":           apiBase,
+		"KnownHostsLine":    knownHostsLine(s.publicHost, s.sshHostKeyPath),
+		"DockerRunKnown":    dockerKnown,
+		"DockerRunInsecure": dockerInsecure,
+		"Rotated":           true,
+		"AuthKeysFailed":    authKeysFailed,
 	})
 }
 
@@ -287,12 +295,41 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 	return authkeys.WriteAtomic(s.authKeysPath, content)
 }
 
-func (s *Server) cronLine(token string) string {
-	return fmt.Sprintf("30 2 * * *  docker run --rm \\\n"+
-		"  --mount type=bind,src=/PATH/TO/BACKUP,dst=/source,readonly \\\n"+
-		"  -e BACKITUP_SERVER=%s \\\n"+
-		"  -e BACKITUP_TOKEN=%s \\\n"+
-		"  %s", s.publicHost, token, s.clientImage)
+// apiBase returns the control-channel base URL for use in generated docker
+// commands. If BACKITUP_PUBLIC_API is set it is used as-is; otherwise the
+// scheme is derived from apiScheme ("http"/"https") and a placeholder host
+// reminds the admin to configure BACKITUP_PUBLIC_API.
+func (s *Server) apiBase(apiScheme string) string {
+	if s.publicAPI != "" {
+		return s.publicAPI
+	}
+	if apiScheme != "https" {
+		apiScheme = "http"
+	}
+	return apiScheme + "://YOUR-SERVER:8080  # set BACKITUP_PUBLIC_API on the server"
+}
+
+// dockerCmds returns two ready-to-run docker commands for a client:
+//   - known: mounts /secrets with BACKITUP_KNOWN_HOSTS (recommended)
+//   - insecure: adds BACKITUP_INSECURE=1, no host-key verification
+func (s *Server) dockerCmds(token, apiBase string) (known, insecure string) {
+	base := []string{
+		"docker run --rm \\",
+		"  --mount type=bind,src=/PATH/TO/BACKUP,dst=/source,readonly \\",
+		"  -v /PATH/TO/SECRETS:/secrets:ro \\",
+		fmt.Sprintf("  -e BACKITUP_API=%s \\", apiBase),
+		fmt.Sprintf("  -e BACKITUP_SERVER=%s \\", s.publicHost),
+		fmt.Sprintf("  -e BACKITUP_TOKEN=%s \\", token),
+		"  -e BACKITUP_SSH_KEY=/secrets/id \\",
+	}
+	join := func(extra ...string) string {
+		parts := append(append([]string{}, base...), extra...)
+		parts = append(parts, "  "+s.clientImage)
+		return strings.Join(parts, "\n")
+	}
+	known = join("  -e BACKITUP_KNOWN_HOSTS=/secrets/known_hosts \\")
+	insecure = join("  -e BACKITUP_INSECURE=1 \\")
+	return
 }
 
 func atoiDefault(s string, def int) int {

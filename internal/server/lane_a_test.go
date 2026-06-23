@@ -57,8 +57,10 @@ func TestAddClientFlow(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
 	for _, want := range []string{
-		"created", "OPENSSH PRIVATE KEY", "Bearer token",
-		"BACKITUP_SERVER=backup.test:2222", "shown", // the "shown once" warning
+		"created", "OPENSSH PRIVATE KEY", "BACKITUP_TOKEN=",
+		"BACKITUP_SERVER=backup.test:2222", "BACKITUP_API=",
+		"BACKITUP_INSECURE=1", "BACKITUP_KNOWN_HOSTS=",
+		"cannot be retrieved later",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("created page missing %q", want)
@@ -203,8 +205,8 @@ func TestRotateClientFlow(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
 	for _, want := range []string{
-		"credentials rotated", "OPENSSH PRIVATE KEY", "Bearer token",
-		"old credentials are now invalid",
+		"credentials rotated", "OPENSSH PRIVATE KEY", "BACKITUP_TOKEN=",
+		"old credentials are now invalid", "BACKITUP_SERVER=",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rotated page missing %q", want)
