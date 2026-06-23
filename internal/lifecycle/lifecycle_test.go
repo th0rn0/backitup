@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -65,7 +64,7 @@ func newClient(t *testing.T, st *store.Store, c model.Client) (int64, string, st
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientDir := filepath.Join(base, strconv.FormatInt(id, 10))
+	clientDir := filepath.Join(base, model.Slug(c.Name))
 	_ = os.MkdirAll(clientDir, 0o755)
 	return id, base, clientDir
 }
@@ -184,7 +183,7 @@ func TestRunOnceOffsiteRetention(t *testing.T) {
 	off := &fakeOffsite{}
 	_ = RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }})
 
-	if len(off.del) != 1 || off.del[0] != objectPath(id, model.ModeTarGz, "stale") {
+	if len(off.del) != 1 || off.del[0] != objectPath(model.Slug("c"), model.ModeTarGz, "stale") {
 		t.Fatalf("expected stale offsite object deleted, got %v", off.del)
 	}
 	objs, _ := st.ListOffsiteObjects(context.Background(), id)

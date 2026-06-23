@@ -23,8 +23,8 @@ func TestRenderPerModeCommands(t *testing.T) {
 	rsyncKey := freshKey(t)
 	targzKey := freshKey(t)
 	clients := []model.Client{
-		{ID: 1, Mode: model.ModeRsync, SSHPubKey: rsyncKey, Enabled: true},
-		{ID: 2, Mode: model.ModeTarGz, SSHPubKey: targzKey, Enabled: true},
+		{ID: 1, Name: "rsync-client", Mode: model.ModeRsync, SSHPubKey: rsyncKey, Enabled: true},
+		{ID: 2, Name: "targz-client", Mode: model.ModeTarGz, SSHPubKey: targzKey, Enabled: true},
 	}
 	content, skipped := Render(clients, "/srv/backups")
 	if len(skipped) != 0 {
@@ -33,25 +33,25 @@ func TestRenderPerModeCommands(t *testing.T) {
 	if !strings.HasPrefix(content, Header) {
 		t.Fatal("missing managed-file header")
 	}
-	if !strings.Contains(content, `restrict,command="rrsync /srv/backups/1" `+rsyncKey) {
+	if !strings.Contains(content, `restrict,command="rrsync /srv/backups/rsync-client" `+rsyncKey) {
 		t.Errorf("rsync line wrong:\n%s", content)
 	}
-	if !strings.Contains(content, `restrict,command="backitup-recv /srv/backups/2" `+targzKey) {
+	if !strings.Contains(content, `restrict,command="backitup-recv /srv/backups/targz-client" `+targzKey) {
 		t.Errorf("targz line wrong:\n%s", content)
 	}
 }
 
 func TestRenderSkipsDisabledAndEmpty(t *testing.T) {
 	clients := []model.Client{
-		{ID: 1, Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: false}, // disabled
-		{ID: 2, Mode: model.ModeTarGz, SSHPubKey: "", Enabled: true},           // no key
-		{ID: 3, Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: true},  // kept
+		{ID: 1, Name: "disabled-client", Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: false}, // disabled
+		{ID: 2, Name: "nokey-client", Mode: model.ModeTarGz, SSHPubKey: "", Enabled: true},              // no key
+		{ID: 3, Name: "kept-client", Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: true},      // kept
 	}
 	content, _ := Render(clients, "/srv/backups")
-	if strings.Contains(content, "/srv/backups/1") || strings.Contains(content, "/srv/backups/2") {
+	if strings.Contains(content, "/srv/backups/disabled-client") || strings.Contains(content, "/srv/backups/nokey-client") {
 		t.Fatalf("disabled/keyless clients must be omitted:\n%s", content)
 	}
-	if !strings.Contains(content, "/srv/backups/3") {
+	if !strings.Contains(content, "/srv/backups/kept-client") {
 		t.Fatalf("enabled client missing:\n%s", content)
 	}
 }
@@ -69,7 +69,7 @@ func TestRenderRejectsInjection(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			clients := []model.Client{{ID: 1, Mode: model.ModeRsync, SSHPubKey: tc.key, Enabled: true}}
+			clients := []model.Client{{ID: 1, Name: "inject", Mode: model.ModeRsync, SSHPubKey: tc.key, Enabled: true}}
 			content, skipped := Render(clients, "/srv/backups")
 			if len(skipped) != 1 || skipped[0].ClientID != 1 {
 				t.Fatalf("expected client 1 skipped, got %+v", skipped)
@@ -88,25 +88,25 @@ func TestRenderRejectsInjection(t *testing.T) {
 func TestRenderResilientToOneBadRow(t *testing.T) {
 	// A poisoned row must not break auth for the good clients (outside-voice).
 	clients := []model.Client{
-		{ID: 1, Mode: model.ModeRsync, SSHPubKey: "garbage", Enabled: true},
-		{ID: 2, Mode: model.ModeTarGz, SSHPubKey: freshKey(t), Enabled: true},
+		{ID: 1, Name: "bad-client", Mode: model.ModeRsync, SSHPubKey: "garbage", Enabled: true},
+		{ID: 2, Name: "good-client", Mode: model.ModeTarGz, SSHPubKey: freshKey(t), Enabled: true},
 	}
 	content, skipped := Render(clients, "/srv/backups")
 	if len(skipped) != 1 {
 		t.Fatalf("expected 1 skip, got %d", len(skipped))
 	}
-	if !strings.Contains(content, "/srv/backups/2") {
+	if !strings.Contains(content, "/srv/backups/good-client") {
 		t.Fatal("good client lost its access because of a bad row")
 	}
 }
 
 func TestRenderSkipsUnknownMode(t *testing.T) {
-	clients := []model.Client{{ID: 1, Mode: "weird", SSHPubKey: freshKey(t), Enabled: true}}
+	clients := []model.Client{{ID: 1, Name: "weird-mode", Mode: "weird", SSHPubKey: freshKey(t), Enabled: true}}
 	content, skipped := Render(clients, "/srv/backups")
 	if len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "unknown mode") {
 		t.Fatalf("expected unknown-mode skip, got %+v", skipped)
 	}
-	if strings.Contains(content, "/srv/backups/1") {
+	if strings.Contains(content, "/srv/backups/weird-mode") {
 		t.Fatalf("unknown-mode client should not be emitted:\n%s", content)
 	}
 }

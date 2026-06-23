@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/archiveutil"
@@ -96,7 +95,7 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
 	}
-	clientDir := filepath.Join(d.BackupBaseDir, strconv.FormatInt(c.ID, 10))
+	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
 
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
@@ -160,7 +159,7 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		if c.Mode == model.ModeRsync {
 			defer os.Remove(obj)
 		}
-		bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(c.ID, c.Mode, s.ID))
+		bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(model.Slug(c.Name), c.Mode, s.ID))
 		if err != nil {
 			return fmt.Errorf("offsite upload %s: %w", s.ID, err)
 		}
@@ -189,7 +188,7 @@ func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
 		if i == 0 || !o.UploadedAt.Before(cutoff) {
 			continue // protect newest; keep anything within the horizon
 		}
-		if err := d.Offsite.Delete(ctx, c.OffsiteRemote, objectPath(c.ID, c.Mode, o.SnapshotID)); err != nil {
+		if err := d.Offsite.Delete(ctx, c.OffsiteRemote, objectPath(model.Slug(c.Name), c.Mode, o.SnapshotID)); err != nil {
 			return fmt.Errorf("offsite delete %s: %w", o.SnapshotID, err)
 		}
 		if err := d.Store.DeleteOffsiteObject(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
@@ -239,10 +238,10 @@ func verifyLatest(ctx context.Context, c model.Client, sm mode.ServerMode, clien
 	}
 }
 
-func objectPath(clientID int64, m model.Mode, snapshotID string) string {
+func objectPath(clientSlug string, m model.Mode, snapshotID string) string {
 	name := snapshotID
 	if m == model.ModeRsync {
 		name = snapshotID + ".tar.gz" // rsync snapshot dir -> one offsite archive
 	}
-	return fmt.Sprintf("client-%d/%s", clientID, name)
+	return clientSlug + "/" + name
 }

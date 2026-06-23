@@ -19,6 +19,7 @@ type summaryCounts struct{ OK, Stale, Failed, Never int }
 type clientRow struct {
 	ID          int64
 	Name        string
+	Slug        string // URL/filesystem-safe identifier derived from Name
 	Mode        string
 	Health      string // css class: ok/stale/failed/never
 	HealthLabel string // "OK" / "Stale" / "Failed" / "Never"
@@ -49,7 +50,7 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 			return dashboardView{}, err
 		}
 		row := clientRow{
-			ID: c.ID, Name: c.Name, Mode: string(c.Mode),
+			ID: c.ID, Name: c.Name, Slug: c.Slug(), Mode: string(c.Mode),
 			Health: string(h), HealthLabel: healthLabel(h), Icon: healthIcon(h),
 			Retention: fmt.Sprintf("%dd", c.RetentionDays),
 			Offsite:   offsiteLabel(c, lastOffsite),
