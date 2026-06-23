@@ -14,7 +14,7 @@ import (
 // control channel, run the mode's backup, and report status back. A held lock
 // is reported as "overlap" and is not an error (fire-and-forget; design doc).
 func Run(ctx context.Context, cfg Config, lockPath string) error {
-	rl := NewRunLogger()
+	rl := NewRunLogger(cfg.Quiet)
 	api, err := NewAPI(cfg.APIBase, cfg.Token, cfg.CABundle, cfg.Insecure)
 	if err != nil {
 		return err

@@ -15,10 +15,16 @@ type RunLogger struct {
 	buf bytes.Buffer
 }
 
-// NewRunLogger returns a logger that writes to both stderr and an internal buffer.
-func NewRunLogger() *RunLogger {
+// NewRunLogger returns a logger that writes to an internal buffer. When quiet
+// is false (the default) it also writes to stderr so progress is visible
+// locally. Set BACKITUP_QUIET=1 to suppress stderr output.
+func NewRunLogger(quiet bool) *RunLogger {
 	rl := &RunLogger{}
-	rl.Logger = log.New(io.MultiWriter(os.Stderr, &rl.buf), "", log.LstdFlags)
+	var out io.Writer = os.Stderr
+	if quiet {
+		out = io.Discard
+	}
+	rl.Logger = log.New(io.MultiWriter(out, &rl.buf), "", log.LstdFlags)
 	return rl
 }
 
