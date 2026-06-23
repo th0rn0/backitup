@@ -88,7 +88,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getClient renders a minimal client detail page (run history comes in Lane D).
+// getClient renders the client detail page with run history.
 func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -106,7 +106,11 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	latest, _ := s.st.LatestRun(ctx, id)
+	runs, _ := s.st.ListRuns(ctx, id, 20)
+	var latest *model.Run
+	if len(runs) > 0 {
+		latest = &runs[0]
+	}
 	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
@@ -114,8 +118,42 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"Health":      string(h),
 		"HealthLabel": healthLabel(h),
 		"Icon":        healthIcon(h),
-		"HasRun":      latest != nil,
-		"Latest":      latest,
+		"Runs":        runs,
+	})
+}
+
+// getRunLog renders the log output for a single run.
+func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
+	clientID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	runID, err := strconv.ParseInt(r.PathValue("runID"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	run, err := s.st.GetRun(ctx, runID)
+	if err != nil {
+		http.Error(w, "failed to load run", http.StatusInternalServerError)
+		return
+	}
+	if run == nil || run.ClientID != clientID {
+		http.NotFound(w, r)
+		return
+	}
+	c, err := s.st.GetClient(ctx, clientID)
+	if err != nil || c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.ExecuteTemplate(w, "run_log.html", map[string]any{
+		"Client": c,
+		"Run":    run,
 	})
 }
 

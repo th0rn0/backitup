@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Back! It! Up! — {{.Client.Name}} run log</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="Primary">
+      <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
+      <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a></div>
+    </nav>
+    <main class="main">
+      <div class="topbar">
+        <h1>{{.Client.Name}} — run log</h1>
+      </div>
+      <table>
+        <tbody>
+          <tr><td>Status</td><td><span class="status {{.Run.Status}}">{{.Run.Status}}</span></td></tr>
+          <tr><td>Started</td><td class="mono">{{.Run.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</td></tr>
+          <tr><td>Duration</td><td class="mono">{{humanDuration .Run.StartedAt .Run.FinishedAt}}</td></tr>
+          <tr><td>Files</td><td class="mono">{{.Run.Files}}</td></tr>
+          <tr><td>Size</td><td class="mono">{{humanBytes .Run.Bytes}}</td></tr>
+          {{if .Run.SnapshotID}}<tr><td>Snapshot</td><td class="mono">{{.Run.SnapshotID}}</td></tr>{{end}}
+        </tbody>
+      </table>
+
+      <h2 style="margin-top:24px">Log output</h2>
+      {{if .Run.LogTail}}
+      <pre class="mono" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:16px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;font-size:13px;line-height:1.5">{{.Run.LogTail}}</pre>
+      {{else}}
+      <p class="summary">No log available — logs are cleared after the retention period.</p>
+      {{end}}
+
+      <p style="margin-top:24px"><a href="/clients/{{.Client.ID}}">&larr; Back to {{.Client.Name}}</a></p>
+    </main>
+  </div>
+</body>
+</html>

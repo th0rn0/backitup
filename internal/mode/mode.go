@@ -14,6 +14,8 @@ package mode
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/model"
@@ -29,12 +31,35 @@ var ErrNotImplemented = errors.New("not implemented")
 type BackupOpts struct {
 	SourceDir    string
 	Excludes     []string
-	SkipSymlinks bool   // omit symlinks from the backup
-	SSHServer    string // host:port of the sshd ingest (data channel)
-	SSHUser      string // ssh login user (the single ingest user, "backitup")
-	SSHKey       string // path to the client's private key
-	KnownHosts   string // path to known_hosts for host-key verification
-	Insecure     bool   // skip host-key verification (dev/test only)
+	SkipSymlinks bool        // omit symlinks from the backup
+	Logger       *log.Logger // nil = use log.Default()
+	SSHServer    string      // host:port of the sshd ingest (data channel)
+	SSHUser      string      // ssh login user (the single ingest user, "backitup")
+	SSHKey       string      // path to the client's private key
+	KnownHosts   string      // path to known_hosts for host-key verification
+	Insecure     bool        // skip host-key verification (dev/test only)
+}
+
+// Logger returns the configured logger, falling back to the default logger.
+func (o BackupOpts) Log() *log.Logger {
+	if o.Logger != nil {
+		return o.Logger
+	}
+	return log.Default()
+}
+
+// HumanBytes formats a byte count as a human-readable string (e.g. "1.2 MB").
+func HumanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // BackupResult is what the client reports back via POST /api/v1/status.

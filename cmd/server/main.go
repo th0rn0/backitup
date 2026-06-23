@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
@@ -54,9 +55,10 @@ func main() {
 	// own schedule (D1/D8/D9). Per-client OffsiteRemote gates whether a client
 	// is tiered; rclone is only invoked for clients that opt in.
 	stopLifecycle := lifecycle.StartWorker(context.Background(), lifecycle.Deps{
-		Store:         st,
-		Offsite:       lifecycle.NewRclone(os.Getenv("BACKITUP_RCLONE_CONFIG")),
-		BackupBaseDir: backupDir,
+		Store:            st,
+		Offsite:          lifecycle.NewRclone(os.Getenv("BACKITUP_RCLONE_CONFIG")),
+		BackupBaseDir:    backupDir,
+		LogRetentionDays: atoiEnv("BACKITUP_LOG_RETENTION_DAYS", 0),
 	}, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "1h")))
 	defer stopLifecycle()
 	if secure {
@@ -110,4 +112,16 @@ func parseInterval(s string) time.Duration {
 		return time.Hour
 	}
 	return d
+}
+
+func atoiEnv(k string, def int) int {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
 }

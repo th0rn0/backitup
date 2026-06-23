@@ -38,6 +38,7 @@ func init() { mode.RegisterClient(Mode{}) }
 // Backup syncs SourceDir into a new timestamped snapshot dir on the server,
 // hardlinking unchanged files against the previous snapshot, then flips latest.
 func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, error) {
+	logger := o.Log()
 	start := time.Now().UTC()
 	if _, err := exec.LookPath("rsync"); err != nil {
 		return mode.BackupResult{}, fmt.Errorf("rsync not found: %w", err)
@@ -58,6 +59,7 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	}
 	args = append(args, "-e", sshArgs, ensureTrailingSlash(o.SourceDir), target)
 
+	logger.Printf("syncing %s → %s", o.SourceDir, target)
 	stdout, err := runRsync(ctx, args)
 	if err != nil {
 		return mode.BackupResult{}, err
@@ -68,6 +70,7 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	}
 
 	files, written := parseStats(stdout)
+	logger.Printf("synced %d files, %s", files, mode.HumanBytes(written))
 	return mode.BackupResult{
 		SnapshotID: snap,
 		Bytes:      written,

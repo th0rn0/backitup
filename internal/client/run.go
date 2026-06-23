@@ -14,6 +14,7 @@ import (
 // control channel, run the mode's backup, and report status back. A held lock
 // is reported as "overlap" and is not an error (fire-and-forget; design doc).
 func Run(ctx context.Context, cfg Config, lockPath string) error {
+	rl := NewRunLogger()
 	api, err := NewAPI(cfg.APIBase, cfg.Token, cfg.CABundle, cfg.Insecure)
 	if err != nil {
 		return err
@@ -24,10 +25,10 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		return err
 	}
 	if held {
-		log.Printf("backitup: previous run still in progress, skipping (overlap)")
-		// Best-effort: tell the server we skipped, so the dashboard is truthful.
+		rl.Printf("backup: previous run still in progress, skipping (overlap)")
 		now := time.Now().UTC()
-		_ = api.PostStatus(ctx, StatusReq{Status: string(model.StatusOverlap), StartedAt: now, FinishedAt: now})
+		sreq := StatusReq{Status: string(model.StatusOverlap), StartedAt: now, FinishedAt: now, LogTail: rl.String()}
+		_ = api.PostStatus(ctx, sreq)
 		return nil
 	}
 	defer lk.Release()
@@ -37,6 +38,7 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 	if err != nil {
 		return err
 	}
+	rl.Printf("config: mode=%s excludes=%v skip_symlinks=%v", scfg.Mode, scfg.Excludes, scfg.SkipSymlinks || cfg.SkipSymlinks)
 	m := model.Mode(scfg.Mode)
 	if !m.Valid() {
 		m = cfg.Mode
@@ -50,14 +52,19 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		SourceDir:    cfg.Source,
 		Excludes:     scfg.Excludes,
 		SkipSymlinks: scfg.SkipSymlinks || cfg.SkipSymlinks,
+		Logger:       rl.Logger,
 		SSHServer:    cfg.SSHServer,
 		SSHUser:      cfg.SSHUser,
 		SSHKey:       cfg.SSHKey,
 		KnownHosts:   cfg.KnownHosts,
 		Insecure:     cfg.Insecure,
 	})
+	if backupErr != nil {
+		rl.Printf("backup error: %v", backupErr)
+	}
 
 	sreq := buildStatus(res, backupErr)
+	sreq.LogTail = model.CapLogTail(rl.String())
 	if perr := api.PostStatus(ctx, sreq); perr != nil {
 		log.Printf("backitup: failed to report status: %v", perr)
 		if backupErr == nil {
@@ -78,7 +85,6 @@ func buildStatus(res mode.BackupResult, backupErr error) StatusReq {
 	}
 	if backupErr != nil {
 		s.Status = string(model.StatusFailed)
-		s.LogTail = model.CapLogTail(backupErr.Error())
 	}
 	if s.FinishedAt.IsZero() {
 		now := time.Now().UTC()
