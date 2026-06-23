@@ -23,15 +23,15 @@ import (
 
 func main() {
 	cfg := client.Config{
-		APIBase:    client.Env("BACKITUP_API", ""),
-		Token:      client.Env("BACKITUP_TOKEN", ""),
-		SSHServer:  client.Env("BACKITUP_SERVER", ""),
-		SSHUser:    client.Env("BACKITUP_SSH_USER", "backitup"),
-		SSHKey:     client.Env("BACKITUP_SSH_KEY", "/secrets/id"),
-		KnownHosts: client.Env("BACKITUP_KNOWN_HOSTS", ""),
-		CABundle:   client.Env("BACKITUP_CA", ""),
-		Source:     client.Env("BACKITUP_SOURCE", "/source"),
-		Mode:       model.Mode(client.Env("BACKITUP_MODE", "targz")),
+		APIBase:      client.Env("BACKITUP_API", ""),
+		Token:        client.Env("BACKITUP_TOKEN", ""),
+		SSHServer:    client.Env("BACKITUP_SERVER", ""),
+		SSHUser:      client.Env("BACKITUP_SSH_USER", "backitup"),
+		SSHKey:       client.Env("BACKITUP_SSH_KEY", "/secrets/id"),
+		KnownHosts:   client.Env("BACKITUP_KNOWN_HOSTS", ""),
+		CABundle:     client.Env("BACKITUP_CA", ""),
+		Source:       client.Env("BACKITUP_SOURCE", "/source"),
+		Mode:         model.Mode(client.Env("BACKITUP_MODE", "targz")),
 		Insecure:     client.Env("BACKITUP_INSECURE", "") == "1",
 		SkipSymlinks: client.Env("BACKITUP_SKIP_SYMLINKS", "") == "1",
 	}

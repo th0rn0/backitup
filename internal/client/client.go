@@ -13,14 +13,14 @@ import (
 
 // Config is the resolved client configuration for one run.
 type Config struct {
-	APIBase    string     // control channel base URL, e.g. https://host:8080
-	Token      string     // bearer token (control channel)
-	SSHServer  string     // data channel host:port (sshd ingest)
-	SSHUser    string     // ssh login user (the ingest user, "backitup")
-	SSHKey     string     // path to the client's private key
-	KnownHosts string     // known_hosts path for host-key verification
-	CABundle   string     // optional CA cert file for the control channel (self-signed)
-	Source     string     // read-only source mount
+	APIBase      string     // control channel base URL, e.g. https://host:8080
+	Token        string     // bearer token (control channel)
+	SSHServer    string     // data channel host:port (sshd ingest)
+	SSHUser      string     // ssh login user (the ingest user, "backitup")
+	SSHKey       string     // path to the client's private key
+	KnownHosts   string     // known_hosts path for host-key verification
+	CABundle     string     // optional CA cert file for the control channel (self-signed)
+	Source       string     // read-only source mount
 	Mode         model.Mode // fallback; the server's config is authoritative
 	Insecure     bool       // skip host-key / TLS verification (dev/test only)
 	SkipSymlinks bool       // local override: omit symlinks even if server didn't set it
