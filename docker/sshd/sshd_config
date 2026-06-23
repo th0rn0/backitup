@@ -15,6 +15,11 @@ AllowUsers backitup
 
 # The app regenerates this file atomically from the database on every change.
 AuthorizedKeysFile /srv/authkeys/authorized_keys
+# StrictModes checks ownership/permissions on the user's home dir and ~/.ssh.
+# Our AuthorizedKeysFile is at a fixed absolute path managed entirely by the
+# app container, not a home dir, so the check adds no security and breaks on
+# bind-mount setups where the host directory is group-readable.
+StrictModes no
 
 AllowTcpForwarding no
 AllowAgentForwarding no
