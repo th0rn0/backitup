@@ -376,4 +376,77 @@ func TestRotateClientInvalidatesOldToken(t *testing.T) {
 	}
 }
 
+func TestDeleteClientFlow(t *testing.T) {
+	st, ts, authKeys := ingestStack(t)
+	ctx := context.Background()
+
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "bye", Mode: model.ModeTarGz, RetentionDays: 7,
+		SSHPubKey: "ssh-ed25519 AAAA bye", TokenHash: "hash", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	c := loggedInClient(t, st, ts)
+
+	// Confirm required.
+	r, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/delete", url.Values{})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing confirm = %d, want 400", r.StatusCode)
+	}
+
+	// Happy path: delete with confirmation → redirect to dashboard.
+	r2, err := c.PostForm(ts.URL+"/clients/"+itoa(id)+"/delete", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200 (after redirect)", r2.StatusCode)
+	}
+
+	// Client must be gone from the store.
+	got, err := st.GetClient(ctx, id)
+	if err != nil || got != nil {
+		t.Fatalf("client still exists after delete: %+v, err %v", got, err)
+	}
+
+	// authorized_keys must have been regenerated (empty now).
+	data, _ := os.ReadFile(authKeys)
+	if strings.Contains(string(data), "ssh-ed25519 AAAA bye") {
+		t.Fatal("deleted client's key still in authorized_keys")
+	}
+}
+
+func TestDeleteClientUnknown(t *testing.T) {
+	st, ts, _ := ingestStack(t)
+	c := loggedInClient(t, st, ts)
+	r, err := c.PostForm(ts.URL+"/clients/99999/delete", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown delete = %d, want 404", r.StatusCode)
+	}
+}
+
+func TestDeleteClientRequiresAuth(t *testing.T) {
+	_, ts, _ := ingestStack(t)
+	c := noRedirectClient()
+	r, err := c.PostForm(ts.URL+"/clients/1/delete", url.Values{"confirm": {"1"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/login" {
+		t.Fatalf("unauth delete = %d -> %q; want 303 -> /login", r.StatusCode, r.Header.Get("Location"))
+	}
+}
+
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }

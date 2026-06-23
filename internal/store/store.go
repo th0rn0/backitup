@@ -276,6 +276,20 @@ func (s *Store) RotateClientCreds(ctx context.Context, id int64, pubKey, tokenHa
 	return nil
 }
 
+// DeleteClient removes a client and all its run history (cascaded by FK).
+// Returns an error if the client does not exist.
+func (s *Store) DeleteClient(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM clients WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("delete client: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("client %d: not found", id)
+	}
+	return nil
+}
+
 // PruneRuns deletes run records older than keepDays for a client (0 = keep all).
 func (s *Store) PruneRuns(ctx context.Context, clientID int64, keepDays int) (int64, error) {
 	if keepDays <= 0 {

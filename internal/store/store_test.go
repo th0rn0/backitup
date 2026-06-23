@@ -150,6 +150,38 @@ func TestRotateClientCreds(t *testing.T) {
 	}
 }
 
+func TestDeleteClient(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+
+	id, err := st.CreateClient(ctx, model.Client{Name: "del-me", Mode: model.ModeTarGz, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := st.DeleteClient(ctx, id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// Client must be gone.
+	got, err := st.GetClient(ctx, id)
+	if err != nil {
+		t.Fatalf("get after delete: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil after delete, got %+v", got)
+	}
+
+	// Deleting a nonexistent client must return an error.
+	if err := st.DeleteClient(ctx, 9999); err == nil {
+		t.Fatal("expected error for missing client, got nil")
+	}
+}
+
 func TestUniqueClientName(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

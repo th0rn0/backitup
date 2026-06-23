@@ -184,6 +184,44 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// postDeleteClient removes a client and all its run history, regenerates
+// authorized_keys, then redirects to the dashboard.
+func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	if r.PostFormValue("confirm") != "1" {
+		http.Error(w, "confirmation required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	if err := s.st.DeleteClient(ctx, id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "delete failed", http.StatusInternalServerError)
+		return
+	}
+
+	akCtx, akCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer akCancel()
+	if err := s.regenAuthorizedKeys(akCtx); err != nil {
+		log.Printf("authkeys regenerate failed after delete client %d: %v", id, err)
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 // generateClientCreds generates a new SSH keypair and bearer token for the
 // named client, writing errors directly to w. Returns ok=false on any error.
 func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, token, tokenHash string, ok bool) {

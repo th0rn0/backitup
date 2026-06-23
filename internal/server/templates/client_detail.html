@@ -49,6 +49,16 @@
         </label>
         <button type="submit" class="btn" style="margin-top:12px;background:var(--failed);color:#fff">Rotate credentials</button>
       </form>
+
+      <h2 style="margin-top:40px">Delete client</h2>
+      <p class="summary">Permanently removes this client, its run history, and its SSH access. This cannot be undone — the host will need a new client added if you want to resume backups.</p>
+      <form method="POST" action="/clients/{{.Client.ID}}/delete" style="margin-top:12px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer">
+          <input type="checkbox" name="confirm" value="1" required>
+          I understand this will permanently delete "{{.Client.Name}}" and all its history.
+        </label>
+        <button type="submit" class="btn" style="margin-top:12px;background:var(--failed);color:#fff;opacity:0.85">Delete client</button>
+      </form>
     </main>
   </div>
 </body>
