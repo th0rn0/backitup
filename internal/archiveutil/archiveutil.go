@@ -15,12 +15,18 @@ import (
 	"path/filepath"
 )
 
+// ProgressFunc is called periodically during TarGz with the running file and
+// byte counts. It may be nil.
+type ProgressFunc func(files, bytes int64)
+
 // TarGz writes a gzip-compressed tar of srcDir (contents, not the root dir) to w,
 // returning the regular-file count and total uncompressed bytes. Entries matching
 // an exclude glob (by full relative path or base name) are skipped. srcDir is
 // only ever READ. Special files (sockets, devices, FIFOs) are always skipped;
 // symlinks are skipped when skipSymlinks is true.
-func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string, skipSymlinks bool) (files, written int64, err error) {
+//
+// progress is called every 1 000 files (nil-safe).
+func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string, skipSymlinks bool, progress ProgressFunc) (files, written int64, err error) {
 	gw := gzip.NewWriter(w)
 	tw := tar.NewWriter(gw)
 
@@ -85,6 +91,9 @@ func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string, s
 			}
 			files++
 			written += n
+			if progress != nil && files%1000 == 0 {
+				progress(files, written)
+			}
 		}
 		return nil
 	})

@@ -64,6 +64,13 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	if err != nil {
 		return mode.BackupResult{}, err
 	}
+	if stdout != "" {
+		for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+			if line != "" {
+				logger.Printf("rsync: %s", line)
+			}
+		}
+	}
 
 	if err := flipLatest(ctx, o, host, sshArgs, snap); err != nil {
 		return mode.BackupResult{}, fmt.Errorf("update latest pointer: %w", err)

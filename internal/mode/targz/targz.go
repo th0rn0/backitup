@@ -59,7 +59,10 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	}
 
 	logger.Printf("archiving %s", o.SourceDir)
-	files, written, archiveErr := archiveutil.TarGz(ctx, stdin, o.SourceDir, o.Excludes, o.SkipSymlinks)
+	progress := func(files, bytes int64) {
+		logger.Printf("archiving... %d files, %s", files, mode.HumanBytes(bytes))
+	}
+	files, written, archiveErr := archiveutil.TarGz(ctx, stdin, o.SourceDir, o.Excludes, o.SkipSymlinks, progress)
 	// Always close stdin so the remote sees EOF, even on error.
 	_ = stdin.Close()
 	waitErr := sess.Wait()

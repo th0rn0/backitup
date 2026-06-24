@@ -23,7 +23,7 @@ func TestTarGz(t *testing.T) {
 	write(t, filepath.Join(src, "node_modules", "deep", "x.txt"), "excluded")
 
 	var buf bytes.Buffer
-	files, written, err := TarGz(context.Background(), &buf, src, []string{"*.tmp", "node_modules"}, false)
+	files, written, err := TarGz(context.Background(), &buf, src, []string{"*.tmp", "node_modules"}, false, nil)
 	if err != nil {
 		t.Fatalf("TarGz: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestTarGzSkipSymlinks(t *testing.T) {
 
 	// With skipSymlinks=false, symlink is included.
 	var buf bytes.Buffer
-	files, _, err := TarGz(context.Background(), &buf, src, nil, false)
+	files, _, err := TarGz(context.Background(), &buf, src, nil, false, nil)
 	if err != nil {
 		t.Fatalf("TarGz: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestTarGzSkipSymlinks(t *testing.T) {
 
 	// With skipSymlinks=true, symlink is omitted entirely.
 	buf.Reset()
-	files2, _, err2 := TarGz(context.Background(), &buf, src, nil, true)
+	files2, _, err2 := TarGz(context.Background(), &buf, src, nil, true, nil)
 	if err2 != nil {
 		t.Fatalf("TarGz skipSymlinks: %v", err2)
 	}
@@ -100,7 +100,7 @@ func TestTarGzSkipsSpecialFiles(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	files, _, archErr := TarGz(context.Background(), &buf, src, nil, false)
+	files, _, archErr := TarGz(context.Background(), &buf, src, nil, false, nil)
 	if archErr != nil {
 		t.Fatalf("TarGz with socket: %v", archErr)
 	}
@@ -119,7 +119,7 @@ func TestVerifyGzip(t *testing.T) {
 	src := t.TempDir()
 	write(t, filepath.Join(src, "f.txt"), "data")
 	f, _ := os.Create(good)
-	if _, _, err := TarGz(context.Background(), f, src, nil, false); err != nil {
+	if _, _, err := TarGz(context.Background(), f, src, nil, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	f.Close()

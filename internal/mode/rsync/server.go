@@ -60,7 +60,7 @@ func (Server) PrepareOffsite(ctx context.Context, clientDir string, snap mode.Sn
 	if err != nil {
 		return "", err
 	}
-	if _, _, err := archiveutil.TarGz(ctx, tmp, snapPath, nil, false); err != nil {
+	if _, _, err := archiveutil.TarGz(ctx, tmp, snapPath, nil, false, nil); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
 		return "", err

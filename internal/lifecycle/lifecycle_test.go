@@ -50,7 +50,7 @@ func mkArchive(t *testing.T, path string, mtime time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := archiveutil.TarGz(context.Background(), f, src, nil, false); err != nil {
+	if _, _, err := archiveutil.TarGz(context.Background(), f, src, nil, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
