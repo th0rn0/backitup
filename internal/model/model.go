@@ -146,12 +146,14 @@ type User struct {
 	CreatedAt    time.Time
 }
 
-const maxLogTail = 64 * 1024
+// MaxLogTail is the log_tail cap in bytes. The server's status endpoint body
+// limit is MaxLogTail + a small overhead for the other JSON fields.
+const MaxLogTail = 64 * 1024
 
-// CapLogTail trims a log to the last maxLogTail bytes (DD4 / eng review).
+// CapLogTail trims a log to the last MaxLogTail bytes (DD4 / eng review).
 func CapLogTail(s string) string {
-	if len(s) <= maxLogTail {
+	if len(s) <= MaxLogTail {
 		return s
 	}
-	return s[len(s)-maxLogTail:]
+	return s[len(s)-MaxLogTail:]
 }

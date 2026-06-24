@@ -38,11 +38,11 @@ func TestCapLogTail(t *testing.T) {
 	if got := CapLogTail("short"); got != "short" {
 		t.Fatalf("short log changed: %q", got)
 	}
-	big := make([]byte, maxLogTail+500)
+	big := make([]byte, MaxLogTail+500)
 	for i := range big {
 		big[i] = 'x'
 	}
-	if got := CapLogTail(string(big)); len(got) != maxLogTail {
-		t.Fatalf("cap = %d bytes, want %d", len(got), maxLogTail)
+	if got := CapLogTail(string(big)); len(got) != MaxLogTail {
+		t.Fatalf("cap = %d bytes, want %d", len(got), MaxLogTail)
 	}
 }

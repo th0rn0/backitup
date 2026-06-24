@@ -100,7 +100,7 @@ type statusReq struct {
 func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	cl := clientFrom(r.Context())
 	var req statusReq
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, int64(model.MaxLogTail)+4096))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
