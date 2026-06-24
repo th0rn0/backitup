@@ -39,7 +39,7 @@ func TestSSHTransportInsecure(t *testing.T) {
 	if host != "h" {
 		t.Errorf("host = %q, want h", host)
 	}
-	for _, want := range []string{"ssh", "-i /k", "-p 2222", "StrictHostKeyChecking=no"} {
+	for _, want := range []string{"ssh", "-i /k", "-p 2222", "StrictHostKeyChecking=no", "ConnectTimeout=30", "ServerAliveInterval=60"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("ssh args %q missing %q", args, want)
 		}

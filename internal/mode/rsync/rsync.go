@@ -15,6 +15,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -60,16 +62,9 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	args = append(args, "-e", sshArgs, ensureTrailingSlash(o.SourceDir), target)
 
 	logger.Printf("syncing %s → %s", o.SourceDir, target)
-	stdout, err := runRsync(ctx, args)
+	stdout, err := runRsync(ctx, logger, args)
 	if err != nil {
 		return mode.BackupResult{}, err
-	}
-	if stdout != "" {
-		for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
-			if line != "" {
-				logger.Printf("rsync: %s", line)
-			}
-		}
 	}
 
 	if err := flipLatest(ctx, o, host, sshArgs, snap); err != nil {
@@ -100,22 +95,54 @@ func flipLatest(ctx context.Context, o mode.BackupOpts, host, sshArgs, snap stri
 		return err
 	}
 	target := fmt.Sprintf("%s@%s:snapshots/", o.SSHUser, host)
-	_, err = runRsync(ctx, []string{"-a", "-e", sshArgs, link, target})
+	_, err = runRsync(ctx, o.Log(), []string{"-a", "-e", sshArgs, link, target})
 	return err
 }
 
-func runRsync(ctx context.Context, args []string) (string, error) {
-	cmd := exec.CommandContext(ctx, "rsync", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return stdout.String(), fmt.Errorf("rsync %v: %w: %s", args, err, strings.TrimSpace(stderr.String()))
+// lineLogger is an io.Writer that logs each complete line in real time.
+// stdout and stderr each get their own instance so there is no shared state
+// across the two goroutines that exec.Cmd creates to drain those pipes.
+type lineLogger struct {
+	logger *log.Logger
+	buf    []byte
+}
+
+func (l *lineLogger) Write(p []byte) (int, error) {
+	l.buf = append(l.buf, p...)
+	for {
+		i := bytes.IndexByte(l.buf, '\n')
+		if i < 0 {
+			break
+		}
+		if line := strings.TrimRight(string(l.buf[:i]), "\r"); line != "" {
+			l.logger.Print(line)
+		}
+		l.buf = l.buf[i+1:]
 	}
-	out := stdout.String()
-	// Include stderr: some rsync/rrsync combinations write --stats there, and
-	// it surfaces SSH/rrsync warnings that would otherwise be silently lost.
-	if se := strings.TrimSpace(stderr.String()); se != "" {
+	return len(p), nil
+}
+
+func (l *lineLogger) flush() {
+	if line := strings.TrimRight(string(l.buf), "\r\n "); line != "" {
+		l.logger.Print(line)
+	}
+}
+
+func runRsync(ctx context.Context, logger *log.Logger, args []string) (string, error) {
+	cmd := exec.CommandContext(ctx, "rsync", args...)
+	var outBuf, errBuf bytes.Buffer
+	outLL := &lineLogger{logger: logger}
+	errLL := &lineLogger{logger: logger}
+	cmd.Stdout = io.MultiWriter(&outBuf, outLL)
+	cmd.Stderr = io.MultiWriter(&errBuf, errLL)
+	err := cmd.Run()
+	outLL.flush()
+	errLL.flush()
+	if err != nil {
+		return outBuf.String(), fmt.Errorf("rsync: %w: %s", err, strings.TrimSpace(errBuf.String()))
+	}
+	out := outBuf.String()
+	if se := strings.TrimSpace(errBuf.String()); se != "" {
 		out += "\n" + se
 	}
 	return out, nil
@@ -128,7 +155,13 @@ func sshTransport(o mode.BackupOpts) (host, sshArgs string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("bad SSHServer %q: %w", o.SSHServer, err)
 	}
-	parts := []string{"ssh", "-i", o.SSHKey, "-p", port, "-o", "BatchMode=yes"}
+	parts := []string{
+		"ssh", "-i", o.SSHKey, "-p", port,
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=30",
+		"-o", "ServerAliveInterval=60",
+		"-o", "ServerAliveCountMax=3",
+	}
 	if o.Insecure {
 		parts = append(parts, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null")
 	} else {
