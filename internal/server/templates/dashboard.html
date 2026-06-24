@@ -12,9 +12,10 @@
       <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
       <div class="nav">
         <a href="/" class="active" aria-current="page">Dashboard</a>
-        <a href="/clients">Clients</a>
-        <a href="/settings">Settings</a>
+        <a href="/clients/new">Add client</a>
+        <a href="/users">Users</a>
       </div>
+      {{if .Username}}<div class="nav-footer">{{.Username}}</div>{{end}}
     </nav>
     <main class="main">
       <div class="topbar">

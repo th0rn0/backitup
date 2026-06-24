@@ -109,6 +109,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
+		"Username":    usernameFromContext(r.Context()),
 		"Client":      c,
 		"Health":      string(h),
 		"HealthLabel": healthLabel(h),
@@ -142,8 +143,9 @@ func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "run_log.html", map[string]any{
-		"Client": c,
-		"Run":    run,
+		"Username": usernameFromContext(r.Context()),
+		"Client":   c,
+		"Run":      run,
 	})
 }
 

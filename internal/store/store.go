@@ -57,6 +57,15 @@ func Open(dsn string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS users (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		username      TEXT NOT NULL UNIQUE,
+		password_hash TEXT NOT NULL,
+		created_at    TEXT NOT NULL
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate users: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -166,6 +175,87 @@ func (s *Store) LatestRun(ctx context.Context, clientID int64) (*model.Run, erro
 		return nil, err
 	}
 	return &r, nil
+}
+
+// CreateUser adds a new user. Returns an error if the username is already taken.
+func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO users (username, password_hash, created_at) VALUES (?,?,?)`,
+		username, passwordHash, time.Now().UTC().Format(rfc3339))
+	if err != nil {
+		return 0, fmt.Errorf("create user: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// UpsertUser creates the user or updates their password hash if they already exist.
+func (s *Store) UpsertUser(ctx context.Context, username, passwordHash string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO users (username, password_hash, created_at) VALUES (?,?,?)
+		ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash`,
+		username, passwordHash, time.Now().UTC().Format(rfc3339))
+	if err != nil {
+		return fmt.Errorf("upsert user: %w", err)
+	}
+	return nil
+}
+
+// ListUsers returns all users ordered by username.
+func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, username, password_hash, created_at FROM users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.User
+	for rows.Next() {
+		var u model.User
+		var created string
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &created); err != nil {
+			return nil, err
+		}
+		u.CreatedAt, _ = time.Parse(rfc3339, created)
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// GetUserByUsername returns the user with the given username, or (nil, nil) if not found.
+func (s *Store) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, username, password_hash, created_at FROM users WHERE username=?`, username)
+	var u model.User
+	var created string
+	switch err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &created); err {
+	case sql.ErrNoRows:
+		return nil, nil
+	case nil:
+		u.CreatedAt, _ = time.Parse(rfc3339, created)
+		return &u, nil
+	default:
+		return nil, err
+	}
+}
+
+// DeleteUser removes a user by ID. Returns an error if not found.
+func (s *Store) DeleteUser(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %d: not found", id)
+	}
+	return nil
+}
+
+// CountUsers returns the total number of users.
+func (s *Store) CountUsers(ctx context.Context) (int, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`)
+	var n int
+	return n, row.Scan(&n)
 }
 
 // SetAdmin upserts the single admin row (id=1).

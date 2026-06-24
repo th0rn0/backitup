@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Back! It! Up! — users</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="Primary">
+      <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
+      <div class="nav">
+        <a href="/">Dashboard</a>
+        <a href="/clients/new">Add client</a>
+        <a href="/users" class="active" aria-current="page">Users</a>
+      </div>
+      {{if .Username}}<div class="nav-footer">{{.Username}}</div>{{end}}
+    </nav>
+    <main class="main">
+      <div class="topbar"><h1>Users</h1></div>
+
+      {{if .Error}}
+      <p class="error" style="color:var(--failed);margin-bottom:16px">{{.Error}}</p>
+      {{end}}
+
+      {{if .Users}}
+      <table>
+        <thead>
+          <tr><th>Username</th><th>Created</th><th></th></tr>
+        </thead>
+        <tbody>
+          {{range .Users}}
+          <tr>
+            <td>{{.Username}}{{if eq .Username $.Username}} <span class="badge">you</span>{{end}}</td>
+            <td class="mono">{{.CreatedAt.Format "2006-01-02"}}</td>
+            <td>
+              {{if ne .Username $.Username}}
+              <form method="POST" action="/users/{{.ID}}/delete" style="display:inline">
+                <input type="hidden" name="confirm" value="1">
+                <button type="submit" class="btn" style="background:var(--failed);color:#fff;padding:4px 10px;font-size:13px">Delete</button>
+              </form>
+              {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{end}}
+
+      <h2 style="margin-top:32px">Add user</h2>
+      <form method="POST" action="/users" style="margin-top:12px;max-width:360px;display:flex;flex-direction:column;gap:10px">
+        <input type="text" name="username" placeholder="Username" required autocomplete="off"
+               style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:var(--surface);color:inherit">
+        <input type="password" name="password" placeholder="Password (min 8 chars)" required
+               style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:var(--surface);color:inherit">
+        <button type="submit" class="btn" style="align-self:flex-start">Add user</button>
+      </form>
+
+      <form method="POST" action="/logout" style="margin-top:40px">
+        <button type="submit" class="btn" style="background:transparent;border:1px solid var(--border);color:inherit">Sign out</button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

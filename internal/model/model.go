@@ -129,7 +129,16 @@ type OffsiteObject struct {
 }
 
 // Admin is the single webgui admin account (D3). PasswordHash is argon2id.
+// Retained for backwards-compat with the admin table; new code uses User.
 type Admin struct {
+	Username     string
+	PasswordHash string
+	CreatedAt    time.Time
+}
+
+// User is a web UI user account. All users have full access; there are no roles.
+type User struct {
+	ID           int64
 	Username     string
 	PasswordHash string
 	CreatedAt    time.Time

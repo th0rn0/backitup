@@ -10,7 +10,8 @@
   <div class="app">
     <nav class="sidebar" aria-label="Primary">
       <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
-      <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a></div>
+      <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a><a href="/users">Users</a></div>
+      {{if .Username}}<div class="nav-footer">{{.Username}}</div>{{end}}
     </nav>
     <main class="main">
       <div class="topbar">
