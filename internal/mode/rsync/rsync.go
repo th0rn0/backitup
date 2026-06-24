@@ -99,14 +99,6 @@ func flipLatest(ctx context.Context, o mode.BackupOpts, host, sshArgs, snap stri
 
 func runRsync(ctx context.Context, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, "rsync", args...)
-	// SSH (invoked by rsync as a subprocess) calls getpwuid() to resolve HOME.
-	// In containers running with --user <uid>:<gid> where the uid has no
-	// /etc/passwd entry, this fails with "No user exists for uid N". Setting
-	// HOME explicitly prevents the lookup. Inherit the full environment first so
-	// PATH, SSH_AUTH_SOCK, etc. are not lost.
-	if os.Getenv("HOME") == "" {
-		cmd.Env = append(os.Environ(), "HOME=/tmp")
-	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
