@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Back! It! Up! — add client</title>
+  <title>backitup — add client</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -16,10 +16,13 @@
         <a href="/users">Users</a>
       </div>
     </nav>
+
     <main class="main">
       <h1>Add a client</h1>
-      <p class="summary">A client backs up one directory on one host. You'll get a key, a token, and a cron line to paste on that host.</p>
-      {{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
+      <p style="color:var(--text-dim);font-size:13px;margin-top:6px">A client backs up one directory on one host. You'll get a key, a token, and a cron line to paste on that host.</p>
+
+      {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
+
       <form method="post" action="/clients" class="form">
         <label for="name">Name</label>
         <input id="name" name="name" required autofocus placeholder="laptop-docs">
@@ -30,8 +33,9 @@
           <option value="rsync">rsync — hardlink incremental snapshots</option>
         </select>
 
-        <label for="source_label">Source label (description)</label>
+        <label for="source_label">Source label</label>
         <input id="source_label" name="source_label" placeholder="~/Documents on my laptop">
+        <div class="field-hint">A human-readable description of what's being backed up.</div>
 
         <div class="row">
           <div>
@@ -43,27 +47,33 @@
             <input id="offsite_retention_days" name="offsite_retention_days" type="number" min="1" value="90">
           </div>
           <div>
-            <label for="expected_interval_secs">Expected interval (s, 0 = unknown)</label>
+            <label for="expected_interval_secs">Expected interval (s)</label>
             <input id="expected_interval_secs" name="expected_interval_secs" type="number" min="0" value="86400">
+            <div class="field-hint">0 = unknown / manual</div>
           </div>
         </div>
 
-        <label for="offsite_remote">Offsite remote (rclone, blank = none)</label>
-        <input id="offsite_remote" name="offsite_remote" placeholder="s3">
+        <label for="offsite_remote">Offsite remote (rclone)</label>
+        <input id="offsite_remote" name="offsite_remote" placeholder="s3 (leave blank to disable)">
 
-        <label style="margin-top:18px;display:block">
+        <label class="checkbox-label" style="margin-top:18px">
           <input type="checkbox" name="skip_symlinks" value="1">
-          Skip symlinks — exclude symbolic links from the backup
-          <span style="color:var(--text-dim);font-weight:400">(also settable per-run with <code>BACKITUP_SKIP_SYMLINKS=1</code>)</span>
+          <span>
+            Skip symlinks
+            <span class="hint">Exclude symbolic links from the backup. Also settable per-run with <code>BACKITUP_SKIP_SYMLINKS=1</code>.</span>
+          </span>
         </label>
 
         <label style="margin-top:18px;display:block">API scheme <span style="color:var(--text-dim);font-weight:400">(for the generated docker run command)</span></label>
         <div class="radio-group">
-          <label><input type="radio" name="api_scheme" value="http" checked> http — LAN / behind a TLS proxy</label>
-          <label style="margin-left:16px"><input type="radio" name="api_scheme" value="https"> https — direct TLS</label>
+          <label><input type="radio" name="api_scheme" value="http" checked> http</label>
+          <label><input type="radio" name="api_scheme" value="https"> https</label>
         </div>
 
-        <button class="btn" type="submit" style="margin-top:20px">Create client</button>
+        <div class="form-actions">
+          <button class="btn" type="submit">Create client</button>
+          <a href="/" class="btn-ghost btn">Cancel</a>
+        </div>
       </form>
     </main>
   </div>

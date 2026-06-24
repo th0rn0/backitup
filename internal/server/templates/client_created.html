@@ -3,88 +3,97 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Back! It! Up! — {{.Name}} {{if .Rotated}}credentials rotated{{else}}created{{end}}</title>
+  <title>backitup — {{.Name}} {{if .Rotated}}rotated{{else}}created{{end}}</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <div class="app">
     <nav class="sidebar" aria-label="Primary">
       <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
-      <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a><a href="/users">Users</a></div>
+      <div class="nav">
+        <a href="/">Dashboard</a>
+        <a href="/clients/new">Add client</a>
+        <a href="/users">Users</a>
+      </div>
     </nav>
+
     <main class="main">
-      <h1>{{if .Rotated}}Client "{{.Name}}" — credentials rotated{{else}}Client "{{.Name}}" created{{end}}</h1>
+      <h1>{{if .Rotated}}Credentials rotated — {{.Name}}{{else}}Client created — {{.Name}}{{end}}</h1>
 
       {{if .Rotated}}
-      <div class="error" role="alert">
-        ⚠ The old credentials are now invalid. Save these new ones before leaving this page — they are shown <strong>once</strong> and cannot be retrieved later.
+      <div class="alert alert-error" role="alert" style="margin-top:16px">
+        ⚠ The old credentials are now invalid. Save these before leaving — they are shown <strong>once</strong>.
       </div>
       {{if .AuthKeysFailed}}
-      <div class="error" role="alert" style="background:rgba(210,34,34,0.12);border-color:var(--failed);color:var(--failed);margin-top:8px">
-        ⚠ Warning: credentials were rotated in the database but the SSH authorized_keys file could not be updated. SSH connections for this client may fail until authorized_keys is refreshed (e.g. by re-enabling the client or restarting the server).
+      <div class="alert alert-error" role="alert">
+        ⚠ Credentials rotated in the database but the SSH authorized_keys file could not be updated. SSH may fail until the server restarts.
       </div>
       {{end}}
       {{else}}
-      <div class="error" role="alert" style="background:rgba(210,153,34,0.12);border-color:var(--stale);color:var(--stale)">
+      <div class="alert alert-warn" role="alert" style="margin-top:16px">
         ⚠ Save these now. The private key and token are shown <strong>once</strong> and cannot be retrieved later.
       </div>
       {{end}}
 
-      <!-- Step 1: secrets -->
-      <h2>1. Save the secrets</h2>
-      <p class="summary">Create a directory on the backup host (e.g. <code>/etc/backitup/{{.Name}}/</code>) and save the files below into it. The directory will be bind-mounted into the client container as <code>/secrets</code>.</p>
+      <div class="section">
+        <h2>1 — Save the secrets</h2>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Create <code>/etc/backitup/{{.Name}}/</code> on the backup host and save the files below into it.</p>
 
-      <label>SSH private key → save as <code>id</code> (chmod 600)</label>
-      <textarea class="mono secret" id="privkey" rows="8" readonly>{{.PrivateKey}}</textarea>
-      <button class="btn copy" data-target="privkey" type="button">Copy private key</button>
+        <label for="privkey">SSH private key → save as <code>id</code> (chmod 600)</label>
+        <textarea class="secret-input" id="privkey" rows="8" readonly>{{.PrivateKey}}</textarea>
+        <button class="btn btn-copy" data-target="privkey" type="button">Copy key</button>
 
-      <label style="margin-top:16px;display:block">Bearer token → paste as <code>BACKITUP_TOKEN</code> in the docker run command</label>
-      <input class="mono secret" id="token" value="{{.Token}}" readonly>
-      <button class="btn copy" data-target="token" type="button">Copy token</button>
+        <label for="token" style="margin-top:16px">Bearer token → <code>BACKITUP_TOKEN</code> in the docker run command</label>
+        <input class="secret-input" id="token" value="{{.Token}}" readonly>
+        <button class="btn btn-copy" data-target="token" type="button">Copy token</button>
+      </div>
 
-      <!-- Step 2: known_hosts -->
       {{if .KnownHostsLine}}
-      <h2 style="margin-top:28px">2. Save the server's SSH fingerprint</h2>
-      <p class="summary">Save this line as <code>known_hosts</code> in the same secrets directory. The client uses it to verify the server's identity — no need for <code>BACKITUP_INSECURE=1</code>.</p>
-      <textarea class="mono" id="knownhosts" rows="2" readonly>{{.KnownHostsLine}}</textarea>
-      <button class="btn copy" data-target="knownhosts" type="button">Copy known_hosts line</button>
-      <p class="summary" style="margin-top:6px">On the host: <code>echo '&lt;line above&gt;' &gt; /etc/backitup/{{.Name}}/known_hosts</code></p>
+      <div class="section">
+        <h2>2 — Save the server SSH fingerprint</h2>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Save this as <code>known_hosts</code> in the same secrets directory. The client uses it to verify the server's identity.</p>
+        <textarea id="knownhosts" rows="2" readonly>{{.KnownHostsLine}}</textarea>
+        <button class="btn btn-copy" data-target="knownhosts" type="button">Copy known_hosts</button>
+      </div>
       {{end}}
 
-      <!-- Step 3: docker run -->
-      <h2 style="margin-top:28px">{{if .KnownHostsLine}}3{{else}}2{{end}}. Run the client</h2>
-      <p class="summary">Replace <code>/PATH/TO/BACKUP</code> with the directory to back up and <code>/PATH/TO/SECRETS</code> with the secrets directory you created above.</p>
+      <div class="section">
+        <h2>{{if .KnownHostsLine}}3{{else}}2{{end}} — Run the client</h2>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Replace <code>/PATH/TO/BACKUP</code> and <code>/PATH/TO/SECRETS</code> with the actual paths on your host.</p>
 
-      <div class="tabs" role="tablist" aria-label="Connection mode">
-        <button class="tab active" role="tab" aria-selected="true"  data-tab="known"    type="button">Secure — known_hosts {{if .KnownHostsLine}}✓{{else}}(set up server host key){{end}}</button>
-        <button class="tab"        role="tab" aria-selected="false" data-tab="insecure" type="button">Insecure — skip host verification</button>
+        <div class="tabs" role="tablist">
+          <button class="tab active" role="tab" aria-selected="true"  data-tab="known"    type="button">Secure{{if .KnownHostsLine}} ✓{{end}}</button>
+          <button class="tab"        role="tab" aria-selected="false" data-tab="insecure" type="button">Insecure</button>
+        </div>
+
+        <div id="tab-known" class="tab-panel">
+          {{if .KnownHostsLine}}
+          <p style="font-size:12px;color:var(--ok);margin-bottom:8px">Recommended. Requires <code>known_hosts</code> from step 2.</p>
+          {{else}}
+          <p style="font-size:12px;color:var(--stale);margin-bottom:8px">⚠ <code>BACKITUP_SSH_HOST_KEY</code> not set on the server — use insecure mode for now, or configure it and recreate the client.</p>
+          {{end}}
+          <textarea id="docker-known" rows="10" readonly>{{.DockerRunKnown}}</textarea>
+          <button class="btn btn-copy" data-target="docker-known" type="button">Copy command</button>
+        </div>
+
+        <div id="tab-insecure" class="tab-panel" hidden>
+          <p style="font-size:12px;color:var(--stale);margin-bottom:8px">Skips SSH host-key verification. Fine for a trusted LAN; avoid over the internet.</p>
+          <textarea id="docker-insecure" rows="9" readonly>{{.DockerRunInsecure}}</textarea>
+          <button class="btn btn-copy" data-target="docker-insecure" type="button">Copy command</button>
+        </div>
       </div>
 
-      <div id="tab-known" class="tab-panel">
-        {{if .KnownHostsLine}}
-        <p class="summary" style="color:var(--ok)">Recommended for production. Requires <code>known_hosts</code> saved in step 2.</p>
-        {{else}}
-        <p class="summary" style="color:var(--stale)">⚠ <code>BACKITUP_SSH_HOST_KEY</code> is not configured on the server — the known_hosts line cannot be generated. Use insecure mode for now, or set the env var and recreate the client.</p>
-        {{end}}
-        <textarea class="mono" id="docker-known" rows="10" readonly>{{.DockerRunKnown}}</textarea>
-        <button class="btn copy" data-target="docker-known" type="button">Copy command</button>
+      <div class="section">
+        <h2>{{if .KnownHostsLine}}4{{else}}3{{end}} — Add to cron</h2>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Paste the command above into crontab on the backup host. Adjust the schedule and paths:</p>
+        <textarea id="cron-hint" rows="2" readonly>30 2 * * *  # paste docker run command here</textarea>
       </div>
 
-      <div id="tab-insecure" class="tab-panel" hidden>
-        <p class="summary" style="color:var(--stale)">Skips SSH host-key verification. Fine for a trusted LAN; do not use over the internet.</p>
-        <textarea class="mono" id="docker-insecure" rows="9" readonly>{{.DockerRunInsecure}}</textarea>
-        <button class="btn copy" data-target="docker-insecure" type="button">Copy command</button>
+      <div class="section">
+        <h2>{{if .KnownHostsLine}}5{{else}}4{{end}} — Done</h2>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Once cron runs, <strong>{{.Name}}</strong> will appear on the dashboard and turn <span class="status ok"><span class="dot">●</span> ok</span> after its first backup.</p>
+        <a class="btn" id="done" href="/">I've saved everything — go to dashboard</a>
       </div>
-
-      <!-- Step 4: cron -->
-      <h2 style="margin-top:28px">{{if .KnownHostsLine}}4{{else}}3{{end}}. Add to cron</h2>
-      <p class="summary">Paste the command above into crontab on the backup host. Edit the schedule and path to taste:</p>
-      <textarea class="mono" id="cron-hint" rows="2" readonly>30 2 * * *  # paste the docker run command here, replacing PATH/TO values</textarea>
-
-      <!-- Done -->
-      <h2 style="margin-top:28px">{{if .KnownHostsLine}}5{{else}}4{{end}}. Done</h2>
-      <p class="summary">Once cron runs, "{{.Name}}" will appear on the dashboard and turn <span class="status ok">● OK</span> after its first backup.</p>
-      <a class="btn" id="done" href="/">I've saved everything — go to dashboard</a>
     </main>
   </div>
   <script src="/static/client-created.js"></script>

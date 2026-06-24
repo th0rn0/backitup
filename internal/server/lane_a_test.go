@@ -204,7 +204,7 @@ func TestRotateClientFlow(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
 	for _, want := range []string{
-		"credentials rotated", "OPENSSH PRIVATE KEY", "BACKITUP_TOKEN=",
+		"Credentials rotated", "OPENSSH PRIVATE KEY", "BACKITUP_TOKEN=",
 		"old credentials are now invalid", "BACKITUP_SERVER=",
 	} {
 		if !strings.Contains(html, want) {
