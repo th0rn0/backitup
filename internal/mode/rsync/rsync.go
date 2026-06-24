@@ -150,6 +150,7 @@ func runRsync(ctx context.Context, logger *log.Logger, args []string) (string, e
 
 // sshTransport returns the bare host and the rsync "-e" ssh command string,
 // wiring the client key and host-key policy.
+// Set BACKITUP_SSH_DEBUG=1 to add -vvv to the SSH command for connection diagnostics.
 func sshTransport(o mode.BackupOpts) (host, sshArgs string, err error) {
 	host, port, err := net.SplitHostPort(o.SSHServer)
 	if err != nil {
@@ -161,6 +162,9 @@ func sshTransport(o mode.BackupOpts) (host, sshArgs string, err error) {
 		"-o", "ConnectTimeout=30",
 		"-o", "ServerAliveInterval=60",
 		"-o", "ServerAliveCountMax=3",
+	}
+	if os.Getenv("BACKITUP_SSH_DEBUG") == "1" {
+		parts = append(parts, "-vvv")
 	}
 	if o.Insecure {
 		parts = append(parts, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null")
