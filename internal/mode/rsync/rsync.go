@@ -53,6 +53,9 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	target := fmt.Sprintf("%s@%s:snapshots/%s/", o.SSHUser, host, snap)
 
 	args := []string{"-a", "--delete", "--stats", "--link-dest=/snapshots/latest"}
+	if os.Getenv("BACKITUP_RSYNC_DEBUG") == "1" {
+		args = append(args, "-vvv")
+	}
 	if o.SkipSymlinks {
 		args = append(args, "--no-links")
 	}
@@ -150,7 +153,8 @@ func runRsync(ctx context.Context, logger *log.Logger, args []string) (string, e
 
 // sshTransport returns the bare host and the rsync "-e" ssh command string,
 // wiring the client key and host-key policy.
-// Set BACKITUP_SSH_DEBUG=1 to add -vvv to the SSH command for connection diagnostics.
+// Set BACKITUP_SSH_DEBUG=1 to add -vvv to the SSH command for SSH-layer diagnostics.
+// Set BACKITUP_RSYNC_DEBUG=1 to add -vvv to the rsync command for rsync-protocol diagnostics.
 func sshTransport(o mode.BackupOpts) (host, sshArgs string, err error) {
 	host, port, err := net.SplitHostPort(o.SSHServer)
 	if err != nil {
