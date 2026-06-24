@@ -161,6 +161,24 @@ func (s *Store) RecordRun(ctx context.Context, r model.Run) (int64, error) {
 	return res.LastInsertId()
 }
 
+// UpdateRun overwrites the mutable fields of an existing run identified by id.
+// client_id must match to prevent cross-client tampering.
+func (s *Store) UpdateRun(ctx context.Context, id, clientID int64, r model.Run) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE runs SET finished_at=?, status=?, bytes=?, files=?, snapshot_id=?, log_tail=?
+		WHERE id=? AND client_id=?`,
+		r.FinishedAt.UTC().Format(rfc3339), string(r.Status), r.Bytes, r.Files,
+		r.SnapshotID, model.CapLogTail(r.LogTail), id, clientID)
+	if err != nil {
+		return fmt.Errorf("update run: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("run %d not found for client %d", id, clientID)
+	}
+	return nil
+}
+
 // LatestRun returns the most recent run for a client, or (nil, nil) if none.
 // Backed by idx_runs_client_started so the dashboard avoids an N+1 scan.
 func (s *Store) LatestRun(ctx context.Context, clientID int64) (*model.Run, error) {

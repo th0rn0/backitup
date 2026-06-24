@@ -28,7 +28,7 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		rl.Printf("backup: previous run still in progress, skipping (overlap)")
 		now := time.Now().UTC()
 		sreq := StatusReq{Status: string(model.StatusOverlap), StartedAt: now, FinishedAt: now, LogTail: rl.String()}
-		_ = api.PostStatus(ctx, sreq)
+		_, _ = api.PostStatus(ctx, sreq)
 		return nil
 	}
 	defer lk.Release()
@@ -48,6 +48,10 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		return fmt.Errorf("mode %q not supported by this client", m)
 	}
 
+	// Signal that this client is actively running so the dashboard shows "running".
+	now := time.Now().UTC()
+	runID, _ := api.PostStatus(ctx, StatusReq{Status: string(model.StatusRunning), StartedAt: now})
+
 	res, backupErr := cm.Backup(ctx, mode.BackupOpts{
 		SourceDir:    cfg.Source,
 		Excludes:     scfg.Excludes,
@@ -65,7 +69,8 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 
 	sreq := buildStatus(res, backupErr)
 	sreq.LogTail = model.CapLogTail(rl.String())
-	if perr := api.PostStatus(ctx, sreq); perr != nil {
+	sreq.RunID = runID
+	if _, perr := api.PostStatus(ctx, sreq); perr != nil {
 		log.Printf("backitup: failed to report status: %v", perr)
 		if backupErr == nil {
 			return perr

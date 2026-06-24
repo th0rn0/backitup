@@ -60,7 +60,7 @@ code {
   align-items: center;
   gap: 7px;
 }
-.brand .sq { color: var(--accent); font-size: 15px; }
+.brand img { display: block; flex-shrink: 0; }
 
 .nav { margin-top: 28px; display: flex; flex-direction: column; gap: 1px; }
 .nav a {
@@ -234,10 +234,15 @@ td.mono { font-family: var(--mono); font-size: 12px; }
   font-size: 13px;
 }
 .status .dot { font-size: 10px; line-height: 1; }
-.status.ok     { color: var(--ok); }
-.status.stale  { color: var(--stale); }
-.status.failed { color: var(--failed); }
-.status.never  { color: var(--never); }
+.status.ok      { color: var(--ok); }
+.status.stale   { color: var(--stale); }
+.status.failed  { color: var(--failed); }
+.status.never   { color: var(--never); }
+.status.running { color: var(--accent); }
+.status.running .dot { animation: bkp-pulse 1.4s ease-in-out infinite; }
+@keyframes bkp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
+
+.fleet-meta .running { color: var(--accent); }
 
 .badge {
   font-family: var(--mono);

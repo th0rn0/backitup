@@ -15,7 +15,7 @@ type dashboardView struct {
 	Clients  []clientRow
 }
 
-type summaryCounts struct{ OK, Stale, Failed, Never int }
+type summaryCounts struct{ OK, Stale, Failed, Never, Running int }
 
 type clientRow struct {
 	ID          int64
@@ -59,6 +59,8 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 		switch {
 		case latest == nil:
 			row.LastBackup, row.Size = "never", "—"
+		case latest.Status == model.StatusRunning:
+			row.LastBackup, row.Size = "in progress", "…"
 		case latest.Status == model.StatusFailed:
 			row.LastBackup, row.Size = "FAILED "+relTime(now.Sub(latest.FinishedAt)), "—"
 		default:
@@ -73,6 +75,8 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 			v.Summary.Failed++
 		case model.HealthNever:
 			v.Summary.Never++
+		case model.HealthRunning:
+			v.Summary.Running++
 		}
 		v.Clients = append(v.Clients, row)
 	}
@@ -92,8 +96,10 @@ func healthRank(h string) int {
 		return 1
 	case model.HealthNever:
 		return 2
-	default: // ok
+	case model.HealthRunning:
 		return 3
+	default: // ok
+		return 4
 	}
 }
 
@@ -105,6 +111,8 @@ func healthLabel(h model.Health) string {
 		return "Stale"
 	case model.HealthFailed:
 		return "Failed"
+	case model.HealthRunning:
+		return "Running"
 	default:
 		return "Never"
 	}
@@ -118,6 +126,8 @@ func healthIcon(h model.Health) string {
 		return "▲"
 	case model.HealthFailed:
 		return "✖"
+	case model.HealthRunning:
+		return "◎"
 	default:
 		return "○"
 	}

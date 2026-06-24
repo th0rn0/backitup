@@ -22,6 +22,7 @@
     <main class="main">
       <div class="topbar">
         <div class="fleet-meta" role="status">
+          {{if .Summary.Running}}<span class="running">{{.Summary.Running}} running</span>{{end}}
           <span class="ok">{{.Summary.OK}} OK</span>
           <span class="stale">{{.Summary.Stale}} stale</span>
           <span class="failed">{{.Summary.Failed}} failed</span>

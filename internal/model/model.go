@@ -57,6 +57,7 @@ const (
 	StatusOK      RunStatus = "ok"
 	StatusFailed  RunStatus = "failed"
 	StatusOverlap RunStatus = "overlap"
+	StatusRunning RunStatus = "running"
 )
 
 // Health is the DERIVED dashboard state for a client (DD2). It is computed from
@@ -65,10 +66,11 @@ const (
 type Health string
 
 const (
-	HealthOK     Health = "ok"     // last run ok, within expected cadence
-	HealthStale  Health = "stale"  // no successful run within 2x expected interval
-	HealthFailed Health = "failed" // last run failed
-	HealthNever  Health = "never"  // no run has ever completed
+	HealthOK      Health = "ok"      // last run ok, within expected cadence
+	HealthStale   Health = "stale"   // no successful run within 2x expected interval
+	HealthFailed  Health = "failed"  // last run failed
+	HealthNever   Health = "never"   // no run has ever completed
+	HealthRunning Health = "running" // backup currently in progress
 )
 
 // Client is a single backup job: one source directory on one host, identified by

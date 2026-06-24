@@ -84,6 +84,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 
 type statusReq struct {
 	Status     string    `json:"status"`
+	RunID      int64     `json:"run_id"`
 	Bytes      int64     `json:"bytes"`
 	Files      int64     `json:"files"`
 	SnapshotID string    `json:"snapshot_id"`
@@ -93,6 +94,9 @@ type statusReq struct {
 }
 
 // postStatus records a client's run result (drives dashboard truthfulness).
+// When status=running a new run row is inserted and its ID is returned so the
+// client can update it with the final status. When run_id is non-zero the
+// existing row is updated instead of inserting a new one.
 func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	cl := clientFrom(r.Context())
 	var req statusReq
@@ -103,28 +107,48 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := model.RunStatus(req.Status)
-	if st != model.StatusOK && st != model.StatusFailed && st != model.StatusOverlap {
+	if st != model.StatusOK && st != model.StatusFailed && st != model.StatusOverlap && st != model.StatusRunning {
 		http.Error(w, "invalid status", http.StatusBadRequest)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// Update path: client is finalising a run it previously started.
+	if req.RunID > 0 && st != model.StatusRunning {
+		finished := req.FinishedAt
+		if finished.IsZero() {
+			finished = time.Now().UTC()
+		}
+		if err := s.st.UpdateRun(ctx, req.RunID, cl.ID, model.Run{
+			FinishedAt: finished, Status: st,
+			Bytes: req.Bytes, Files: req.Files, SnapshotID: req.SnapshotID, LogTail: req.LogTail,
+		}); err != nil {
+			http.Error(w, "failed to update run", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"run_id": req.RunID})
+		return
+	}
+
+	// Insert path: new run (or "running" sentinel).
 	finished := req.FinishedAt
-	if finished.IsZero() {
+	if finished.IsZero() && st != model.StatusRunning {
 		finished = time.Now().UTC()
 	}
 	started := req.StartedAt
 	if started.IsZero() {
-		started = finished
+		started = time.Now().UTC()
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	if _, err := s.st.RecordRun(ctx, model.Run{
+	id, err := s.st.RecordRun(ctx, model.Run{
 		ClientID: cl.ID, StartedAt: started, FinishedAt: finished, Status: st,
 		Bytes: req.Bytes, Files: req.Files, SnapshotID: req.SnapshotID, LogTail: req.LogTail,
-	}); err != nil {
+	})
+	if err != nil {
 		http.Error(w, "failed to record status", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"recorded": true})
+	writeJSON(w, http.StatusCreated, map[string]any{"run_id": id})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -55,7 +55,7 @@ func TestPostStatus(t *testing.T) {
 	}))
 	defer ts.Close()
 	api, _ := NewAPI(ts.URL, "tok", "", false)
-	err := api.PostStatus(context.Background(), StatusReq{Status: "ok", Bytes: 99, SnapshotID: "s1"})
+	_, err := api.PostStatus(context.Background(), StatusReq{Status: "ok", Bytes: 99, SnapshotID: "s1"})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestPostStatusNon201(t *testing.T) {
 	}))
 	defer ts.Close()
 	api, _ := NewAPI(ts.URL, "tok", "", false)
-	if err := api.PostStatus(context.Background(), StatusReq{Status: "ok"}); err == nil {
+	if _, err := api.PostStatus(context.Background(), StatusReq{Status: "ok"}); err == nil {
 		t.Fatal("expected error on 400")
 	}
 }

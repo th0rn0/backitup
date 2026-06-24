@@ -81,6 +81,7 @@ func (a *API) FetchConfig(ctx context.Context) (ConfigResp, error) {
 // StatusReq is the run result reported back to the server.
 type StatusReq struct {
 	Status     string    `json:"status"`
+	RunID      int64     `json:"run_id,omitempty"`
 	Bytes      int64     `json:"bytes"`
 	Files      int64     `json:"files"`
 	SnapshotID string    `json:"snapshot_id"`
@@ -89,25 +90,29 @@ type StatusReq struct {
 	LogTail    string    `json:"log_tail"`
 }
 
-// PostStatus reports a run result.
-func (a *API) PostStatus(ctx context.Context, s StatusReq) error {
+// PostStatus reports a run result and returns the server-assigned run ID.
+func (a *API) PostStatus(ctx context.Context, s StatusReq) (int64, error) {
 	body, err := json.Marshal(s)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base+"/api/v1/status", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+a.token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("post status: %w", err)
+		return 0, fmt.Errorf("post status: %w", err)
 	}
 	defer func() { io.Copy(io.Discard, resp.Body); resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("post status: server returned %s", resp.Status)
+		return 0, fmt.Errorf("post status: server returned %s", resp.Status)
 	}
-	return nil
+	var reply struct {
+		RunID int64 `json:"run_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&reply)
+	return reply.RunID, nil
 }
