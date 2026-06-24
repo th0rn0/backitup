@@ -8,6 +8,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"time"
 
@@ -106,6 +107,15 @@ func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, public
 	}
 	if sshHostKeyPath != "" {
 		s.sshHostKeyPath = sshHostKeyPath
+	}
+}
+
+// SyncAuthorizedKeys regenerates the sshd authorized_keys file from the current
+// database state. Call once after ConfigureIngest so any stale file left from a
+// previous mode change or failed write is corrected before sshd uses it.
+func (s *Server) SyncAuthorizedKeys(ctx context.Context) {
+	if err := s.regenAuthorizedKeys(ctx); err != nil {
+		log.Printf("authorized_keys startup sync failed: %v", err)
 	}
 }
 

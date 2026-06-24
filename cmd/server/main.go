@@ -50,6 +50,15 @@ func main() {
 		getenv("BACKITUP_SSH_HOST_KEY", "/srv/hostkeys/ssh_host_ed25519_key.pub"),
 	)
 
+	// Sync authorized_keys once at startup so any stale entry (wrong forced-command
+	// from a mode mismatch or a previously failed write) is corrected before sshd
+	// accepts connections. Non-fatal: logs the error and continues.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		srv.SyncAuthorizedKeys(ctx)
+		cancel()
+	}
+
 	// Lifecycle worker: offsite tiering + retention + integrity, on the server's
 	// own schedule (D1/D8/D9). Per-client OffsiteRemote gates whether a client
 	// is tiered; rclone is only invoked for clients that opt in.
