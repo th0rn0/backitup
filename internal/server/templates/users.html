@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Back! It! Up! — users</title>
+  <title>backitup — users</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -17,12 +17,11 @@
       </div>
       {{if .Username}}<div class="nav-footer">{{.Username}}</div>{{end}}
     </nav>
+
     <main class="main">
       <div class="topbar"><h1>Users</h1></div>
 
-      {{if .Error}}
-      <p class="error" style="color:var(--failed);margin-bottom:16px">{{.Error}}</p>
-      {{end}}
+      {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
 
       {{if .Users}}
       <table>
@@ -38,7 +37,7 @@
               {{if ne .Username $.Username}}
               <form method="POST" action="/users/{{.ID}}/delete" style="display:inline">
                 <input type="hidden" name="confirm" value="1">
-                <button type="submit" class="btn" style="background:var(--failed);color:#fff;padding:4px 10px;font-size:13px">Delete</button>
+                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
               </form>
               {{end}}
             </td>
@@ -48,18 +47,24 @@
       </table>
       {{end}}
 
-      <h2 style="margin-top:32px">Add user</h2>
-      <form method="POST" action="/users" style="margin-top:12px;max-width:360px;display:flex;flex-direction:column;gap:10px">
-        <input type="text" name="username" placeholder="Username" required autocomplete="off"
-               style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:var(--surface);color:inherit">
-        <input type="password" name="password" placeholder="Password (min 8 chars)" required
-               style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:var(--surface);color:inherit">
-        <button type="submit" class="btn" style="align-self:flex-start">Add user</button>
-      </form>
+      <div class="section">
+        <h2>Add user</h2>
+        <form method="POST" action="/users" class="form" style="max-width:360px">
+          <label for="new-username">Username</label>
+          <input type="text" id="new-username" name="username" placeholder="Username" required autocomplete="off">
+          <label for="new-password">Password</label>
+          <input type="password" id="new-password" name="password" placeholder="min 8 characters" required>
+          <div class="form-actions">
+            <button type="submit" class="btn">Add user</button>
+          </div>
+        </form>
+      </div>
 
-      <form method="POST" action="/logout" style="margin-top:40px">
-        <button type="submit" class="btn" style="background:transparent;border:1px solid var(--border);color:inherit">Sign out</button>
-      </form>
+      <div class="section">
+        <form method="POST" action="/logout">
+          <button type="submit" class="btn btn-ghost">Sign out</button>
+        </form>
+      </div>
     </main>
   </div>
 </body>

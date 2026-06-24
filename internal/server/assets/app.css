@@ -264,6 +264,7 @@ input[type="text"],
 input[type="password"],
 input[type="number"],
 input[type="email"],
+input:not([type]),
 select,
 textarea {
   width: 100%;
