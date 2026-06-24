@@ -10,8 +10,9 @@ import (
 )
 
 type dashboardView struct {
-	Summary summaryCounts
-	Clients []clientRow
+	Username string
+	Summary  summaryCounts
+	Clients  []clientRow
 }
 
 type summaryCounts struct{ OK, Stale, Failed, Never int }

@@ -30,6 +30,7 @@ a { color: var(--accent); }
 .nav { margin-top: 28px; display: flex; flex-direction: column; gap: 2px; }
 .nav a { color: var(--text-dim); text-decoration: none; padding: 7px 10px; border-radius: 6px; }
 .nav a.active, .nav a:hover { background: var(--surface-2); color: var(--text); }
+.nav-footer { margin-top: auto; padding: 8px 10px; font-size: 12px; color: var(--text-dim); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .main { flex: 1; padding: 24px 32px; min-width: 0; }
 .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 16px; flex-wrap: wrap; }
 .summary { font-family: var(--mono); font-size: 14px; color: var(--text-dim); }

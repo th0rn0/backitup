@@ -126,6 +126,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /clients/{name}/rotate", s.requireAdmin(s.postRotateClient))
 	mux.HandleFunc("POST /clients/{name}/delete", s.requireAdmin(s.postDeleteClient))
 
+	mux.HandleFunc("GET /users", s.requireAdmin(s.getUsers))
+	mux.HandleFunc("POST /users", s.requireAdmin(s.postCreateUser))
+	mux.HandleFunc("POST /users/{id}/delete", s.requireAdmin(s.postDeleteUser))
+
 	// Client API (bearer token), needed by Lane C. Control channel is HTTPS in
 	// production (cmd/server serves TLS when configured).
 	mux.HandleFunc("GET /api/v1/config", s.requireClient(s.getConfig))

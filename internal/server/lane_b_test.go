@@ -36,8 +36,8 @@ func setAdmin(t *testing.T, st *store.Store, user, pass string) {
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if err := st.SetAdmin(context.Background(), model.Admin{Username: user, PasswordHash: hash}); err != nil {
-		t.Fatalf("set admin: %v", err)
+	if err := st.UpsertUser(context.Background(), user, hash); err != nil {
+		t.Fatalf("upsert user: %v", err)
 	}
 }
 

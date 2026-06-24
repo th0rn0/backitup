@@ -9,6 +9,15 @@ import (
 	"github.com/th0rn0/backitup/internal/auth"
 )
 
+type contextKey int
+
+const ctxUsername contextKey = iota
+
+func usernameFromContext(ctx context.Context) string {
+	s, _ := ctx.Value(ctxUsername).(string)
+	return s
+}
+
 // mustSub roots the embedded asset FS at assets/ so /static/app.css maps to
 // assets/app.css.
 func mustSub(f fs.FS) fs.FS {
@@ -19,8 +28,8 @@ func mustSub(f fs.FS) fs.FS {
 	return sub
 }
 
-// requireAdmin wraps a handler so it only runs for a valid admin session;
-// otherwise it redirects to /login.
+// requireAdmin wraps a handler so it only runs for a valid session; otherwise
+// it redirects to /login. The current username is available via usernameFromContext.
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookie)
@@ -28,7 +37,9 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		next(w, r)
+		username := s.sessions.Username(c.Value)
+		ctx := context.WithValue(r.Context(), ctxUsername, username)
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -56,22 +67,22 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	admin, err := s.st.GetAdmin(ctx)
+	user, err := s.st.GetUserByUsername(ctx, username)
 	// Generic message on every failure path — no user enumeration (design doc).
 	const invalid = "Invalid username or password."
-	if err != nil || admin == nil || admin.Username != username {
+	if err != nil || user == nil {
 		s.limiter.record(r)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
 	}
-	ok, err := auth.VerifyPassword(password, admin.PasswordHash)
+	ok, err := auth.VerifyPassword(password, user.PasswordHash)
 	if err != nil || !ok {
 		s.limiter.record(r)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
 	}
 
-	tok, err := s.sessions.Create()
+	tok, err := s.sessions.Create(username)
 	if err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)
 		return
@@ -99,6 +110,7 @@ func (s *Server) postLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
+	username := usernameFromContext(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	view, err := s.buildDashboard(ctx)
@@ -106,6 +118,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load fleet", http.StatusInternalServerError)
 		return
 	}
+	view.Username = username
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.ExecuteTemplate(w, "dashboard.html", view); err != nil {
 		http.Error(w, "render error", http.StatusInternalServerError)

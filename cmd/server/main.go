@@ -13,7 +13,6 @@ import (
 
 	"github.com/th0rn0/backitup/internal/auth"
 	"github.com/th0rn0/backitup/internal/lifecycle"
-	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/server"
 	"github.com/th0rn0/backitup/internal/store"
 
@@ -73,17 +72,17 @@ func main() {
 	}
 }
 
-// bootstrapAdmin upserts the admin account from env if BACKITUP_ADMIN_USER and
-// BACKITUP_ADMIN_PASSWORD are set. If neither is set and no admin exists yet, it
-// warns (the webgui is unusable until an admin is created).
+// bootstrapAdmin seeds the users table from BACKITUP_ADMIN_USER / BACKITUP_ADMIN_PASSWORD
+// if set. On every start it upserts so that a password change in the env takes effect
+// without manual DB edits. Warns if no users exist and no env vars are configured.
 func bootstrapAdmin(st *store.Store) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	user := os.Getenv("BACKITUP_ADMIN_USER")
+	username := os.Getenv("BACKITUP_ADMIN_USER")
 	pass := os.Getenv("BACKITUP_ADMIN_PASSWORD")
-	if user == "" || pass == "" {
-		if admin, _ := st.GetAdmin(ctx); admin == nil {
-			log.Printf("backitup server: no admin set — set BACKITUP_ADMIN_USER and BACKITUP_ADMIN_PASSWORD to enable login")
+	if username == "" || pass == "" {
+		if n, _ := st.CountUsers(ctx); n == 0 {
+			log.Printf("backitup server: no users exist — set BACKITUP_ADMIN_USER and BACKITUP_ADMIN_PASSWORD to create the first user")
 		}
 		return nil
 	}
@@ -91,10 +90,10 @@ func bootstrapAdmin(st *store.Store) error {
 	if err != nil {
 		return err
 	}
-	if err := st.SetAdmin(ctx, model.Admin{Username: user, PasswordHash: hash}); err != nil {
+	if err := st.UpsertUser(ctx, username, hash); err != nil {
 		return err
 	}
-	log.Printf("backitup server: admin %q configured", user)
+	log.Printf("backitup server: user %q configured", username)
 	return nil
 }
 
