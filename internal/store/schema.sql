@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS runs (
     client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     started_at   TEXT    NOT NULL,
     finished_at  TEXT    NOT NULL,
-    status       TEXT    NOT NULL CHECK (status IN ('ok','failed','overlap')),
+    status       TEXT    NOT NULL CHECK (status IN ('ok','failed','overlap','running')),
     bytes        INTEGER NOT NULL DEFAULT 0,
     files        INTEGER NOT NULL DEFAULT 0,
     snapshot_id  TEXT    NOT NULL DEFAULT '',

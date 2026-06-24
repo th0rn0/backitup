@@ -66,6 +66,37 @@ func Open(dsn string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate users: %w", err)
 	}
+	// Migrate runs.status CHECK to include 'running'. SQLite has no ALTER
+	// CONSTRAINT; we recreate the table using the recommended swap pattern.
+	// Check sqlite_master to detect whether the migration is still needed.
+	var runsDDL string
+	_ = db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='runs'`).Scan(&runsDDL)
+	if !strings.Contains(runsDDL, "'running'") {
+		for _, stmt := range []string{
+			`PRAGMA foreign_keys=OFF`,
+			`CREATE TABLE runs_new (
+				id           INTEGER PRIMARY KEY AUTOINCREMENT,
+				client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+				started_at   TEXT    NOT NULL,
+				finished_at  TEXT    NOT NULL,
+				status       TEXT    NOT NULL CHECK (status IN ('ok','failed','overlap','running')),
+				bytes        INTEGER NOT NULL DEFAULT 0,
+				files        INTEGER NOT NULL DEFAULT 0,
+				snapshot_id  TEXT    NOT NULL DEFAULT '',
+				log_tail     TEXT    NOT NULL DEFAULT ''
+			)`,
+			`INSERT INTO runs_new SELECT * FROM runs`,
+			`DROP TABLE runs`,
+			`ALTER TABLE runs_new RENAME TO runs`,
+			`CREATE INDEX IF NOT EXISTS idx_runs_client_started ON runs (client_id, started_at DESC)`,
+			`PRAGMA foreign_keys=ON`,
+		} {
+			if _, err := db.Exec(stmt); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("migrate runs status: %w", err)
+			}
+		}
+	}
 	return &Store{db: db}, nil
 }
 
