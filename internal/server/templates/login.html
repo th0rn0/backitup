@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>backitup — sign in</title>
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 </head>
 <body>
   <main class="login-wrap">
     <form class="login" method="post" action="/login">
-      <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
+      <span class="brand"><img src="/static/favicon.svg" alt="" width="22" height="22" aria-hidden="true"> Back! It! Up!</span>
       {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
       <label for="username">Username</label>
       <input id="username" name="username" autocomplete="username" autofocus required>

@@ -18,7 +18,7 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-//go:embed assets/*.css assets/*.js
+//go:embed assets/*.css assets/*.js assets/*.svg
 var assetFS embed.FS
 
 const sessionCookie = "backitup_session"
