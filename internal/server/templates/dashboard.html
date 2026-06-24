@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Back! It! Up! — fleet</title>
+  <title>backitup — fleet</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -17,14 +17,14 @@
       </div>
       {{if .Username}}<div class="nav-footer">{{.Username}}</div>{{end}}
     </nav>
+
     <main class="main">
       <div class="topbar">
-        <div class="summary" role="status">
-          Fleet
-          <b class="ok">{{.Summary.OK}} OK</b> ·
-          <b class="stale">{{.Summary.Stale}} stale</b> ·
-          <b class="failed">{{.Summary.Failed}} failed</b> ·
-          <b class="never">{{.Summary.Never}} never</b>
+        <div class="fleet-meta" role="status">
+          <span class="ok">{{.Summary.OK}} OK</span>
+          <span class="stale">{{.Summary.Stale}} stale</span>
+          <span class="failed">{{.Summary.Failed}} failed</span>
+          <span class="never">{{.Summary.Never}} never</span>
         </div>
         <a class="btn" href="/clients/new">+ Add client</a>
       </div>
@@ -32,13 +32,24 @@
       {{if .Clients}}
       <table>
         <thead>
-          <tr><th>Status</th><th>Client</th><th>Mode</th><th>Last backup</th><th>Size</th><th>Retention</th><th>Offsite</th></tr>
+          <tr>
+            <th>Status</th>
+            <th>Client</th>
+            <th>Mode</th>
+            <th>Last backup</th>
+            <th>Size</th>
+            <th>Retention</th>
+            <th>Offsite</th>
+          </tr>
         </thead>
         <tbody>
           {{range .Clients}}
           <tr>
             <td data-label="Status">
-              <span class="status {{.Health}}"><span class="dot" aria-hidden="true">{{.Icon}}</span> {{.HealthLabel}}</span>
+              <span class="status {{.Health}}">
+                <span class="dot" aria-hidden="true">{{.Icon}}</span>
+                {{.HealthLabel}}
+              </span>
             </td>
             <td data-label="Client"><a href="/clients/{{.Slug}}">{{.Name}}</a></td>
             <td data-label="Mode"><span class="badge">{{.Mode}}</span></td>
@@ -53,12 +64,11 @@
       {{else}}
       <section class="empty">
         <h2>No clients yet</h2>
-        <p>A <strong>client</strong> backs up one directory on one machine. Add one here,
-           then paste the cron line it gives you onto that host.</p>
-        <ol>
-          <li>Add a client (you'll get a key + token)</li>
+        <p>A <strong>client</strong> backs up one directory on one machine. Add one to get started.</p>
+        <ol class="steps">
+          <li>Add a client — you'll get a key + token</li>
           <li>Paste the cron line on the host you want backed up</li>
-          <li>Watch its row turn <span class="status ok">green</span></li>
+          <li>Watch its row turn <span class="status ok"><span class="dot">●</span> ok</span></li>
         </ol>
         <br>
         <a class="btn" href="/clients/new">+ Add your first client</a>

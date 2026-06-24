@@ -3,39 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Back! It! Up! — {{.Client.Name}} run log</title>
+  <title>backitup — {{.Client.Name}} run log</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <div class="app">
     <nav class="sidebar" aria-label="Primary">
       <span class="brand"><span class="sq">▣</span> Back! It! Up!</span>
-      <div class="nav"><a href="/">Dashboard</a><a href="/clients/new">Add client</a><a href="/users">Users</a></div>
+      <div class="nav">
+        <a href="/">Dashboard</a>
+        <a href="/clients/new">Add client</a>
+        <a href="/users">Users</a>
+      </div>
       {{if .Username}}<div class="nav-footer">{{.Username}}</div>{{end}}
     </nav>
+
     <main class="main">
-      <div class="topbar">
-        <h1>{{.Client.Name}} — run log</h1>
+      <div class="crumb">
+        <a href="/">Dashboard</a>
+        <span class="sep">/</span>
+        <a href="/clients/{{.Client.Slug}}">{{.Client.Name}}</a>
+        <span class="sep">/</span>
+        <span>Run log</span>
       </div>
-      <table>
+
+      <div class="topbar">
+        <h1>Run log — {{.Client.Name}}</h1>
+      </div>
+
+      <table class="kv">
         <tbody>
           <tr><td>Status</td><td><span class="status {{.Run.Status}}">{{.Run.Status}}</span></td></tr>
-          <tr><td>Started</td><td class="mono">{{.Run.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</td></tr>
-          <tr><td>Duration</td><td class="mono">{{humanDuration .Run.StartedAt .Run.FinishedAt}}</td></tr>
-          <tr><td>Files</td><td class="mono">{{.Run.Files}}</td></tr>
-          <tr><td>Size</td><td class="mono">{{humanBytes .Run.Bytes}}</td></tr>
-          {{if .Run.SnapshotID}}<tr><td>Snapshot</td><td class="mono">{{.Run.SnapshotID}}</td></tr>{{end}}
+          <tr><td>Started</td><td>{{.Run.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</td></tr>
+          <tr><td>Duration</td><td>{{humanDuration .Run.StartedAt .Run.FinishedAt}}</td></tr>
+          <tr><td>Files</td><td>{{.Run.Files}}</td></tr>
+          <tr><td>Size</td><td>{{humanBytes .Run.Bytes}}</td></tr>
+          {{if .Run.SnapshotID}}<tr><td>Snapshot</td><td>{{.Run.SnapshotID}}</td></tr>{{end}}
         </tbody>
       </table>
 
-      <h2 style="margin-top:24px">Log output</h2>
-      {{if .Run.LogTail}}
-      <pre class="mono" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:16px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;font-size:13px;line-height:1.5">{{.Run.LogTail}}</pre>
-      {{else}}
-      <p class="summary">No log available — logs are cleared after the retention period.</p>
-      {{end}}
-
-      <p style="margin-top:24px"><a href="/clients/{{.Client.Slug}}">&larr; Back to {{.Client.Name}}</a></p>
+      <div class="section">
+        <h2>Log output</h2>
+        {{if .Run.LogTail}}
+        <pre class="log">{{.Run.LogTail}}</pre>
+        {{else}}
+        <p style="color:var(--text-dim);font-size:13px">No log available.</p>
+        {{end}}
+      </div>
     </main>
   </div>
 </body>
