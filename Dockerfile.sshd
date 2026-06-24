@@ -1,11 +1,15 @@
-# backitup SSH ingest container (Lane A). Debian base because its rsync package
-# ships /usr/bin/rrsync (the restricted-rsync jail we use for rsync-mode
+# backitup SSH ingest container (Lane A). Debian trixie base because its rsync
+# package ships /usr/bin/rrsync (the restricted-rsync jail we use for rsync-mode
 # confinement); it's a python3 script, hence python3-minimal.
+#
+# trixie (not bookworm): bookworm ships rsync 3.2.7 which hangs in protocol
+# negotiation with Alpine 3.20's rsync 3.4.3. trixie ships rsync 3.4.1
+# which is protocol-compatible with the client.
 #
 # A single 'backitup' user (uid 10001, matching the app image so shared-volume
 # ownership lines up). Per-client confinement is via forced commands in
 # authorized_keys (rrsync <dir> / backitup-recv <dir>), not per-user accounts.
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
