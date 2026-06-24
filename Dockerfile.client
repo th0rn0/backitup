@@ -13,8 +13,11 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/backitup-client ./
 # --- runtime ---
 FROM alpine:3.20
 RUN apk add --no-cache rsync openssh-client ca-certificates \
-    && adduser -D -u 10001 backitup
+    && adduser -D -u 10001 backitup \
+    && chmod a+w /etc/passwd
+COPY scripts/client-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY --from=build /out/backitup-client /usr/local/bin/backitup-client
 USER backitup
 ENV BACKITUP_SOURCE=/source
-ENTRYPOINT ["/usr/local/bin/backitup-client"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh", "/usr/local/bin/backitup-client"]
