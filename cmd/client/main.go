@@ -11,7 +11,9 @@ import (
 	"flag"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/th0rn0/backitup/internal/client"
 	"github.com/th0rn0/backitup/internal/model"
@@ -48,7 +50,13 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	if err := client.Run(context.Background(), cfg, lockPath(cfg)); err != nil {
+	// SIGTERM/SIGINT → cancel the context so rsync is killed and Run posts a
+	// final "failed" status before the process exits (fixes stuck "running" rows
+	// when the container is stopped mid-backup).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := client.Run(ctx, cfg, lockPath(cfg)); err != nil {
 		log.Fatalf("backup: %v", err)
 	}
 }

@@ -130,6 +130,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /users", s.requireAdmin(s.postCreateUser))
 	mux.HandleFunc("POST /users/{id}/delete", s.requireAdmin(s.postDeleteUser))
 
+	// Fleet status API (session-authed); polled by the dashboard for live updates.
+	mux.HandleFunc("GET /api/v1/fleet", s.requireAdmin(s.getFleetStatus))
+
 	// Client API (bearer token), needed by Lane C. Control channel is HTTPS in
 	// production (cmd/server serves TLS when configured).
 	mux.HandleFunc("GET /api/v1/config", s.requireClient(s.getConfig))

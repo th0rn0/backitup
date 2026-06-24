@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"time"
@@ -107,6 +108,50 @@ func (s *Server) postLogout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+type fleetStatusResp struct {
+	Summary struct {
+		OK      int `json:"ok"`
+		Stale   int `json:"stale"`
+		Failed  int `json:"failed"`
+		Never   int `json:"never"`
+		Running int `json:"running"`
+	} `json:"summary"`
+	Clients []fleetClientStatus `json:"clients"`
+}
+
+type fleetClientStatus struct {
+	Slug        string `json:"slug"`
+	Health      string `json:"health"`
+	HealthLabel string `json:"health_label"`
+	Icon        string `json:"icon"`
+	LastBackup  string `json:"last_backup"`
+	Size        string `json:"size"`
+}
+
+func (s *Server) getFleetStatus(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	view, err := s.buildDashboard(ctx)
+	if err != nil {
+		http.Error(w, "failed to load fleet", http.StatusInternalServerError)
+		return
+	}
+	var resp fleetStatusResp
+	resp.Summary.OK = view.Summary.OK
+	resp.Summary.Stale = view.Summary.Stale
+	resp.Summary.Failed = view.Summary.Failed
+	resp.Summary.Never = view.Summary.Never
+	resp.Summary.Running = view.Summary.Running
+	for _, c := range view.Clients {
+		resp.Clients = append(resp.Clients, fleetClientStatus{
+			Slug: c.Slug, Health: c.Health, HealthLabel: c.HealthLabel,
+			Icon: c.Icon, LastBackup: c.LastBackup, Size: c.Size,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {

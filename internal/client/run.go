@@ -70,7 +70,11 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 	sreq := buildStatus(res, backupErr)
 	sreq.LogTail = model.CapLogTail(rl.String())
 	sreq.RunID = runID
-	if _, perr := api.PostStatus(ctx, sreq); perr != nil {
+	// Use a fresh context: the run context may be cancelled (e.g. SIGTERM killed
+	// rsync mid-transfer) but we still need to update the "running" row to failed.
+	finalCtx, finalCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer finalCancel()
+	if _, perr := api.PostStatus(finalCtx, sreq); perr != nil {
 		log.Printf("backitup: failed to report status: %v", perr)
 		if backupErr == nil {
 			return perr

@@ -46,17 +46,17 @@
         </thead>
         <tbody>
           {{range .Clients}}
-          <tr>
-            <td data-label="Status">
+          <tr data-slug="{{.Slug}}">
+            <td data-label="Status" data-field="status">
               <span class="status {{.Health}}">
                 <span class="dot" aria-hidden="true">{{.Icon}}</span>
-                {{.HealthLabel}}
+                <span class="label">{{.HealthLabel}}</span>
               </span>
             </td>
             <td data-label="Client"><a href="/clients/{{.Slug}}">{{.Name}}</a></td>
             <td data-label="Mode"><span class="badge">{{.Mode}}</span></td>
-            <td data-label="Last backup" class="mono">{{.LastBackup}}</td>
-            <td data-label="Size" class="mono">{{.Size}}</td>
+            <td data-label="Last backup" class="mono" data-field="last_backup">{{.LastBackup}}</td>
+            <td data-label="Size" class="mono" data-field="size">{{.Size}}</td>
             <td data-label="Retention" class="mono">{{.Retention}}</td>
             <td data-label="Offsite" class="mono">{{.Offsite}}</td>
           </tr>
@@ -78,5 +78,6 @@
       {{end}}
     </main>
   </div>
+  <script src="/static/fleet.js"></script>
 </body>
 </html>
