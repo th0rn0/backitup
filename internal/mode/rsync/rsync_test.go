@@ -15,11 +15,12 @@ Total file size: 4,096 bytes
 Total transferred file size: 1,234 bytes
 `
 	files, bytesN := parseStats(out)
-	if files != 3 {
-		t.Errorf("files = %d, want 3", files)
+	// snapshot totals (10 files, 4096 bytes), not transferred-only (3, 1234)
+	if files != 10 {
+		t.Errorf("files = %d, want 10", files)
 	}
-	if bytesN != 1234 {
-		t.Errorf("bytes = %d, want 1234", bytesN)
+	if bytesN != 4096 {
+		t.Errorf("bytes = %d, want 4096", bytesN)
 	}
 }
 

@@ -112,7 +112,13 @@ func runRsync(ctx context.Context, args []string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		return stdout.String(), fmt.Errorf("rsync %v: %w: %s", args, err, strings.TrimSpace(stderr.String()))
 	}
-	return stdout.String(), nil
+	out := stdout.String()
+	// Include stderr: some rsync/rrsync combinations write --stats there, and
+	// it surfaces SSH/rrsync warnings that would otherwise be silently lost.
+	if se := strings.TrimSpace(stderr.String()); se != "" {
+		out += "\n" + se
+	}
+	return out, nil
 }
 
 // sshTransport returns the bare host and the rsync "-e" ssh command string,
@@ -142,8 +148,11 @@ func ensureTrailingSlash(p string) string {
 }
 
 var (
-	reFiles = regexp.MustCompile(`Number of regular files transferred:\s*([\d,]+)`)
-	reBytes = regexp.MustCompile(`Total transferred file size:\s*([\d,]+)`)
+	// Use snapshot totals (not just transferred-only) so that runs where
+	// --link-dest hardlinks everything still show the full snapshot size on
+	// the dashboard rather than "0 files, 0 B".
+	reFiles = regexp.MustCompile(`Number of files:\s*([\d,]+)`)
+	reBytes = regexp.MustCompile(`Total file size:\s*([\d,]+)`)
 )
 
 // parseStats best-effort extracts files/bytes from rsync --stats output. A miss
