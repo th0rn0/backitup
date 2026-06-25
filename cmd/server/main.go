@@ -49,6 +49,7 @@ func main() {
 		os.Getenv("BACKITUP_CLIENT_IMAGE"),
 		getenv("BACKITUP_SSH_HOST_KEY", "/srv/hostkeys/ssh_host_ed25519_key.pub"),
 	)
+	srv.ConfigureRclone(getenv("BACKITUP_RCLONE_CONFIG", "/data/rclone.conf"))
 
 	// Sync authorized_keys once at startup so any stale entry (wrong forced-command
 	// from a mode mismatch or a previously failed write) is corrected before sshd

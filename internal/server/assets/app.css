@@ -208,6 +208,7 @@ h2 {
 }
 .alert-warn  { background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.4); color: var(--stale); }
 .alert-error { background: rgba(248,81,73,0.1);  border: 1px solid rgba(248,81,73,0.4);  color: var(--failed); }
+.alert-ok    { background: rgba(63,185,80,0.1);  border: 1px solid rgba(63,185,80,0.4);  color: #3fb950; }
 
 /* ── Tables ── */
 table { width: 100%; border-collapse: collapse; }

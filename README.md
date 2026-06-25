@@ -304,50 +304,47 @@ hot store (never the newest), trims run history, and integrity-checks the latest
 snapshot. tar.gz archives upload as-is; rsync snapshots are tar'd into one immutable
 object each (no hardlink inflation, no destructive `sync`).
 
-#### Setting up rclone inside the container
+#### Setting up remotes via the webgui (recommended)
 
-The simplest path — works for S3 and any provider that doesn't need a browser:
+Open **Remote storage** in the sidebar. Two forms are available:
+
+- **S3-compatible** — enter your access key, secret, region, and (for non-AWS providers)
+  a custom endpoint. Works with AWS S3, Cloudflare R2, Wasabi, MinIO, Backblaze B2
+  (S3-compatible), and any other S3-compatible provider. The remote is created
+  instantly with no file transfer.
+
+- **Google Drive** — enter your Google OAuth 2.0 Client ID and Secret, then click
+  "Connect Google Drive". The server redirects your browser to Google for consent,
+  exchanges the code for a token, and writes the config. No file transfer; the OAuth
+  dance happens entirely through your browser.
+
+  > Google Drive OAuth requires `BACKITUP_PUBLIC_API` to be set to the server's public
+  > URL so Google can redirect back. It also requires a Google Cloud project with the
+  > Drive API enabled and an OAuth 2.0 client (Web application type) whose redirect URI
+  > is `{BACKITUP_PUBLIC_API}/oauth/gdrive/callback`.
+
+#### Setting up rclone via the CLI
+
+If you prefer the CLI, or are using a provider not covered above:
 
 ```sh
 docker compose exec app sh
 rclone --config /data/rclone.conf config
 ```
 
-Follow the interactive prompts. Name the remote exactly as you entered it in the
-webgui (`s3` or `gdrive`). The config is written to the `app-data` volume and
-persists across restarts.
+Follow the interactive prompts. Name the remote to match the value in the client's
+**Offsite destination** dropdown (`s3` or `gdrive`). The config is written to the
+`app-data` volume and persists across restarts.
 
-#### Setting up rclone outside the container (Google Drive / OAuth providers)
-
-Google Drive (and some other providers) need a browser for the OAuth consent screen.
-The `app` container has no display, so you must complete the OAuth step on a machine
-that has one, then copy the resulting config in.
-
-**On a machine with a browser (your laptop, not the server):**
+For providers that need a browser (Google Drive, OneDrive), complete the OAuth step on
+a machine that has a browser, then copy the resulting config into the container:
 
 ```sh
-# Install rclone: https://rclone.org/install/
-rclone config
+# On your laptop:
+rclone config   # → New remote → name: gdrive → type: drive → follow OAuth prompts
 
-# New remote → name it exactly as shown in the webgui (e.g. "gdrive")
-# → type: drive → follow the OAuth browser prompts
-# When done, confirm it's there:
-rclone config show
-```
-
-**Copy the config to the server:**
-
-```sh
-# If using Docker named volumes (default compose setup):
+# Copy into the container:
 docker compose cp ~/.config/rclone/rclone.conf app:/data/rclone.conf
-
-# If using host bind mounts, copy to wherever app-data lives on the host:
-cp ~/.config/rclone/rclone.conf /servdata/backitup/app-data/rclone.conf
-```
-
-Restart the app so the lifecycle worker picks it up:
-
-```sh
 docker compose restart app
 ```
 

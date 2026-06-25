@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
@@ -40,6 +41,11 @@ type Server struct {
 	publicAPI      string // full control-channel base URL shown as BACKITUP_API (e.g. http://host:8080)
 	clientImage    string
 	sshHostKeyPath string // path to sshd host public key for known_hosts generation
+
+	// Offsite remote management: rclone config path + in-progress OAuth sessions.
+	rcloneConfig  string
+	oauthMu       sync.Mutex
+	oauthSessions map[string]*pendingGDriveAuth
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
@@ -84,6 +90,7 @@ func New(st *store.Store, secure bool) *Server {
 		backupBaseDir: "/srv/backups",
 		publicHost:    "your-server:2222",
 		clientImage:   "th0rn0/backitup-client:latest",
+		oauthSessions: make(map[string]*pendingGDriveAuth),
 	}
 }
 
@@ -107,6 +114,14 @@ func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, public
 	}
 	if sshHostKeyPath != "" {
 		s.sshHostKeyPath = sshHostKeyPath
+	}
+}
+
+// ConfigureRclone sets the path to the rclone config file used by the remote
+// storage management UI. Empty path disables the feature.
+func (s *Server) ConfigureRclone(path string) {
+	if path != "" {
+		s.rcloneConfig = path
 	}
 }
 
@@ -140,6 +155,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /users", s.requireAdmin(s.getUsers))
 	mux.HandleFunc("POST /users", s.requireAdmin(s.postCreateUser))
 	mux.HandleFunc("POST /users/{id}/delete", s.requireAdmin(s.postDeleteUser))
+
+	mux.HandleFunc("GET /settings/remotes", s.requireAdmin(s.getRemotes))
+	mux.HandleFunc("POST /settings/remotes/s3", s.requireAdmin(s.postCreateS3Remote))
+	mux.HandleFunc("POST /settings/remotes/gdrive/start", s.requireAdmin(s.postStartGDriveAuth))
+	mux.HandleFunc("POST /settings/remotes/{name}/delete", s.requireAdmin(s.postDeleteRemote))
+	// getGDriveCallback is intentionally public — Google's redirect lands here.
+	mux.HandleFunc("GET /oauth/gdrive/callback", s.getGDriveCallback)
 
 	// Fleet status API (session-authed); polled by the dashboard for live updates.
 	mux.HandleFunc("GET /api/v1/fleet", s.requireAdmin(s.getFleetStatus))
