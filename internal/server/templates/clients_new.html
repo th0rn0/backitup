@@ -63,9 +63,11 @@
           <option value="gdrive">GDrive</option>
         </select>
 
-        <label for="offsite_dir">Backup directory <span style="color:var(--text-dim);font-weight:400">(optional)</span></label>
-        <input id="offsite_dir" name="offsite_dir" placeholder="Backups/MyLaptop" autocomplete="off">
-        <div class="field-hint">Subdirectory within the remote where backups are stored. Leave empty to use the client name.</div>
+        <div id="offsite-dir-row" style="display:none">
+          <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>
+          <input id="offsite-dir-input" name="offsite_dir" placeholder="" autocomplete="off">
+          <div id="offsite-dir-hint" class="field-hint"></div>
+        </div>
 
         <label class="checkbox-label" style="margin-top:18px">
           <input type="checkbox" name="skip_symlinks" value="1">
@@ -88,5 +90,6 @@
       </form>
     </main>
   </div>
+  <script src="/static/offsite-dir.js"></script>
 </body>
 </html>
