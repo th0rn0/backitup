@@ -161,7 +161,6 @@
                 <td><span class="badge badge-ok">on disk</span></td>
                 <td class="flex-row-sm">
                   <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}" class="btn btn-ghost btn-sm" download>Download</a>
-                  <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}?view=1" class="btn btn-ghost btn-sm" target="_blank" rel="noopener">Open</a>
                   <form method="POST" action="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}/delete" class="d-inline"
                         data-confirm="Delete local snapshot {{.ID}}? This cannot be undone.">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
@@ -225,7 +224,6 @@
                 </td>
                 <td class="flex-row-sm">
                   <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>
-                  <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download?view=1" class="btn btn-ghost btn-sm" target="_blank" rel="noopener">Open</a>
                   <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/delete" class="d-inline"
                         data-confirm="Delete offsite object {{.SnapshotID}}? This cannot be undone.">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
