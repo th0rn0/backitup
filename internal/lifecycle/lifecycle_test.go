@@ -90,8 +90,8 @@ func openStore(t *testing.T) *store.Store {
 	return st
 }
 
-// Happy path: all snapshots offsited; hot prune drops the old+offsited one but
-// keeps newest and within-horizon; offsite keeps everything (long horizon).
+// Happy path: offsite worker uploads all snapshots; lifecycle worker then
+// prunes hot (drops old+offsited, keeps newest and within-horizon).
 func TestRunOnceOffsiteAndPrune(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
@@ -103,11 +103,13 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 	mkArchive(t, filepath.Join(dir, "mid.tar.gz"), now.Add(-5*24*time.Hour))
 	mkArchive(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour))
 
-	off := &fakeOffsite{}
-	if err := RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
+	deps := Deps{Store: st, Offsite: &fakeOffsite{}, BackupBaseDir: base, Now: func() time.Time { return now }}
+	off := deps.Offsite.(*fakeOffsite)
 
+	// Offsite worker uploads first.
+	if err := RunOffsiteOnce(context.Background(), deps); err != nil {
+		t.Fatalf("RunOffsiteOnce: %v", err)
+	}
 	// All three offsited.
 	if len(off.up) != 3 {
 		t.Fatalf("offsite uploads = %d, want 3: %v", len(off.up), off.up)
@@ -117,6 +119,10 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 		t.Fatalf("offsite records = %d, want 3", len(objs))
 	}
 
+	// Lifecycle worker then prunes.
+	if err := RunOnce(context.Background(), deps); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
 	// Hot: old (>14d, offsited) pruned; mid + new kept.
 	left, _ := os.ReadDir(dir)
 	names := map[string]bool{}
@@ -131,8 +137,8 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 	}
 }
 
-// Offsite-first: when upload fails, nothing is recorded offsite AND the old
-// snapshot is NOT pruned from hot (never delete an un-offsited copy).
+// Offsite-first: when the offsite worker's upload fails, nothing is recorded
+// offsite, AND the lifecycle worker must NOT prune the old snapshot from hot.
 func TestRunOnceOffsiteFirstProtectsHot(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
@@ -143,13 +149,18 @@ func TestRunOnceOffsiteFirstProtectsHot(t *testing.T) {
 	mkArchive(t, filepath.Join(dir, "old.tar.gz"), now.Add(-40*24*time.Hour))
 	mkArchive(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour))
 
-	off := &fakeOffsite{fail: true}
-	if err := RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}); err == nil {
+	deps := Deps{Store: st, Offsite: &fakeOffsite{fail: true}, BackupBaseDir: base, Now: func() time.Time { return now }}
+
+	// Offsite worker fails.
+	if err := RunOffsiteOnce(context.Background(), deps); err == nil {
 		t.Fatal("expected error when offsite upload fails")
 	}
 	if objs, _ := st.ListOffsiteObjects(context.Background(), id); len(objs) != 0 {
 		t.Fatalf("nothing should be recorded offsite, got %d", len(objs))
 	}
+
+	// Lifecycle worker runs — must not prune the un-offsited old snapshot.
+	_ = RunOnce(context.Background(), deps)
 	if _, err := os.Stat(filepath.Join(dir, "old.tar.gz")); err != nil {
 		t.Fatal("old un-offsited archive must NOT be pruned (offsite-first)")
 	}

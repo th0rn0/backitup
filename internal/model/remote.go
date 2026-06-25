@@ -71,7 +71,7 @@ var Backends = []BackendDef{
 		},
 	},
 	{
-		ID: BackendS3Compat, Label: "S3-Compatible (Wasabi / MinIO / R2 / …)",
+		ID: BackendS3Compat, Label: "S3-Compatible (Wasabi / MinIO / R2 / …) — untested",
 		PathHint:  "Bucket and optional prefix — e.g. my-bucket or my-bucket/clients",
 		PathLabel: "Bucket / path",
 		Fields: []RemoteField{
@@ -107,7 +107,7 @@ var Backends = []BackendDef{
 		},
 	},
 	{
-		ID: BackendSFTP, Label: "SFTP",
+		ID: BackendSFTP, Label: "SFTP — untested",
 		PathHint:  "Absolute path on the server — e.g. /srv/backups/clients",
 		PathLabel: "Remote path",
 		Fields: []RemoteField{
@@ -119,7 +119,7 @@ var Backends = []BackendDef{
 		},
 	},
 	{
-		ID: BackendWebDAV, Label: "WebDAV",
+		ID: BackendWebDAV, Label: "WebDAV — untested",
 		PathHint:  "Path on the WebDAV server — e.g. backups/clients",
 		PathLabel: "Remote path",
 		Fields: []RemoteField{
@@ -138,7 +138,7 @@ var Backends = []BackendDef{
 		},
 	},
 	{
-		ID: BackendAzure, Label: "Azure Blob Storage",
+		ID: BackendAzure, Label: "Azure Blob Storage — untested",
 		PathHint:  "Container and optional prefix — e.g. backups or backups/clients",
 		PathLabel: "Container / path",
 		Fields: []RemoteField{
@@ -147,7 +147,7 @@ var Backends = []BackendDef{
 		},
 	},
 	{
-		ID: BackendFTP, Label: "FTP",
+		ID: BackendFTP, Label: "FTP — untested",
 		PathHint:  "Path on the FTP server — e.g. /backups/clients",
 		PathLabel: "Remote path",
 		Fields: []RemoteField{

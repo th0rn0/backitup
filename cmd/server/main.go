@@ -83,6 +83,11 @@ func main() {
 	}
 	stopLifecycle := lifecycle.StartWorker(context.Background(), lcDeps, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "1h")))
 	defer stopLifecycle()
+	// Offsite upload worker: independent of the maintenance lifecycle.
+	// BACKITUP_OFFSITE_POLL_INTERVAL controls how often clients are checked;
+	// each client's "Upload interval" setting controls whether an upload is due.
+	stopOffsite := lifecycle.StartOffsiteWorker(context.Background(), lcDeps, parseInterval(getenv("BACKITUP_OFFSITE_POLL_INTERVAL", "5m")))
+	defer stopOffsite()
 
 	// Wire the "Backup now" button: resolves client by ID then runs an immediate
 	// offsite pass using the same deps as the background worker.
