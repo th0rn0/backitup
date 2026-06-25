@@ -55,8 +55,12 @@
           </div>
         </div>
 
-        <label for="offsite_remote">Offsite remote (rclone)</label>
-        <input id="offsite_remote" name="offsite_remote" placeholder="s3 (leave blank to disable)">
+        <label for="offsite_remote">Offsite destination</label>
+        <select id="offsite_remote" name="offsite_remote">
+          <option value="">None</option>
+          <option value="s3">S3</option>
+          <option value="gdrive">GDrive</option>
+        </select>
 
         <label class="checkbox-label" style="margin-top:18px">
           <input type="checkbox" name="skip_symlinks" value="1">
