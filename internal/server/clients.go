@@ -290,15 +290,9 @@ func (s *Server) postTestClientOffsite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the rclone path the same way the lifecycle worker does.
-	dir := c.OffsiteDir
-	if c.OffsiteRemote == "gdrive" && dir != "" {
-		dir = "{" + dir + "}"
-	}
+	// Test against the remote root only — the client-specific subdirectory is
+	// created on first upload and won't exist yet for new clients.
 	path := c.OffsiteRemote + ":"
-	if dir != "" {
-		path += dir
-	}
 
 	out, err := exec.CommandContext(ctx, "rclone", "--config", s.rcloneConfig, "lsd", path).CombinedOutput()
 	slug := r.PathValue("name")
