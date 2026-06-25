@@ -54,6 +54,21 @@ CREATE TABLE IF NOT EXISTS offsite_objects (
 CREATE INDEX IF NOT EXISTS idx_offsite_client
     ON offsite_objects (client_id, uploaded_at DESC);
 
+CREATE TABLE IF NOT EXISTS offsite_runs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id           INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    triggered_by        TEXT    NOT NULL DEFAULT 'scheduled',
+    started_at          TEXT    NOT NULL,
+    finished_at         TEXT    NOT NULL DEFAULT '',
+    status              TEXT    NOT NULL DEFAULT 'running',
+    snapshots_uploaded  INTEGER NOT NULL DEFAULT 0,
+    bytes_uploaded      INTEGER NOT NULL DEFAULT 0,
+    error_text          TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_offsite_runs_client
+    ON offsite_runs (client_id, started_at DESC);
+
 -- Single admin account (D3: built-in login, argon2id).
 CREATE TABLE IF NOT EXISTS admin (
     id            INTEGER PRIMARY KEY CHECK (id = 1),

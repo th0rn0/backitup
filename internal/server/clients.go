@@ -106,7 +106,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runs, _ := s.st.ListRuns(ctx, c.ID, 20)
-	offsiteObjects, _ := s.st.ListOffsiteObjects(ctx, c.ID)
+	offsiteRuns, _ := s.st.ListOffsiteRuns(ctx, c.ID, 20)
 	var latest *model.Run
 	if len(runs) > 0 {
 		latest = &runs[0]
@@ -114,15 +114,15 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
-		"Username":       usernameFromContext(r.Context()),
-		"Client":         c,
-		"Health":         string(h),
-		"HealthLabel":    healthLabel(h),
-		"Icon":           healthIcon(h),
-		"Runs":           runs,
-		"OffsiteObjects": offsiteObjects,
-		"Flash":          r.URL.Query().Get("msg"),
-		"Error":          r.URL.Query().Get("err"),
+		"Username":    usernameFromContext(r.Context()),
+		"Client":      c,
+		"Health":      string(h),
+		"HealthLabel": healthLabel(h),
+		"Icon":        healthIcon(h),
+		"Runs":        runs,
+		"OffsiteRuns": offsiteRuns,
+		"Flash":       r.URL.Query().Get("msg"),
+		"Error":       r.URL.Query().Get("err"),
 	})
 }
 

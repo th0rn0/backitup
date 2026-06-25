@@ -103,29 +103,33 @@
         </div>
 
         <div data-tab="offsite">
-          {{if .OffsiteObjects}}
+          {{if .OffsiteRuns}}
           <table>
             <thead>
               <tr>
-                <th>Snapshot</th>
-                <th>Uploaded</th>
-                <th>Remote</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th>Snapshots</th>
                 <th>Size</th>
+                <th>Triggered by</th>
               </tr>
             </thead>
             <tbody>
-              {{range .OffsiteObjects}}
+              {{range .OffsiteRuns}}
               <tr>
-                <td data-label="Snapshot" class="mono" style="font-size:11px">{{.SnapshotID}}</td>
-                <td data-label="Uploaded" class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
-                <td data-label="Remote"><span class="badge">{{.Remote}}</span></td>
-                <td data-label="Size" class="mono">{{humanBytes .Bytes}}</td>
+                <td data-label="Status"><span class="status {{.Status}}">{{.Status}}</span></td>
+                <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
+                <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
+                <td data-label="Snapshots" class="mono">{{.SnapshotsUploaded}}</td>
+                <td data-label="Size" class="mono">{{humanBytes .BytesUploaded}}</td>
+                <td data-label="Triggered by"><span class="badge">{{.TriggeredBy}}</span></td>
               </tr>
               {{end}}
             </tbody>
           </table>
           {{else}}
-          <p style="color:var(--text-dim);font-size:13px">No offsite uploads yet. {{if .Client.OffsiteRemote}}The lifecycle worker will upload on its next pass.{{else}}Configure an offsite destination below to enable cold storage.{{end}}</p>
+          <p style="color:var(--text-dim);font-size:13px">No offsite uploads yet. {{if .Client.OffsiteRemote}}The lifecycle worker will upload on its next pass, or click <strong>Backup now</strong> above.{{else}}Configure an offsite destination below to enable cold storage.{{end}}</p>
           {{end}}
         </div>
       </div>

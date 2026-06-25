@@ -99,6 +99,25 @@ func Open(dsn string) (*Store, error) {
 			}
 		}
 	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS offsite_runs (
+		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+		client_id           INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+		triggered_by        TEXT    NOT NULL DEFAULT 'scheduled',
+		started_at          TEXT    NOT NULL,
+		finished_at         TEXT    NOT NULL DEFAULT '',
+		status              TEXT    NOT NULL DEFAULT 'running',
+		snapshots_uploaded  INTEGER NOT NULL DEFAULT 0,
+		bytes_uploaded      INTEGER NOT NULL DEFAULT 0,
+		error_text          TEXT    NOT NULL DEFAULT ''
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate offsite_runs: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_offsite_runs_client
+		ON offsite_runs (client_id, started_at DESC)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate offsite_runs index: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -401,6 +420,47 @@ func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, 
 	default:
 		return nil, err
 	}
+}
+
+// RecordOffsiteRun inserts a completed offsite session record in a single
+// INSERT. Use this instead of a Start/Finish pair so no orphaned "running"
+// rows accumulate if the server restarts mid-upload.
+func (s *Store) RecordOffsiteRun(ctx context.Context, r model.OffsiteRun) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO offsite_runs
+		 (client_id, triggered_by, started_at, finished_at, status, snapshots_uploaded, bytes_uploaded, error_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ClientID, r.TriggeredBy,
+		r.StartedAt.UTC().Format(rfc3339), r.FinishedAt.UTC().Format(rfc3339),
+		r.Status, r.SnapshotsUploaded, r.BytesUploaded, r.ErrorText)
+	return err
+}
+
+// ListOffsiteRuns returns up to limit offsite run records for a client, newest first.
+func (s *Store) ListOffsiteRuns(ctx context.Context, clientID int64, limit int) ([]model.OffsiteRun, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, client_id, triggered_by, started_at, finished_at, status,
+		        snapshots_uploaded, bytes_uploaded, error_text
+		 FROM offsite_runs WHERE client_id=? ORDER BY started_at DESC LIMIT ?`,
+		clientID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.OffsiteRun
+	for rows.Next() {
+		var r model.OffsiteRun
+		var startedStr, finishedStr string
+		if err := rows.Scan(&r.ID, &r.ClientID, &r.TriggeredBy,
+			&startedStr, &finishedStr, &r.Status,
+			&r.SnapshotsUploaded, &r.BytesUploaded, &r.ErrorText); err != nil {
+			return nil, err
+		}
+		r.StartedAt, _ = time.Parse(rfc3339, startedStr)
+		r.FinishedAt, _ = time.Parse(rfc3339, finishedStr)
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // UpdateClientOffsite changes the offsite_remote, offsite_dir, and offsite_interval_secs for a client.

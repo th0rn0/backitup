@@ -125,11 +125,20 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	}
 
 	if offsiteThisPass {
-		if err := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited); err != nil {
-			return err
+		start := d.now()
+		snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited)
+		pruneErr := pruneOffsite(ctx, d, c)
+		combinedErr := uploadErr
+		if combinedErr == nil {
+			combinedErr = pruneErr
 		}
-		if err := pruneOffsite(ctx, d, c); err != nil {
-			return err
+		// Record a run only when something happened (data moved or an error occurred);
+		// skip silent no-op passes (nothing to upload, nothing to prune) to avoid clutter.
+		if snapsUploaded > 0 || combinedErr != nil {
+			recordOffsiteRun(ctx, d, c, "scheduled", start, snapsUploaded, bytesUploaded, combinedErr)
+		}
+		if combinedErr != nil {
+			return combinedErr
 		}
 	}
 
@@ -160,14 +169,18 @@ func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool,
 	return set, nil
 }
 
-func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsited map[string]bool) error {
+// offsiteNewSnapshots uploads any snapshots not yet in cold storage.
+// Returns the number of snapshots uploaded and total bytes transferred.
+func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsited map[string]bool) (int, int64, error) {
+	var totalSnaps int
+	var totalBytes int64
 	for _, s := range snaps {
 		if offsited[s.ID] {
 			continue
 		}
 		obj, err := sm.PrepareOffsite(ctx, clientDir, s)
 		if err != nil {
-			return fmt.Errorf("prepare offsite %s: %w", s.ID, err)
+			return totalSnaps, totalBytes, fmt.Errorf("prepare offsite %s: %w", s.ID, err)
 		}
 		// rsync builds a temp archive; remove it after upload (tar.gz returns the
 		// archive in place, which must NOT be removed).
@@ -176,7 +189,7 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		}
 		bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, s.ID))
 		if err != nil {
-			return fmt.Errorf("offsite upload %s: %w", s.ID, err)
+			return totalSnaps, totalBytes, fmt.Errorf("offsite upload %s: %w", s.ID, err)
 		}
 		if d.Verbose {
 			log.Printf("offsite: client=%q remote=%s snapshot=%s uploaded bytes=%d", c.Name, c.OffsiteRemote, s.ID, bytes)
@@ -188,11 +201,13 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{
 			ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Bytes: bytes,
 		}); err != nil {
-			return fmt.Errorf("record offsite %s: %w", s.ID, err)
+			return totalSnaps, totalBytes, fmt.Errorf("record offsite %s: %w", s.ID, err)
 		}
 		offsited[s.ID] = true
+		totalSnaps++
+		totalBytes += bytes
 	}
-	return nil
+	return totalSnaps, totalBytes, nil
 }
 
 // pruneOffsite enforces the INDEPENDENT offsite retention horizon (D8), keeping
@@ -329,6 +344,7 @@ func offsiteDue(ctx context.Context, d Deps, c model.Client) (bool, error) {
 // OffsiteClient runs an immediate offsite upload + prune pass for a single
 // client, bypassing the per-client interval check. Safe to call concurrently
 // with the background worker because all state mutations go through the store.
+// Always records a run entry so adhoc triggers appear in the history log.
 func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if d.Offsite == nil || c.OffsiteRemote == "" {
 		return fmt.Errorf("client %q has no offsite remote configured", c.Name)
@@ -348,10 +364,37 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if err != nil {
 		return err
 	}
-	if err := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited); err != nil {
-		return err
+	start := d.now()
+	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited)
+	pruneErr := pruneOffsite(ctx, d, c)
+	combinedErr := uploadErr
+	if combinedErr == nil {
+		combinedErr = pruneErr
 	}
-	return pruneOffsite(ctx, d, c)
+	// Always record adhoc runs regardless of whether new snapshots were uploaded.
+	recordOffsiteRun(ctx, d, c, "adhoc", start, snapsUploaded, bytesUploaded, combinedErr)
+	return combinedErr
+}
+
+// recordOffsiteRun writes a completed offsite session to the store. Non-fatal:
+// a logging failure never aborts the upload itself.
+func recordOffsiteRun(ctx context.Context, d Deps, c model.Client, triggeredBy string, start time.Time, snaps int, bytes int64, runErr error) {
+	status, errText := "ok", ""
+	if runErr != nil {
+		status, errText = "failed", runErr.Error()
+	}
+	if err := d.Store.RecordOffsiteRun(ctx, model.OffsiteRun{
+		ClientID:          c.ID,
+		TriggeredBy:       triggeredBy,
+		StartedAt:         start,
+		FinishedAt:        d.now(),
+		Status:            status,
+		SnapshotsUploaded: snaps,
+		BytesUploaded:     bytes,
+		ErrorText:         errText,
+	}); err != nil {
+		log.Printf("offsite run: record failed for client=%q: %v", c.Name, err)
+	}
 }
 
 func objectPath(dir string, m model.Mode, snapshotID string) string {

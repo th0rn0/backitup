@@ -132,6 +132,21 @@ type OffsiteObject struct {
 	UploadedAt time.Time
 }
 
+// OffsiteRun records one upload session (scheduled or adhoc). Mirrors the runs
+// table for local backups so operators can see when offsite uploads happened,
+// whether they succeeded, and how much data was moved.
+type OffsiteRun struct {
+	ID                int64
+	ClientID          int64
+	TriggeredBy       string // "scheduled" | "adhoc"
+	StartedAt         time.Time
+	FinishedAt        time.Time
+	Status            string // "running" | "ok" | "failed"
+	SnapshotsUploaded int
+	BytesUploaded     int64
+	ErrorText         string
+}
+
 // Admin is the single webgui admin account (D3). PasswordHash is argon2id.
 // Retained for backwards-compat with the admin table; new code uses User.
 type Admin struct {
