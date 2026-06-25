@@ -56,6 +56,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		OffsiteRetentionDays: atoiDefault(r.PostFormValue("offsite_retention_days"), 90),
 		ExpectedIntervalSecs: atoiDefault(r.PostFormValue("expected_interval_secs"), 0),
 		OffsiteRemote:        r.PostFormValue("offsite_remote"),
+		OffsiteDir:           strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/")),
 		SkipSymlinks:         r.PostFormValue("skip_symlinks") == "1",
 		SSHPubKey:            pubLine,
 		TokenHash:            tokenHash,
@@ -233,6 +234,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid offsite_remote value", http.StatusBadRequest)
 		return
 	}
+	dir := strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/"))
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -247,7 +249,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote); err != nil {
+	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir); err != nil {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}

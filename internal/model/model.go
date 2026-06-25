@@ -94,6 +94,7 @@ type Client struct {
 	ExpectedIntervalSecs int
 
 	OffsiteRemote string // rclone remote name selecting this client's cold target; "" = no offsite
+	OffsiteDir    string // subdirectory within the remote; "" = use the client's slug
 
 	// Auth. The private SSH key is shown once at creation and NOT retained (D4);
 	// only the public key and a hash of the token live here.

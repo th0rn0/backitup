@@ -44,6 +44,7 @@
           <tr><td>Hot retention</td><td>{{.Client.RetentionDays}}d</td></tr>
           <tr><td>Offsite retention</td><td>{{.Client.OffsiteRetentionDays}}d</td></tr>
           <tr><td>Offsite remote</td><td>{{if .Client.OffsiteRemote}}{{.Client.OffsiteRemote}}{{else}}—{{end}}</td></tr>
+          <tr><td>Offsite dir</td><td class="mono">{{if .Client.OffsiteDir}}{{.Client.OffsiteDir}}{{else}}—{{end}}</td></tr>
         </tbody>
       </table>
 
@@ -83,11 +84,17 @@
         <h2>Offsite destination</h2>
         <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Where to tier cold copies of this client's backups. Requires the matching rclone remote to be configured on the server.</p>
         <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form">
-          <select name="offsite_remote">
+          <label for="offsite-remote">Remote</label>
+          <select id="offsite-remote" name="offsite_remote">
             <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None</option>
             <option value="s3"{{if eq .Client.OffsiteRemote "s3"}} selected{{end}}>S3</option>
             <option value="gdrive"{{if eq .Client.OffsiteRemote "gdrive"}} selected{{end}}>GDrive</option>
           </select>
+
+          <label for="offsite-dir">Backup directory <span style="color:var(--text-dim);font-weight:400">(optional)</span></label>
+          <input id="offsite-dir" name="offsite_dir" value="{{.Client.OffsiteDir}}" placeholder="Backups/MyLaptop" autocomplete="off">
+          <div class="field-hint">Subdirectory within the remote. Empty = use client name (<code>{{.Client.Slug}}</code>).</div>
+
           <div class="form-actions">
             <button type="submit" class="btn">Save</button>
           </div>

@@ -159,7 +159,7 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		if c.Mode == model.ModeRsync {
 			defer os.Remove(obj)
 		}
-		bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(model.Slug(c.Name), c.Mode, s.ID))
+		bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, s.ID))
 		if err != nil {
 			return fmt.Errorf("offsite upload %s: %w", s.ID, err)
 		}
@@ -188,7 +188,7 @@ func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
 		if i == 0 || !o.UploadedAt.Before(cutoff) {
 			continue // protect newest; keep anything within the horizon
 		}
-		if err := d.Offsite.Delete(ctx, c.OffsiteRemote, objectPath(model.Slug(c.Name), c.Mode, o.SnapshotID)); err != nil {
+		if err := d.Offsite.Delete(ctx, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, o.SnapshotID)); err != nil {
 			return fmt.Errorf("offsite delete %s: %w", o.SnapshotID, err)
 		}
 		if err := d.Store.DeleteOffsiteObject(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
@@ -238,10 +238,20 @@ func verifyLatest(ctx context.Context, c model.Client, sm mode.ServerMode, clien
 	}
 }
 
-func objectPath(clientSlug string, m model.Mode, snapshotID string) string {
+// offsiteDir returns the remote subdirectory for a client. When the operator
+// has not configured an explicit OffsiteDir, the client's slug is used so
+// existing deployments are unaffected.
+func offsiteDir(c model.Client) string {
+	if c.OffsiteDir != "" {
+		return c.OffsiteDir
+	}
+	return model.Slug(c.Name)
+}
+
+func objectPath(dir string, m model.Mode, snapshotID string) string {
 	name := snapshotID
 	if m == model.ModeRsync {
 		name = snapshotID + ".tar.gz" // rsync snapshot dir -> one offsite archive
 	}
-	return clientSlug + "/" + name
+	return dir + "/" + name
 }
