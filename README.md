@@ -293,20 +293,9 @@ Key points:
 
 ### Offsite (cold storage)
 
-Offsite tiering is per-client: set a client's **offsite remote** to an rclone remote
-name. Point `BACKITUP_RCLONE_CONFIG` at an `rclone.conf` that defines an encrypted
-**crypt** remote wrapping your provider (so the provider only ever sees ciphertext):
-
-```ini
-[gdrive]
-type = drive
-# ... your provider auth ...
-
-[cold]
-type = crypt
-remote = gdrive:backitup
-password = <rclone obscure output>
-```
+Offsite tiering is per-client: set a client's **offsite remote** in the webgui to an
+rclone remote name. The remote must be defined in `rclone.conf` (pointed to by
+`BACKITUP_RCLONE_CONFIG`, default `/data/rclone.conf`).
 
 The lifecycle worker (every `BACKITUP_LIFECYCLE_INTERVAL`) tiers each client's new
 snapshots to its remote **offsite-first** (never prunes a hot snapshot that isn't
@@ -314,6 +303,92 @@ offsited yet), prunes offsite on its own `offsite_retention_days` horizon, prune
 hot store (never the newest), trims run history, and integrity-checks the latest
 snapshot. tar.gz archives upload as-is; rsync snapshots are tar'd into one immutable
 object each (no hardlink inflation, no destructive `sync`).
+
+#### Setting up rclone inside the container
+
+The simplest path — works for S3 and any provider that doesn't need a browser:
+
+```sh
+docker compose exec app sh
+rclone --config /data/rclone.conf config
+```
+
+Follow the interactive prompts. Name the remote exactly as you entered it in the
+webgui (`s3` or `gdrive`). The config is written to the `app-data` volume and
+persists across restarts.
+
+#### Setting up rclone outside the container (Google Drive / OAuth providers)
+
+Google Drive (and some other providers) need a browser for the OAuth consent screen.
+The `app` container has no display, so you must complete the OAuth step on a machine
+that has one, then copy the resulting config in.
+
+**On a machine with a browser (your laptop, not the server):**
+
+```sh
+# Install rclone: https://rclone.org/install/
+rclone config
+
+# New remote → name it exactly as shown in the webgui (e.g. "gdrive")
+# → type: drive → follow the OAuth browser prompts
+# When done, confirm it's there:
+rclone config show
+```
+
+**Copy the config to the server:**
+
+```sh
+# If using Docker named volumes (default compose setup):
+docker compose cp ~/.config/rclone/rclone.conf app:/data/rclone.conf
+
+# If using host bind mounts, copy to wherever app-data lives on the host:
+cp ~/.config/rclone/rclone.conf /servdata/backitup/app-data/rclone.conf
+```
+
+Restart the app so the lifecycle worker picks it up:
+
+```sh
+docker compose restart app
+```
+
+#### Recommended: wrap the provider in a crypt remote
+
+Rclone's `crypt` remote encrypts before upload so the storage provider only ever sees
+ciphertext. Create the provider remote first, then wrap it:
+
+```sh
+docker compose exec app sh
+rclone --config /data/rclone.conf config
+
+# Step 1 — provider remote (e.g. S3):
+# New remote → name: s3 → type: s3 → fill in credentials, bucket, region
+
+# Step 2 — encryption layer on top:
+# New remote → name: s3 (overwrite the existing one? no — use a new name like s3-crypt)
+# → type: crypt → remote: s3:my-bucket/backitup
+# Enter a strong password; rclone stores it obscured in the config
+```
+
+Set the webgui's offsite remote to `s3-crypt` (not `s3`) so uploads are encrypted.
+The resulting config looks like:
+
+```ini
+[s3]
+type = s3
+provider = AWS
+access_key_id = AKIA...
+secret_access_key = ...
+region = eu-west-1
+
+[s3-crypt]
+type = crypt
+remote = s3:my-bucket/backitup
+password = <rclone-obscured value>
+password2 = <rclone-obscured salt>
+```
+
+> **Warning:** losing the `password` and `password2` values means losing access to
+> your offsite data permanently. Back them up separately from the server.
 
 > Set `BACKITUP_ADMIN_USER` + `BACKITUP_ADMIN_PASSWORD` to create the webgui login.
 > Set `BACKITUP_TLS_CERT` + `BACKITUP_TLS_KEY` to serve HTTPS (required in production —
