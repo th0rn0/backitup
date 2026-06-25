@@ -48,7 +48,7 @@
               <td><span class="badge">{{.Type}}</span></td>
               <td>
                 <form method="POST" action="/settings/remotes/{{.Name}}/delete" style="display:inline"
-                      onsubmit="return confirm('Delete remote "{{.Name}}"? This only removes the config entry — no data is deleted from the remote.')">
+                      onsubmit="return confirm('Delete remote {{.Name}}? This only removes the config entry — no data is deleted from the remote.')">
                   <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
               </td>
