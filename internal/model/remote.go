@@ -200,6 +200,12 @@ func (r Remote) RcloneSection() string {
 		sb.WriteString("type = s3\n")
 		sb.WriteString("provider = Other\n")
 		sb.WriteString("env_auth = false\n")
+	case BackendB2:
+		sb.WriteString("type = b2\n")
+		// Without hard_delete, rclone only creates a hide marker; the file
+		// remains stored (and billed) on B2. hard_delete permanently removes
+		// the file and all its versions on deletefile.
+		sb.WriteString("hard_delete = true\n")
 	case BackendGDrive:
 		sb.WriteString("type = drive\n")
 		sb.WriteString("scope = drive\n")
