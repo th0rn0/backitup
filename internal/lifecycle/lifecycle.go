@@ -169,14 +169,20 @@ func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool,
 	return set, nil
 }
 
-// offsiteNewSnapshots uploads any snapshots not yet in cold storage.
+// offsiteNewSnapshots uploads snapshots not yet in cold storage.
+// When c.OffsiteUploadMode is "latest", only the newest un-offsited snapshot
+// is uploaded (snaps must be sorted newest-first). Otherwise all are uploaded.
 // Returns the number of snapshots uploaded and total bytes transferred.
 func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsited map[string]bool) (int, int64, error) {
 	var totalSnaps int
 	var totalBytes int64
+	latestOnly := c.OffsiteUploadMode == "latest"
 	for _, s := range snaps {
 		if offsited[s.ID] {
 			continue
+		}
+		if latestOnly && totalSnaps > 0 {
+			break
 		}
 		obj, err := sm.PrepareOffsite(ctx, clientDir, s)
 		if err != nil {

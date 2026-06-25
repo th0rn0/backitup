@@ -237,6 +237,13 @@
             <div class="field-hint">How often the lifecycle worker uploads new snapshots for this client.</div>
           </div>
 
+          <label>Upload scope</label>
+          <div class="radio-group">
+            <label><input type="radio" name="offsite_upload_mode" value="all"{{if ne .Client.OffsiteUploadMode "latest"}} checked{{end}}> All snapshots</label>
+            <label><input type="radio" name="offsite_upload_mode" value="latest"{{if eq .Client.OffsiteUploadMode "latest"}} checked{{end}}> Latest only</label>
+          </div>
+          <div class="field-hint">All: every local snapshot is mirrored offsite. Latest: only the newest snapshot is kept in cold storage — saves space but offsite has less history.</div>
+
           <div class="form-actions">
             <button type="submit" class="btn">Save</button>
           </div>

@@ -265,6 +265,10 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	remote := r.PostFormValue("offsite_remote")
 	dir := strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/"))
 	intervalSecs := atoiDefault(r.PostFormValue("offsite_interval_secs"), 0)
+	uploadMode := r.PostFormValue("offsite_upload_mode")
+	if uploadMode != "latest" {
+		uploadMode = "all"
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -288,7 +292,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, intervalSecs); err != nil {
+	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, intervalSecs, uploadMode); err != nil {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}

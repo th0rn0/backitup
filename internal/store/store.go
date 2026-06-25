@@ -50,11 +50,12 @@ func Open(dsn string) (*Store, error) {
 	// upgrades. SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS, so we ignore
 	// the "duplicate column name" error that fires when the column already exists.
 	for _, migration := range []string{
-		`ALTER TABLE clients ADD COLUMN version              INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE clients ADD COLUMN skip_symlinks        INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE clients ADD COLUMN offsite_dir          TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN version               INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE clients ADD COLUMN skip_symlinks         INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE clients ADD COLUMN offsite_dir           TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN offsite_interval_secs INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE clients ADD COLUMN token_prefix         TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN token_prefix          TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN offsite_upload_mode   TEXT    NOT NULL DEFAULT 'all'`,
 	} {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
@@ -143,15 +144,19 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 	if err != nil {
 		return 0, fmt.Errorf("marshal excludes: %w", err)
 	}
+	if c.OffsiteUploadMode == "" {
+		c.OffsiteUploadMode = "all"
+	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO clients (name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
-			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, skip_symlinks)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, skip_symlinks,
+			offsite_upload_mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Name, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
 		c.OffsiteRetentionDays, c.ExpectedIntervalSecs, c.OffsiteRemote, c.OffsiteDir,
 		c.OffsiteIntervalSecs, c.SSHPubKey, c.TokenHash, c.TokenPrefix, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
-		b2i(c.SkipSymlinks))
+		b2i(c.SkipSymlinks), c.OffsiteUploadMode)
 	if err != nil {
 		return 0, fmt.Errorf("insert client: %w", err)
 	}
@@ -163,7 +168,8 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
-			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks
+			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
+			offsite_upload_mode
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -200,7 +206,8 @@ func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
-			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks
+			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
+			offsite_upload_mode
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -594,11 +601,15 @@ func (s *Store) DeleteRemote(ctx context.Context, name string) error {
 	return err
 }
 
-// UpdateClientOffsite changes the offsite_remote, offsite_dir, and offsite_interval_secs for a client.
+// UpdateClientOffsite changes the offsite_remote, offsite_dir, offsite_interval_secs, and offsite_upload_mode for a client.
 // An empty remote disables offsite tiering for this client.
-func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir string, intervalSecs int) error {
+func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir string, intervalSecs int, uploadMode string) error {
+	if uploadMode == "" {
+		uploadMode = "all"
+	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_interval_secs=? WHERE id=?`, remote, dir, intervalSecs, id)
+		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_interval_secs=?, offsite_upload_mode=? WHERE id=?`,
+		remote, dir, intervalSecs, uploadMode, id)
 	if err != nil {
 		return fmt.Errorf("update offsite remote: %w", err)
 	}
@@ -734,7 +745,8 @@ func scanClient(sc scanner) (model.Client, error) {
 	var enabled, skipSymlinks int
 	if err := sc.Scan(&c.ID, &c.Name, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.OffsiteRetentionDays, &c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
-		&c.OffsiteIntervalSecs, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks); err != nil {
+		&c.OffsiteIntervalSecs, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks,
+		&c.OffsiteUploadMode); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)

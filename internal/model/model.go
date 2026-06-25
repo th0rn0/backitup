@@ -96,6 +96,7 @@ type Client struct {
 	OffsiteRemote       string // rclone remote name selecting this client's cold target; "" = no offsite
 	OffsiteDir          string // subdirectory within the remote; "" = use the client's slug
 	OffsiteIntervalSecs int    // min seconds between lifecycle passes; 0 = every pass
+	OffsiteUploadMode   string // "all" (default) or "latest" — which snapshots to push offsite
 
 	// Auth. The private SSH key is shown once at creation and NOT retained (D4);
 	// only the public key and a hash of the token live here.
