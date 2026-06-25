@@ -310,43 +310,31 @@ Open **Remote storage** in the sidebar. Two forms are available:
 
 - **S3-compatible** — enter your access key, secret, region, and (for non-AWS providers)
   a custom endpoint. Works with AWS S3, Cloudflare R2, Wasabi, MinIO, Backblaze B2
-  (S3-compatible), and any other S3-compatible provider. The remote is created
-  instantly with no file transfer.
+  (S3-compatible), and any other S3-compatible provider. The remote is created instantly.
 
-- **Google Drive** — enter your Google OAuth 2.0 Client ID and Secret, then click
-  "Connect Google Drive". The server redirects your browser to Google for consent,
-  exchanges the code for a token, and writes the config. No file transfer; the OAuth
-  dance happens entirely through your browser.
+- **Google Drive** — uses a **service account**, not OAuth. No browser redirect, no token
+  expiry surprises, no `BACKITUP_PUBLIC_API` requirement. Paste the service account JSON
+  key and optionally a Shared Drive ID. Setup:
 
-  > Google Drive OAuth requires `BACKITUP_PUBLIC_API` to be set to the server's public
-  > URL so Google can redirect back. It also requires a Google Cloud project with the
-  > Drive API enabled and an OAuth 2.0 client (Web application type) whose redirect URI
-  > is `{BACKITUP_PUBLIC_API}/oauth/gdrive/callback`.
+  1. Enable the **Google Drive API** in Google Cloud Console → APIs & Services → Library.
+  2. Create a service account (IAM & Admin → Service Accounts → Create Service Account).
+  3. Create a JSON key for it (Keys → Add Key → JSON) and download it.
+  4. Paste the JSON into the webgui form.
+  5. Share a Google Drive folder (or Shared Drive) with the service account's email
+     (`client_email` in the JSON) so it has somewhere to write.
 
 #### Setting up rclone via the CLI
 
-If you prefer the CLI, or are using a provider not covered above:
+If you prefer the CLI, or need a provider not covered by the webgui forms:
 
 ```sh
 docker compose exec app sh
 rclone --config /data/rclone.conf config
 ```
 
-Follow the interactive prompts. Name the remote to match the value in the client's
-**Offsite destination** dropdown (`s3` or `gdrive`). The config is written to the
+Follow the interactive prompts. Name the remote to match the client's **Offsite
+destination** dropdown value (`s3` or `gdrive`). The config is written to the
 `app-data` volume and persists across restarts.
-
-For providers that need a browser (Google Drive, OneDrive), complete the OAuth step on
-a machine that has a browser, then copy the resulting config into the container:
-
-```sh
-# On your laptop:
-rclone config   # → New remote → name: gdrive → type: drive → follow OAuth prompts
-
-# Copy into the container:
-docker compose cp ~/.config/rclone/rclone.conf app:/data/rclone.conf
-docker compose restart app
-```
 
 #### Recommended: wrap the provider in a crypt remote
 

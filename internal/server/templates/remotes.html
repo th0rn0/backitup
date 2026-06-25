@@ -48,7 +48,7 @@
               <td><span class="badge">{{.Type}}</span></td>
               <td>
                 <form method="POST" action="/settings/remotes/{{.Name}}/delete" style="display:inline"
-                      onsubmit="return confirm('Delete remote &quot;{{.Name}}&quot;? This only removes the config entry — it does not delete any data from the remote.')">
+                      onsubmit="return confirm('Delete remote "{{.Name}}"? This only removes the config entry — no data is deleted from the remote.')">
                   <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
               </td>
@@ -64,7 +64,7 @@
         <h2>Add S3-compatible remote</h2>
         <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">
           Works with AWS S3, Cloudflare R2, Wasabi, Backblaze B2 (S3-compatible), MinIO, and any other S3-compatible provider.
-          Leave <em>Endpoint</em> empty for AWS; fill it in for other providers.
+          Leave <em>Endpoint</em> empty for AWS; set it for other providers.
         </p>
         <form method="POST" action="/settings/remotes/s3" class="form">
           <label for="s3-name">Remote name</label>
@@ -82,7 +82,7 @@
           <div class="field-hint">Leave empty for region-less providers (Cloudflare R2, MinIO).</div>
 
           <label for="s3-endpoint">Endpoint</label>
-          <input id="s3-endpoint" name="endpoint" placeholder="https://<account>.r2.cloudflarestorage.com" autocomplete="off">
+          <input id="s3-endpoint" name="endpoint" placeholder="https://&lt;account&gt;.r2.cloudflarestorage.com" autocomplete="off">
           <div class="field-hint">Leave empty for AWS S3. Required for Cloudflare R2, Wasabi, MinIO, and similar.</div>
 
           <div class="form-actions">
@@ -91,44 +91,48 @@
         </form>
       </div>
 
-      <!-- ── Google Drive ── -->
+      <!-- ── Google Drive (service account) ── -->
       <div class="section">
         <h2>Add Google Drive remote</h2>
         <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">
-          Requires a Google Cloud project with the Drive API enabled and an OAuth 2.0 client (Web application type).
-          The server redirects your browser to Google for consent, then exchanges the code for a token — no manual config file transfer needed.
+          Uses a <strong>service account</strong> — no browser redirect, no OAuth token expiry.
+          The service account authenticates via a JSON key; rclone handles JWT auth internally.
         </p>
 
-        {{if not .PublicAPI}}
-        <div class="alert alert-warn" role="alert">
-          <code>BACKITUP_PUBLIC_API</code> is not set. Set it to the server's public URL (e.g. <code>https://backitup.example.com</code>) before connecting Google Drive — it is used as the OAuth redirect URI.
-        </div>
-        {{end}}
-
         <details style="margin-bottom:20px;font-size:13px">
-          <summary style="cursor:pointer;color:var(--text-dim);user-select:none">How to create a Google OAuth 2.0 client ▸</summary>
-          <ol style="margin:10px 0 0 20px;color:var(--text-dim);line-height:1.7">
+          <summary style="cursor:pointer;color:var(--text-dim);user-select:none">How to create a Google service account ▸</summary>
+          <ol style="margin:10px 0 0 20px;color:var(--text-dim);line-height:1.8">
             <li>Open <strong>Google Cloud Console → APIs &amp; Services → Library</strong> and enable the <strong>Google Drive API</strong>.</li>
-            <li>Go to <strong>APIs &amp; Services → Credentials → Create Credentials → OAuth 2.0 Client ID</strong>.</li>
-            <li>Application type: <strong>Web application</strong>.</li>
-            <li>Add an Authorised redirect URI: <code>{{if .PublicAPI}}{{.PublicAPI}}{{else}}http://your-server{{end}}/oauth/gdrive/callback</code></li>
-            <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> from the resulting dialog and paste them below.</li>
+            <li>Go to <strong>IAM &amp; Admin → Service Accounts → Create Service Account</strong>. Give it a name and click through.</li>
+            <li>On the service account's page go to <strong>Keys → Add Key → Create new key → JSON</strong>. Download the file.</li>
+            <li>Paste the contents of that JSON file into the field below.</li>
+            <li>Grant the service account access to a Drive location — either:
+              <ul style="margin-top:4px">
+                <li><strong>Shared Drive (recommended):</strong> add the service account email as a member of the Shared Drive. Paste the Shared Drive ID in the optional field below.</li>
+                <li><strong>Regular folder:</strong> share a folder in your Drive with the service account email address (found in the JSON under <code>"client_email"</code>).</li>
+              </ul>
+            </li>
           </ol>
         </details>
 
-        <form method="POST" action="/settings/remotes/gdrive/start" class="form">
+        <form method="POST" action="/settings/remotes/gdrive" class="form">
           <label for="gdrive-name">Remote name</label>
           <input id="gdrive-name" name="name" value="gdrive" required placeholder="gdrive" autocomplete="off">
           <div class="field-hint">Must match the client's <strong>Offsite destination</strong> value. The built-in dropdown uses <code>gdrive</code>.</div>
 
-          <label for="gdrive-client-id">Client ID</label>
-          <input id="gdrive-client-id" name="client_id" required autocomplete="off">
+          <label for="gdrive-sa">Service account JSON</label>
+          <textarea id="gdrive-sa" name="service_account_credentials" required rows="8"
+                    style="font-family:var(--mono);font-size:11px;resize:vertical"
+                    placeholder='{"type":"service_account","project_id":"...","private_key_id":"...","private_key":"-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n","client_email":"...@....iam.gserviceaccount.com",...}'
+                    autocomplete="off"></textarea>
+          <div class="field-hint">Paste the full contents of the downloaded JSON key file.</div>
 
-          <label for="gdrive-client-secret">Client Secret</label>
-          <input id="gdrive-client-secret" name="client_secret" type="password" required autocomplete="new-password">
+          <label for="gdrive-team-drive">Shared Drive ID <span style="font-weight:400;color:var(--text-dim)">(optional)</span></label>
+          <input id="gdrive-team-drive" name="team_drive_id" placeholder="0ABCdef123..." autocomplete="off">
+          <div class="field-hint">The ID from the Shared Drive URL. Leave empty if using a shared regular folder instead.</div>
 
           <div class="form-actions">
-            <button type="submit" class="btn"{{if not .PublicAPI}} disabled title="Set BACKITUP_PUBLIC_API first"{{end}}>Connect Google Drive →</button>
+            <button type="submit" class="btn">Add remote</button>
           </div>
         </form>
       </div>

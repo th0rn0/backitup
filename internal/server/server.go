@@ -10,7 +10,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
@@ -42,10 +41,8 @@ type Server struct {
 	clientImage    string
 	sshHostKeyPath string // path to sshd host public key for known_hosts generation
 
-	// Offsite remote management: rclone config path + in-progress OAuth sessions.
-	rcloneConfig  string
-	oauthMu       sync.Mutex
-	oauthSessions map[string]*pendingGDriveAuth
+	// Offsite remote management via the /settings/remotes webgui.
+	rcloneConfig string
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
@@ -88,9 +85,8 @@ func New(st *store.Store, secure bool) *Server {
 		secure:        secure,
 		authKeysPath:  "/srv/authkeys/authorized_keys",
 		backupBaseDir: "/srv/backups",
-		publicHost:    "your-server:2222",
-		clientImage:   "th0rn0/backitup-client:latest",
-		oauthSessions: make(map[string]*pendingGDriveAuth),
+		publicHost:  "your-server:2222",
+		clientImage: "th0rn0/backitup-client:latest",
 	}
 }
 
@@ -158,10 +154,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /settings/remotes", s.requireAdmin(s.getRemotes))
 	mux.HandleFunc("POST /settings/remotes/s3", s.requireAdmin(s.postCreateS3Remote))
-	mux.HandleFunc("POST /settings/remotes/gdrive/start", s.requireAdmin(s.postStartGDriveAuth))
+	mux.HandleFunc("POST /settings/remotes/gdrive", s.requireAdmin(s.postCreateGDriveRemote))
 	mux.HandleFunc("POST /settings/remotes/{name}/delete", s.requireAdmin(s.postDeleteRemote))
-	// getGDriveCallback is intentionally public — Google's redirect lands here.
-	mux.HandleFunc("GET /oauth/gdrive/callback", s.getGDriveCallback)
 
 	// Fleet status API (session-authed); polled by the dashboard for live updates.
 	mux.HandleFunc("GET /api/v1/fleet", s.requireAdmin(s.getFleetStatus))
