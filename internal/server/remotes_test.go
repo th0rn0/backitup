@@ -327,6 +327,7 @@ func TestCreateGDriveRemoteMissingCreds(t *testing.T) {
 
 	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
 		"name": {"gdrive"}, "backend": {"drive"}, "service_account_credentials": {""},
+		"team_drive": {"0ABCxyz"},
 	})
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -334,6 +335,26 @@ func TestCreateGDriveRemoteMissingCreds(t *testing.T) {
 	body := readBody(t, resp)
 	if !strings.Contains(body, "required") {
 		t.Errorf("missing-creds error not in body; got:\n%s", body[:min(len(body), 500)])
+	}
+}
+
+func TestCreateGDriveRemoteMissingTeamDrive(t *testing.T) {
+	st, ts := rcloneStack(t)
+	c := loggedInClient(t, st, ts)
+
+	cred := `{"type":"service_account","project_id":"proj","private_key_id":"kid","private_key":"key","client_email":"svc@proj.iam.gserviceaccount.com","client_id":"1","auth_uri":"u","token_uri":"u"}`
+	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
+		"name":                        {"gdrive"},
+		"backend":                     {"drive"},
+		"service_account_credentials": {cred},
+		// team_drive intentionally omitted
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "required") {
+		t.Errorf("missing team_drive error not in body; got:\n%s", body[:min(len(body), 500)])
 	}
 }
 
@@ -346,6 +367,7 @@ func TestCreateGDriveRemoteSuccess(t *testing.T) {
 		"name":                        {"gdrive"},
 		"backend":                     {"drive"},
 		"service_account_credentials": {cred},
+		"team_drive":                  {"0ABCxyzSharedDriveID"},
 	})
 	if err != nil {
 		t.Fatalf("post: %v", err)

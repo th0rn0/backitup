@@ -100,8 +100,10 @@ var Backends = []BackendDef{
 				Type: FieldTextarea, Required: true,
 				Hint: "Paste the full contents of the downloaded service-account key file (.json).",
 			},
-			{Key: "root_folder_id", Label: "Root Folder ID (optional)", Type: FieldText, Hint: "Drive folder ID to use as the remote root. Leave blank to use My Drive root."},
-			{Key: "team_drive", Label: "Shared Drive ID (optional)", Type: FieldText, Hint: "The ID from the Shared Drive URL. Overrides Root Folder ID when set."},
+			{
+				Key: "team_drive", Label: "Shared Drive ID", Type: FieldText, Required: true,
+				Hint: "Required for service accounts — they have no My Drive quota. Create a Shared Drive in Google Drive, share it with the service account email (client_email in the JSON), then paste the Shared Drive ID here (find it in the URL: /drive/folders/<ID>).",
+			},
 		},
 	},
 	{

@@ -326,8 +326,12 @@ Supported backends:
 > 1. Enable the **Google Drive API** in Google Cloud Console → APIs & Services → Library.
 > 2. Create a service account (IAM & Admin → Service Accounts → Create Service Account).
 > 3. Create a JSON key for it (Keys → Add Key → JSON) and download it.
-> 4. Paste the JSON into the webgui form.
-> 5. Share a Google Drive folder with the service account's email (`client_email` in the JSON).
+> 4. In Google Drive, create a **Shared Drive** (Team Drive) and share it with the service
+>    account email (`client_email` from the JSON). Copy the Shared Drive ID from its URL.
+> 5. Paste the JSON and the Shared Drive ID into the webgui form.
+>
+> A Shared Drive is required — service accounts have zero personal quota, so uploads to
+> My Drive always fail with `storageQuotaExceeded`.
 
 The app **owns `rclone.conf`** — it regenerates it from the database after every
 remote create/delete and on startup. Do not edit the file directly; your changes
