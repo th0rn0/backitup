@@ -57,10 +57,15 @@ func (r *Rclone) Lsf(ctx context.Context, remote, dir string) ([]string, error) 
 }
 
 func (r *Rclone) run(ctx context.Context, args ...string) (string, error) {
-	full := args
+	// --log-level DEBUG ensures the backend-specific error (auth failure,
+	// no-such-bucket, etc.) reaches stderr even when rclone's default NOTICE
+	// level would swallow it. Output is captured and discarded on success;
+	// on failure every line is printed individually before returning the error.
+	full := []string{"--log-level", "DEBUG"}
 	if r.config != "" {
-		full = append([]string{"--config", r.config}, args...)
+		full = append(full, "--config", r.config)
 	}
+	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.bin, full...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
