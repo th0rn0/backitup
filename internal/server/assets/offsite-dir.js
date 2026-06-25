@@ -28,18 +28,16 @@
 
     if (clearValue && input) input.value = '';
 
-    if (!remote) {
-      row.style.display = 'none';
-      if (intRow) intRow.style.display = 'none';
-      return;
-    }
+    var show = !!remote;
+    row.classList.toggle('hidden', !show);
+    if (intRow) intRow.classList.toggle('hidden', !show);
+
+    if (!show) return;
 
     var info = HINTS[backend] || { label: 'Backup path (optional)', placeholder: '', hint: '' };
-    row.style.display = '';
     if (label) label.textContent = info.label;
     if (input) input.placeholder = info.placeholder;
     if (hint)  hint.textContent  = info.hint;
-    if (intRow) intRow.style.display = '';
   }
 
   var sel = document.getElementById('offsite_remote');

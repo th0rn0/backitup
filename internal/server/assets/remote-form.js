@@ -7,16 +7,16 @@
   function switchBackend(backend) {
     document.querySelectorAll('[data-backend-fields]').forEach(function (fs) {
       var match = fs.getAttribute('data-backend-fields') === backend;
-      fs.style.display = match ? '' : 'none';
+      fs.classList.toggle('hidden', !match);
       fs.querySelectorAll('input,textarea,select').forEach(function (el) {
         el.disabled = !match;
       });
     });
     document.querySelectorAll('[data-backend-warning]').forEach(function (el) {
-      el.style.display = el.getAttribute('data-backend-warning') === backend ? '' : 'none';
+      el.classList.toggle('hidden', el.getAttribute('data-backend-warning') !== backend);
     });
     var submit = document.getElementById('add-remote-submit');
-    if (submit) submit.style.display = backend ? '' : 'none';
+    if (submit) submit.classList.toggle('hidden', !backend);
   }
 
   switchBackend(sel.value);
