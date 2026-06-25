@@ -66,7 +66,22 @@ func (r *Rclone) run(ctx context.Context, args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return stdout.String(), fmt.Errorf("rclone %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+		// Collect both streams; some backends write the specific error to stdout.
+		detail := strings.TrimSpace(stderr.String())
+		if s := strings.TrimSpace(stdout.String()); s != "" {
+			if detail != "" {
+				detail += "\n" + s
+			} else {
+				detail = s
+			}
+		}
+		// Log each line separately so structured logs don't bury the cause.
+		for _, line := range strings.Split(detail, "\n") {
+			if line != "" {
+				fmt.Fprintf(os.Stderr, "rclone: %s\n", line)
+			}
+		}
+		return "", fmt.Errorf("rclone %s: %w: %s", args[0], err, detail)
 	}
 	return stdout.String(), nil
 }
