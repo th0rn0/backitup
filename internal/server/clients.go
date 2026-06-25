@@ -25,7 +25,10 @@ import (
 // getNewClient renders the add-client form.
 func (s *Server) getNewClient(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", nil)
+	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
+		"Username":   usernameFromContext(r.Context()),
+		"ActivePage": "clients/new",
+	})
 }
 
 // postClients creates a client: generate an SSH keypair + bearer token, store
@@ -39,7 +42,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	name := r.PostFormValue("name")
 	mode := model.Mode(r.PostFormValue("mode"))
 	if name == "" || !mode.Valid() {
-		s.renderNewClientError(w, "Name is required and mode must be targz or rsync.")
+		s.renderNewClientError(w, r,"Name is required and mode must be targz or rsync.")
 		return
 	}
 
@@ -67,7 +70,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		// Most likely a duplicate name (UNIQUE) — report it as a form error.
-		s.renderNewClientError(w, "Could not create client (is the name already taken?).")
+		s.renderNewClientError(w, r,"Could not create client (is the name already taken?).")
 		return
 	}
 
@@ -80,6 +83,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
+		"Username":          usernameFromContext(r.Context()),
 		"Name":              name,
 		"Mode":              string(mode),
 		"PrivateKey":        privPEM,
@@ -115,6 +119,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
 		"Username":    usernameFromContext(r.Context()),
+		"ActivePage":  "",
 		"Client":      c,
 		"Health":      string(h),
 		"HealthLabel": healthLabel(h),
@@ -151,9 +156,10 @@ func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "run_log.html", map[string]any{
-		"Username": usernameFromContext(r.Context()),
-		"Client":   c,
-		"Run":      run,
+		"Username":   usernameFromContext(r.Context()),
+		"ActivePage": "",
+		"Client":     c,
+		"Run":        run,
 	})
 }
 
@@ -212,6 +218,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
+		"Username":          usernameFromContext(r.Context()),
 		"Name":              c.Name,
 		"Mode":              string(c.Mode),
 		"PrivateKey":        privPEM,
@@ -407,10 +414,14 @@ func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, 
 	return
 }
 
-func (s *Server) renderNewClientError(w http.ResponseWriter, msg string) {
+func (s *Server) renderNewClientError(w http.ResponseWriter, r *http.Request, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
-	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{"Error": msg})
+	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
+		"Username":   usernameFromContext(r.Context()),
+		"ActivePage": "clients/new",
+		"Error":      msg,
+	})
 }
 
 // regenAuthorizedKeys rewrites the sshd authorized_keys file from the current

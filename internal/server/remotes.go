@@ -56,11 +56,12 @@ func (s *Server) getRemotes(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "remotes.html", map[string]any{
-		"Username": usernameFromContext(r.Context()),
-		"Remotes":  remotes,
-		"Flash":    flash,
-		"Error":    errMsg,
-		"NoRclone": s.rcloneConfig == "",
+		"Username":   usernameFromContext(r.Context()),
+		"ActivePage": "remotes",
+		"Remotes":    remotes,
+		"Flash":      flash,
+		"Error":      errMsg,
+		"NoRclone":   s.rcloneConfig == "",
 	})
 }
 

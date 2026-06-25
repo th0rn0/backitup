@@ -9,16 +9,7 @@
 </head>
 <body>
   <div class="app">
-    <nav class="sidebar" aria-label="Primary">
-      <span class="brand"><img src="/static/favicon.svg" alt="" width="22" height="22" aria-hidden="true"> Back! It! Up!</span>
-      <div class="nav">
-        <a href="/">Dashboard</a>
-        <a href="/clients/new" class="active" aria-current="page">Add client</a>
-        <a href="/users">Users</a>
-        <a href="/settings/remotes">Remote storage</a>
-      </div>
-      <a class="nav-credit" href="https://github.com/th0rn0/backitup" target="_blank" rel="noopener noreferrer"><img src="/static/github.svg" width="13" height="13" alt="GitHub">GitHub</a>
-    </nav>
+    {{template "sidebar" .}}
 
     <main class="main">
       <h1>Add a client</h1>

@@ -164,6 +164,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Username = username
+	view.ActivePage = "dashboard"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.ExecuteTemplate(w, "dashboard.html", view); err != nil {
 		http.Error(w, "render error", http.StatusInternalServerError)
