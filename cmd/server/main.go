@@ -81,7 +81,7 @@ func main() {
 		DiscordWebhook:   os.Getenv("BACKITUP_DISCORD_WEBHOOK"),
 		Verbose:          verbose,
 	}
-	stopLifecycle := lifecycle.StartWorker(context.Background(), lcDeps, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "1h")))
+	stopLifecycle := lifecycle.StartWorker(context.Background(), lcDeps, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "5m")))
 	defer stopLifecycle()
 	// Offsite upload worker: independent of the maintenance lifecycle.
 	// BACKITUP_OFFSITE_POLL_INTERVAL controls how often clients are checked;
