@@ -14,6 +14,7 @@ func StartWorker(ctx context.Context, d Deps, interval time.Duration) (stop func
 	if interval <= 0 {
 		interval = time.Hour
 	}
+	d.staleAlerted = make(map[int64]time.Time)
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
 		// Small initial delay so the server finishes booting first.

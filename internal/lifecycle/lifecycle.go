@@ -16,6 +16,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/th0rn0/backitup/internal/alert"
 	"github.com/th0rn0/backitup/internal/archiveutil"
 	"github.com/th0rn0/backitup/internal/mode"
 	"github.com/th0rn0/backitup/internal/model"
@@ -43,6 +44,9 @@ type Deps struct {
 	RunsKeepDays     int // 0 -> DefaultRunsKeepDays
 	LogRetentionDays int // 0 -> DefaultLogRetentionDays; how long log_tail is kept
 	Now              func() time.Time
+
+	DiscordWebhook string              // empty disables Discord alerts
+	staleAlerted   map[int64]time.Time // keyed by client ID; set by StartWorker
 }
 
 func (d Deps) now() time.Time {
@@ -130,6 +134,7 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 
 	pruneHot(ctx, d, c, sm, clientDir, snaps, offsiteOn, offsited)
 	verifyLatest(ctx, c, sm, clientDir, snaps)
+	checkStaleAlert(ctx, d, c)
 
 	if keep := d.RunsKeepDays; true {
 		if keep == 0 {
@@ -245,6 +250,36 @@ func verifyLatest(ctx context.Context, c model.Client, sm mode.ServerMode, clien
 			log.Printf("lifecycle: client %d: INTEGRITY WARN: latest snapshot %s is empty", c.ID, latest.ID)
 		}
 	}
+}
+
+// checkStaleAlert fires a Discord alert if the client is stale and no alert
+// has been sent in the last 24 h. Uses an in-memory map (resets on restart)
+// to avoid spamming on every lifecycle pass.
+func checkStaleAlert(ctx context.Context, d Deps, c model.Client) {
+	if d.DiscordWebhook == "" || d.staleAlerted == nil {
+		return
+	}
+	if c.ExpectedIntervalSecs <= 0 {
+		return // no cadence defined; can't know if stale
+	}
+	run, err := d.Store.LatestRun(ctx, c.ID)
+	if err != nil {
+		return
+	}
+	h := model.DeriveHealth(run, time.Duration(c.ExpectedIntervalSecs)*time.Second, d.now())
+	if h != model.HealthStale && h != model.HealthNever {
+		delete(d.staleAlerted, c.ID) // recovered — reset so a future stale re-alerts
+		return
+	}
+	const minInterval = 24 * time.Hour
+	if last, ok := d.staleAlerted[c.ID]; ok && d.now().Sub(last) < minInterval {
+		return
+	}
+	d.staleAlerted[c.ID] = d.now()
+	go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
+		"⏰ **backitup** — `%s` backup is **STALE** (no successful run in the expected window)\nSource: %s\nExpected every: %ds",
+		c.Name, c.SourceLabel, c.ExpectedIntervalSecs,
+	))
 }
 
 // offsiteDir returns the remote subdirectory for a client. When the operator

@@ -43,6 +43,9 @@ type Server struct {
 
 	// Offsite remote management via the /settings/remotes webgui.
 	rcloneConfig string
+
+	// Discord webhook URL for failure/stale alerts; empty disables alerts.
+	discordWebhook string
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
@@ -129,6 +132,12 @@ func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, public
 	if sshHostKeyPath != "" {
 		s.sshHostKeyPath = sshHostKeyPath
 	}
+}
+
+// ConfigureDiscord sets the Discord webhook URL for failure/stale alerts.
+// An empty URL disables alerts.
+func (s *Server) ConfigureDiscord(webhookURL string) {
+	s.discordWebhook = webhookURL
 }
 
 // ConfigureRclone sets the path to the rclone config file used by the remote

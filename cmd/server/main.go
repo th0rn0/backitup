@@ -50,6 +50,7 @@ func main() {
 		getenv("BACKITUP_SSH_HOST_KEY", "/srv/hostkeys/ssh_host_ed25519_key.pub"),
 	)
 	srv.ConfigureRclone(getenv("BACKITUP_RCLONE_CONFIG", "/data/rclone.conf"))
+	srv.ConfigureDiscord(os.Getenv("BACKITUP_DISCORD_WEBHOOK"))
 
 	// Sync authorized_keys once at startup so any stale entry (wrong forced-command
 	// from a mode mismatch or a previously failed write) is corrected before sshd
@@ -68,6 +69,7 @@ func main() {
 		Offsite:          lifecycle.NewRclone(os.Getenv("BACKITUP_RCLONE_CONFIG")),
 		BackupBaseDir:    backupDir,
 		LogRetentionDays: atoiEnv("BACKITUP_LOG_RETENTION_DAYS", 0),
+		DiscordWebhook:   os.Getenv("BACKITUP_DISCORD_WEBHOOK"),
 	}, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "1h")))
 	defer stopLifecycle()
 	if secure {

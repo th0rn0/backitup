@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/th0rn0/backitup/internal/alert"
 	"github.com/th0rn0/backitup/internal/auth"
 	"github.com/th0rn0/backitup/internal/model"
 )
@@ -127,6 +129,12 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to update run", http.StatusInternalServerError)
 			return
 		}
+		if st == model.StatusFailed {
+			go alert.Discord(s.discordWebhook, fmt.Sprintf(
+				"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nFinished: %s UTC",
+				cl.Name, cl.SourceLabel, finished.Format("2006-01-02 15:04:05"),
+			))
+		}
 		writeJSON(w, http.StatusCreated, map[string]any{"run_id": req.RunID})
 		return
 	}
@@ -147,6 +155,12 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "failed to record status", http.StatusInternalServerError)
 		return
+	}
+	if st == model.StatusFailed {
+		go alert.Discord(s.discordWebhook, fmt.Sprintf(
+			"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nFinished: %s UTC",
+			cl.Name, cl.SourceLabel, finished.Format("2006-01-02 15:04:05"),
+		))
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"run_id": id})
 }
