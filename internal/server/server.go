@@ -64,6 +64,24 @@ func New(st *store.Store, secure bool) *Server {
 			}
 			return fmt.Sprintf("%dm %ds", m, s)
 		},
+		"fmtInterval": func(secs int) string {
+			switch secs {
+			case 0:
+				return "every lifecycle pass"
+			case 3600:
+				return "every 1h"
+			case 21600:
+				return "every 6h"
+			case 43200:
+				return "every 12h"
+			case 86400:
+				return "every 24h"
+			case 604800:
+				return "every 7d"
+			default:
+				return fmt.Sprintf("every %ds", secs)
+			}
+		},
 		"humanBytes": func(n int64) string {
 			const unit = 1024
 			if n < unit {

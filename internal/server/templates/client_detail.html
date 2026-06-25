@@ -47,6 +47,7 @@
           {{if eq .Client.OffsiteRemote "gdrive"}}<tr><td>Folder ID</td><td class="mono">{{if .Client.OffsiteDir}}{{.Client.OffsiteDir}}{{else}}—{{end}}</td></tr>
           {{else if .Client.OffsiteRemote}}<tr><td>Offsite path</td><td class="mono">{{if .Client.OffsiteDir}}{{.Client.OffsiteDir}}{{else}}—{{end}}</td></tr>
           {{end}}
+          {{if .Client.OffsiteRemote}}<tr><td>Upload interval</td><td>{{fmtInterval .Client.OffsiteIntervalSecs}}</td></tr>{{end}}
         </tbody>
       </table>
 
@@ -97,6 +98,19 @@
             <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>
             <input id="offsite-dir-input" name="offsite_dir" value="{{.Client.OffsiteDir}}" placeholder="" autocomplete="off">
             <div id="offsite-dir-hint" class="field-hint"></div>
+          </div>
+
+          <div id="offsite-interval-row" style="display:none">
+            <label for="offsite_interval_secs">Upload interval</label>
+            <select id="offsite_interval_secs" name="offsite_interval_secs">
+              <option value="0"{{if eq .Client.OffsiteIntervalSecs 0}} selected{{end}}>Every lifecycle pass (default)</option>
+              <option value="3600"{{if eq .Client.OffsiteIntervalSecs 3600}} selected{{end}}>Every 1 hour</option>
+              <option value="21600"{{if eq .Client.OffsiteIntervalSecs 21600}} selected{{end}}>Every 6 hours</option>
+              <option value="43200"{{if eq .Client.OffsiteIntervalSecs 43200}} selected{{end}}>Every 12 hours</option>
+              <option value="86400"{{if eq .Client.OffsiteIntervalSecs 86400}} selected{{end}}>Every 24 hours</option>
+              <option value="604800"{{if eq .Client.OffsiteIntervalSecs 604800}} selected{{end}}>Every 7 days</option>
+            </select>
+            <div class="field-hint">How often the lifecycle worker uploads new snapshots for this client.</div>
           </div>
 
           <div class="form-actions">

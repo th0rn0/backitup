@@ -110,7 +110,16 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 		return err
 	}
 
-	if offsiteOn {
+	offsiteThisPass := offsiteOn
+	if offsiteOn && c.OffsiteIntervalSecs > 0 {
+		due, err := offsiteDue(ctx, d, c)
+		if err != nil {
+			return err
+		}
+		offsiteThisPass = due
+	}
+
+	if offsiteThisPass {
 		if err := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited); err != nil {
 			return err
 		}
@@ -251,6 +260,20 @@ func offsiteDir(c model.Client) string {
 		return c.OffsiteDir
 	}
 	return model.Slug(c.Name)
+}
+
+// offsiteDue returns true when enough time has passed since the last upload to
+// satisfy the client's OffsiteIntervalSecs. Always returns true if no upload
+// has happened yet (first upload should always proceed).
+func offsiteDue(ctx context.Context, d Deps, c model.Client) (bool, error) {
+	last, err := d.Store.LatestOffsite(ctx, c.ID)
+	if err != nil {
+		return false, err
+	}
+	if last == nil {
+		return true, nil
+	}
+	return d.now().Sub(*last) >= time.Duration(c.OffsiteIntervalSecs)*time.Second, nil
 }
 
 func objectPath(dir string, m model.Mode, snapshotID string) string {

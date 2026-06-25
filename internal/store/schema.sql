@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS clients (
     expected_interval_secs  INTEGER NOT NULL DEFAULT 0,     -- advisory only (staleness; D1)
     offsite_remote          TEXT    NOT NULL DEFAULT '',    -- rclone remote; '' = no offsite
     offsite_dir             TEXT    NOT NULL DEFAULT '',    -- subdir within remote; '' = client slug
+    offsite_interval_secs   INTEGER NOT NULL DEFAULT 0,    -- min secs between passes; 0 = every pass
     ssh_pubkey              TEXT    NOT NULL DEFAULT '',
     token_hash              TEXT    NOT NULL DEFAULT '',     -- argon2id of bearer token (D4)
     enabled                 INTEGER NOT NULL DEFAULT 1,
