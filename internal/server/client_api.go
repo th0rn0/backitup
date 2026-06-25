@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -129,6 +130,9 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to update run", http.StatusInternalServerError)
 			return
 		}
+		if s.verbose {
+			log.Printf("status: client=%q run=%d status=%s files=%d bytes=%d", cl.Name, req.RunID, st, req.Files, req.Bytes)
+		}
 		if st == model.StatusFailed {
 			go alert.Discord(s.discordWebhook, fmt.Sprintf(
 				"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nFinished: %s UTC",
@@ -155,6 +159,9 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "failed to record status", http.StatusInternalServerError)
 		return
+	}
+	if s.verbose {
+		log.Printf("status: client=%q run=%d status=%s files=%d bytes=%d", cl.Name, id, st, req.Files, req.Bytes)
 	}
 	if st == model.StatusFailed {
 		go alert.Discord(s.discordWebhook, fmt.Sprintf(

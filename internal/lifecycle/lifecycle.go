@@ -46,6 +46,7 @@ type Deps struct {
 	Now              func() time.Time
 
 	DiscordWebhook string              // empty disables Discord alerts
+	Verbose        bool                // log offsite uploads/deletes and status changes
 	staleAlerted   map[int64]time.Time // keyed by client ID; set by StartWorker
 }
 
@@ -177,6 +178,9 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		if err != nil {
 			return fmt.Errorf("offsite upload %s: %w", s.ID, err)
 		}
+		if d.Verbose {
+			log.Printf("offsite: client=%q remote=%s snapshot=%s uploaded bytes=%d", c.Name, c.OffsiteRemote, s.ID, bytes)
+		}
 		if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{
 			ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Bytes: bytes,
 		}); err != nil {
@@ -204,6 +208,9 @@ func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
 		}
 		if err := d.Offsite.Delete(ctx, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, o.SnapshotID)); err != nil {
 			return fmt.Errorf("offsite delete %s: %w", o.SnapshotID, err)
+		}
+		if d.Verbose {
+			log.Printf("offsite: client=%q remote=%s snapshot=%s pruned (exceeded %dd retention)", c.Name, c.OffsiteRemote, o.SnapshotID, c.OffsiteRetentionDays)
 		}
 		if err := d.Store.DeleteOffsiteObject(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
 			return err

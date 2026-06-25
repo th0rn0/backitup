@@ -46,6 +46,9 @@ type Server struct {
 
 	// Discord webhook URL for failure/stale alerts; empty disables alerts.
 	discordWebhook string
+
+	// verbose enables a log line for every client status change.
+	verbose bool
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
@@ -138,6 +141,11 @@ func (s *Server) ConfigureIngest(authKeysPath, backupBaseDir, publicHost, public
 // An empty URL disables alerts.
 func (s *Server) ConfigureDiscord(webhookURL string) {
 	s.discordWebhook = webhookURL
+}
+
+// ConfigureVerbose enables per-status-change log lines.
+func (s *Server) ConfigureVerbose(v bool) {
+	s.verbose = v
 }
 
 // ConfigureRclone sets the path to the rclone config file used by the remote
