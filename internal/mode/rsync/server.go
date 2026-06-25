@@ -3,7 +3,6 @@ package rsync
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -43,11 +42,10 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 		if err != nil {
 			return nil, err
 		}
-		size, err := dirSize(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: info.ModTime(), Bytes: size})
+		// Do not walk the snapshot directory to sum sizes — rsync snapshots use
+		// hardlinks and can be very large; a full WalkDir blocks the caller.
+		// Size is reported as 0 (displayed as "—" in the UI).
+		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: info.ModTime(), Bytes: 0})
 	}
 	return out, nil
 }
@@ -83,20 +81,3 @@ func (Server) DeleteSnapshot(ctx context.Context, clientDir, id string) error {
 	return os.RemoveAll(filepath.Join(dir, id))
 }
 
-func dirSize(root string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Type().IsRegular() {
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			total += info.Size()
-		}
-		return nil
-	})
-	return total, err
-}
