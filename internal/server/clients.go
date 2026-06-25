@@ -259,16 +259,16 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
 }
 
-// postOffsiteRun triggers an immediate offsite upload for a client, bypassing
-// the normal lifecycle schedule. Redirects back to the client detail page when
-// done; returns an error page if the trigger is unconfigured or fails.
+// postOffsiteRun triggers an immediate offsite upload for a client in the
+// background and redirects immediately. The request context is NOT passed to
+// the goroutine — it would be cancelled the moment the redirect is sent.
 func (s *Server) postOffsiteRun(w http.ResponseWriter, r *http.Request) {
 	if s.offsiteTrigger == nil {
 		http.Error(w, "offsite not configured on this server", http.StatusServiceUnavailable)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
@@ -285,11 +285,13 @@ func (s *Server) postOffsiteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.offsiteTrigger(ctx, c.ID); err != nil {
-		log.Printf("offsite run: client=%q: %v", c.Name, err)
-		http.Error(w, "offsite run failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	clientID := c.ID
+	clientName := c.Name
+	go func() {
+		if err := s.offsiteTrigger(context.Background(), clientID); err != nil {
+			log.Printf("offsite run: client=%q: %v", clientName, err)
+		}
+	}()
 
 	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
 }
