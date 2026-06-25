@@ -41,7 +41,6 @@ watch the whole fleet's backup health from a single dashboard.
 - [Security model](#security-model)
 - [Development](#development)
 - [Project layout](#project-layout)
-- [Roadmap](#roadmap)
 
 ---
 
@@ -474,29 +473,3 @@ Dockerfile.client  client image (Alpine + rsync + openssh-client)
 docker-compose.yml app + sshd ingest topology
 ```
 
-## Roadmap
-
-Back! It! Up! is built in lanes (see the design doc). Lane 0 is done.
-
-- [x] **Lane 0** — foundation: model, store, mode seam, server skeleton, Docker, tests
-- [x] **Lane B** — webgui: admin login (argon2id + session), fleet dashboard (status
-      language, empty state, responsive), `/api/v1/config` + `/api/v1/status`, optional TLS
-- [x] **Lane A** — SSH ingest container + per-client key/token issuance, atomic
-      `authorized_keys` generation with per-mode forced commands (injection-defended),
-      and the add-client flow (verified end-to-end: real SSH tar.gz upload, confined,
-      byte-identical roundtrip)
-- [x] **Lane C** — client run flow (lockfile, config fetch, status report) + both
-      backup modes: tar.gz (pure Go, streamed over SSH) and rsync (hardlink snapshots
-      via rrsync). Verified end-to-end through docker compose: both modes upload, the
-      dashboard goes green, and rsync produces real incremental hardlinked snapshots
-- [x] **Lane D** — lifecycle worker: encrypted offsite via rclone crypt
-      (offsite-first, independent retention, immutable per-snapshot objects),
-      hot pruning (protect-newest, offsite-first), runs-table trim, and integrity
-      verification of the latest snapshot. Verified end-to-end: the worker tiers a
-      backup to an encrypted crypt remote (ciphertext on disk, decrypts correctly)
-      and the dashboard reflects offsite freshness.
-
-**All lanes complete.** The full path works: client → SSH ingest → hot store →
-encrypted offsite, managed from the dashboard.
-
-See `TODOS.md` for deferred work.
