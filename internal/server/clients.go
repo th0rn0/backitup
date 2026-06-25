@@ -344,7 +344,7 @@ func (s *Server) postOffsiteRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+	http.Redirect(w, r, "/clients/"+r.PathValue("name")+"?msg=Offsite+backup+started+in+the+background", http.StatusSeeOther)
 }
 
 // postDeleteClient removes a client and all its run history, regenerates
