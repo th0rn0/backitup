@@ -218,6 +218,43 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// postUpdateClientOffsite changes the offsite_remote for an existing client.
+func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	remote := r.PostFormValue("offsite_remote")
+	// Only accept the known set of values to prevent arbitrary rclone remote injection.
+	switch remote {
+	case "", "s3", "gdrive":
+	default:
+		http.Error(w, "invalid offsite_remote value", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote); err != nil {
+		http.Error(w, "update failed", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+}
+
 // postDeleteClient removes a client and all its run history, regenerates
 // authorized_keys, then redirects to the dashboard.
 func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {

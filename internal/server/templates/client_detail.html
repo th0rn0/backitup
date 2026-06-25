@@ -78,6 +78,21 @@
         {{end}}
       </div>
 
+      <div class="section">
+        <h2>Offsite destination</h2>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Where to tier cold copies of this client's backups. Requires the matching rclone remote to be configured on the server.</p>
+        <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form">
+          <select name="offsite_remote">
+            <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None</option>
+            <option value="s3"{{if eq .Client.OffsiteRemote "s3"}} selected{{end}}>S3</option>
+            <option value="gdrive"{{if eq .Client.OffsiteRemote "gdrive"}} selected{{end}}>GDrive</option>
+          </select>
+          <div class="form-actions">
+            <button type="submit" class="btn">Save</button>
+          </div>
+        </form>
+      </div>
+
       <div class="section danger-section">
         <h2>Rotate credentials</h2>
         <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Issues a new SSH key and bearer token. The old credentials stop working immediately — redeploy the cron line on the host after rotating.</p>

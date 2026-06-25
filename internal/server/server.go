@@ -134,6 +134,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /clients/{name}", s.requireAdmin(s.getClient))
 	mux.HandleFunc("GET /clients/{name}/runs/{runID}", s.requireAdmin(s.getRunLog))
 	mux.HandleFunc("POST /clients/{name}/rotate", s.requireAdmin(s.postRotateClient))
+	mux.HandleFunc("POST /clients/{name}/offsite", s.requireAdmin(s.postUpdateClientOffsite))
 	mux.HandleFunc("POST /clients/{name}/delete", s.requireAdmin(s.postDeleteClient))
 
 	mux.HandleFunc("GET /users", s.requireAdmin(s.getUsers))

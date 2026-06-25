@@ -401,6 +401,21 @@ func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, 
 	}
 }
 
+// UpdateClientOffsite changes the offsite_remote for a client.
+// An empty remote disables offsite tiering for this client.
+func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE clients SET offsite_remote=? WHERE id=?`, remote, id)
+	if err != nil {
+		return fmt.Errorf("update offsite remote: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("client %d: not found", id)
+	}
+	return nil
+}
+
 // ErrConflict is returned by RotateClientCreds when a concurrent rotation
 // has already incremented the client's version since the caller read it.
 var ErrConflict = fmt.Errorf("concurrent modification: version mismatch")
