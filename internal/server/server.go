@@ -92,6 +92,12 @@ func New(st *store.Store, secure bool) *Server {
 				return fmt.Sprintf("every %ds", secs)
 			}
 		},
+		"derefBool": func(p *bool) bool {
+			if p == nil {
+				return false
+			}
+			return *p
+		},
 		"humanBytes": func(n int64) string {
 			const unit = 1024
 			if n < unit {
@@ -196,8 +202,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /clients/{name}/offsite/test", s.requireAdmin(s.postTestClientOffsite))
 	mux.HandleFunc("GET /clients/{name}/snapshots/{snapshotID}", s.requireAdmin(s.getSnapshotDownload))
 	mux.HandleFunc("POST /clients/{name}/snapshots/{snapshotID}/delete", s.requireAdmin(s.postSnapshotDelete))
+	mux.HandleFunc("POST /clients/{name}/snapshots/bulk-delete", s.requireAdmin(s.postBulkDeleteSnapshots))
 	mux.HandleFunc("GET /clients/{name}/offsite/{snapshotID}/download", s.requireAdmin(s.getOffsiteDownload))
 	mux.HandleFunc("POST /clients/{name}/offsite/{snapshotID}/delete", s.requireAdmin(s.postOffsiteObjectDelete))
+	mux.HandleFunc("POST /clients/{name}/offsite/bulk-delete", s.requireAdmin(s.postBulkDeleteOffsiteObjects))
 	mux.HandleFunc("POST /clients/{name}/delete", s.requireAdmin(s.postDeleteClient))
 
 	mux.HandleFunc("GET /users", s.requireAdmin(s.getUsers))

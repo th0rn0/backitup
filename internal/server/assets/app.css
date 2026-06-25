@@ -280,6 +280,28 @@ td.mono { font-family: var(--mono); font-size: 12px; }
   border-radius: 4px;
   color: var(--text-dim);
 }
+.badge-missing {
+  border-color: #c0392b44;
+  color: #c0392b;
+  background: #c0392b0d;
+}
+.badge-ok {
+  border-color: #27ae6044;
+  color: #27ae60;
+  background: #27ae600d;
+}
+.badge-warn {
+  border-color: #e6700044;
+  color: #b35900;
+  background: #e670000d;
+}
+.bulk-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.cb-col { width: 32px; }
 
 /* ── Forms ── */
 .form { max-width: 520px; margin-top: 20px; }

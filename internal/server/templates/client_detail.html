@@ -135,30 +135,48 @@
         </div>
 
         <div data-tab="local-files">
-          {{if .LocalSnapshots}}
+          {{if or .LocalSnapshots .MissingLocalSnaps}}
+          <div class="bulk-toolbar">
+            <input type="checkbox" data-select-all="local" title="Select all">
+            <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/snapshots/bulk-delete" data-bulk-group="local">Delete selected</button>
+          </div>
           <table>
             <thead>
               <tr>
+                <th class="cb-col"></th>
                 <th>Snapshot</th>
                 <th>Created</th>
                 <th>Size</th>
+                <th>Status</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {{range .LocalSnapshots}}
               <tr>
+                <td class="cb-col"><input type="checkbox" data-select-group="local" value="{{.ID}}"></td>
                 <td class="mono">{{.ID}}</td>
                 <td class="mono">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
-                <td class="mono">{{humanBytes .Bytes}}</td>
+                <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
+                <td><span class="badge badge-ok">on disk</span></td>
                 <td class="flex-row-sm">
                   <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}" class="btn btn-ghost btn-sm" download>Download</a>
                   <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}?view=1" class="btn btn-ghost btn-sm" target="_blank" rel="noopener">Open</a>
                   <form method="POST" action="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}/delete" class="d-inline"
-                        onsubmit="return confirm('Delete local snapshot {{.ID}}? This cannot be undone.')">
+                        data-confirm="Delete local snapshot {{.ID}}? This cannot be undone.">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                   </form>
                 </td>
+              </tr>
+              {{end}}
+              {{range .MissingLocalSnaps}}
+              <tr>
+                <td class="cb-col"></td>
+                <td class="mono">{{.ID}}</td>
+                <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+                <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
+                <td><span class="badge badge-missing">missing on disk</span></td>
+                <td class="flex-row-sm"></td>
               </tr>
               {{end}}
             </tbody>
@@ -171,26 +189,42 @@
         {{if .Client.OffsiteRemote}}
         <div data-tab="offsite-files">
           {{if .OffsiteObjects}}
+          <div class="bulk-toolbar">
+            <input type="checkbox" data-select-all="offsite" title="Select all">
+            <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/offsite/bulk-delete" data-bulk-group="offsite">Delete selected</button>
+          </div>
           <table>
             <thead>
               <tr>
+                <th class="cb-col"></th>
                 <th>Snapshot</th>
                 <th>Uploaded</th>
                 <th>Size</th>
+                <th>Local</th>
+                <th>Remote</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {{range .OffsiteObjects}}
               <tr>
+                <td class="cb-col"><input type="checkbox" data-select-group="offsite" value="{{.SnapshotID}}"></td>
                 <td class="mono">{{.SnapshotID}}</td>
                 <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
                 <td class="mono">{{humanBytes .Bytes}}</td>
+                <td>
+                  {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge badge-missing">deleted</span>{{end}}
+                </td>
+                <td>
+                  {{if .RemoteExists}}
+                    {{if derefBool .RemoteExists}}<span class="badge badge-ok">verified</span>{{else}}<span class="badge badge-missing">missing</span>{{end}}
+                  {{else}}<span class="badge">unknown</span>{{end}}
+                </td>
                 <td class="flex-row-sm">
                   <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>
                   <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download?view=1" class="btn btn-ghost btn-sm" target="_blank" rel="noopener">Open</a>
                   <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/delete" class="d-inline"
-                        onsubmit="return confirm('Delete offsite object {{.SnapshotID}}? This cannot be undone.')">
+                        data-confirm="Delete offsite object {{.SnapshotID}}? This cannot be undone.">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                   </form>
                 </td>
@@ -280,5 +314,6 @@
     </main>
   </div>
   <script src="/static/offsite-dir.js"></script>
+  <script src="/static/backup-files.js"></script>
 </body>
 </html>

@@ -256,6 +256,116 @@ func tarGzDirectory(w io.Writer, dir string) error {
 	return gw.Close()
 }
 
+// postBulkDeleteSnapshots deletes multiple local snapshots in one request.
+func (s *Server) postBulkDeleteSnapshots(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	ids := r.Form["ids"]
+	if len(ids) == 0 {
+		http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+
+	c, sm, clientDir, ok := s.resolveClientAndMode(w, r, ctx)
+	if !ok {
+		return
+	}
+	var errs []string
+	for _, id := range ids {
+		if id == "" || strings.Contains(id, "..") {
+			continue
+		}
+		if err := sm.DeleteSnapshot(ctx, clientDir, id); err != nil {
+			log.Printf("bulk snapshot delete: client=%s snap=%s: %v", c.Name, id, err)
+			errs = append(errs, id)
+		}
+	}
+	if len(errs) > 0 {
+		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=some+deletes+failed", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=snapshots+deleted", http.StatusSeeOther)
+}
+
+// postBulkDeleteOffsiteObjects deletes multiple offsite objects in one request.
+func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	ids := r.Form["ids"]
+	if len(ids) == 0 {
+		http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+
+	c, ok := s.resolveClient(w, r, ctx)
+	if !ok {
+		return
+	}
+	if c.OffsiteRemote == "" {
+		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=offsite+not+configured", http.StatusSeeOther)
+		return
+	}
+	offsiteDir := c.OffsiteDir
+	if offsiteDir == "" {
+		offsiteDir = model.Slug(c.Name)
+	}
+	rclone := lifecycle.NewRclone(s.rcloneConfig)
+	var errs []string
+	for _, id := range ids {
+		if id == "" || strings.Contains(id, "..") {
+			continue
+		}
+		var objectPath string
+		if c.Mode == model.ModeRsync {
+			objectPath = offsiteDir + "/" + id + ".tar.gz"
+		} else {
+			objectPath = offsiteDir + "/" + id
+		}
+		if err := rclone.Delete(ctx, c.OffsiteRemote, objectPath); err != nil {
+			log.Printf("bulk offsite delete: client=%s snap=%s: %v", c.Name, id, err)
+			errs = append(errs, id)
+		}
+		if err := s.st.DeleteOffsiteObject(ctx, c.ID, id, c.OffsiteRemote); err != nil {
+			log.Printf("bulk offsite delete: db record: %v", err)
+		}
+	}
+	if len(errs) > 0 {
+		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=some+offsite+deletes+failed", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=offsite+objects+deleted", http.StatusSeeOther)
+}
+
+// rcloneLsf lists filenames in a remote directory using rclone lsf.
+func rcloneLsf(ctx context.Context, configPath, remote, dir string) ([]string, error) {
+	args := []string{"lsf", remote + ":" + dir}
+	if configPath != "" {
+		args = append([]string{"--config", configPath}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "rclone", args...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("rclone lsf: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
 // rcloneCatStream pipes a remote object to w using rclone cat.
 func rcloneCatStream(ctx context.Context, configPath, remotePath string, w io.Writer) error {
 	args := []string{"cat", remotePath}

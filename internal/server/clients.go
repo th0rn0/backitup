@@ -127,29 +127,89 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 
 	// Load local snapshots from the hot store (best-effort — directory may not exist yet).
 	var localSnapshots []mode.Snapshot
+	var clientDir string
 	if sm, ok := mode.Server(c.Mode); ok {
-		clientDir := filepath.Join(s.backupBaseDir, model.Slug(c.Name))
+		clientDir = filepath.Join(s.backupBaseDir, model.Slug(c.Name))
 		snaps, err := sm.List(ctx, clientDir)
 		if err == nil {
 			localSnapshots = snaps
 		}
 	}
 
+	// Build set of snapshot IDs present on local disk for cross-referencing.
+	localIDs := make(map[string]bool, len(localSnapshots))
+	for _, s := range localSnapshots {
+		localIDs[s.ID] = true
+	}
+
+	// Snapshot IDs recorded in offsite DB but no longer present on local disk.
+	type missingLocalRow struct {
+		ID         string
+		UploadedAt time.Time
+		Bytes      int64
+	}
+	var missingLocalSnaps []missingLocalRow
+	for _, o := range offsiteObjects {
+		if !localIDs[o.SnapshotID] {
+			missingLocalSnaps = append(missingLocalSnaps, missingLocalRow{
+				ID: o.SnapshotID, UploadedAt: o.UploadedAt, Bytes: o.Bytes,
+			})
+		}
+	}
+
+	// Check which offsite objects actually exist in the remote (best-effort).
+	type offsiteObjectView struct {
+		model.OffsiteObject
+		LocalExists  bool
+		RemoteExists *bool // nil = unknown
+	}
+	offsiteViews := make([]offsiteObjectView, len(offsiteObjects))
+	var remoteFileSet map[string]bool // nil = not checked
+	if c.OffsiteRemote != "" && s.rcloneConfig != "" && len(offsiteObjects) > 0 {
+		lsfDir := c.OffsiteDir
+		if lsfDir == "" {
+			lsfDir = model.Slug(c.Name)
+		}
+		lsfCtx, lsfCancel := context.WithTimeout(r.Context(), 8*time.Second)
+		files, err := rcloneLsf(lsfCtx, s.rcloneConfig, c.OffsiteRemote, lsfDir)
+		lsfCancel()
+		if err == nil {
+			remoteFileSet = make(map[string]bool, len(files))
+			for _, f := range files {
+				remoteFileSet[f] = true
+			}
+		}
+	}
+	for i, o := range offsiteObjects {
+		v := offsiteObjectView{OffsiteObject: o, LocalExists: localIDs[o.SnapshotID]}
+		if remoteFileSet != nil {
+			expectedName := o.SnapshotID
+			if c.Mode == model.ModeRsync {
+				expectedName += ".tar.gz"
+			}
+			exists := remoteFileSet[expectedName]
+			v.RemoteExists = &exists
+		}
+		offsiteViews[i] = v
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
-		"Username":       usernameFromContext(r.Context()),
-		"ActivePage":     "",
-		"Client":         c,
-		"Health":         string(h),
-		"HealthLabel":    healthLabel(h),
-		"Icon":           healthIcon(h),
-		"Runs":           runs,
-		"OffsiteRuns":    offsiteRuns,
-		"OffsiteObjects": offsiteObjects,
-		"LocalSnapshots": localSnapshots,
-		"Remotes":        allRemotes,
-		"Flash":          r.URL.Query().Get("msg"),
-		"Error":          r.URL.Query().Get("err"),
+		"Username":          usernameFromContext(r.Context()),
+		"ActivePage":        "",
+		"Client":            c,
+		"ClientDir":         clientDir,
+		"Health":            string(h),
+		"HealthLabel":       healthLabel(h),
+		"Icon":              healthIcon(h),
+		"Runs":              runs,
+		"OffsiteRuns":       offsiteRuns,
+		"OffsiteObjects":    offsiteViews,
+		"LocalSnapshots":    localSnapshots,
+		"MissingLocalSnaps": missingLocalSnaps,
+		"Remotes":           allRemotes,
+		"Flash":             r.URL.Query().Get("msg"),
+		"Error":             r.URL.Query().Get("err"),
 	})
 }
 
