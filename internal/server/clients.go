@@ -19,6 +19,7 @@ import (
 	"github.com/th0rn0/backitup/internal/authkeys"
 	"github.com/th0rn0/backitup/internal/keys"
 	"github.com/th0rn0/backitup/internal/model"
+	"github.com/th0rn0/backitup/internal/mode"
 	"github.com/th0rn0/backitup/internal/store"
 )
 
@@ -116,25 +117,39 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, _ := s.st.ListRuns(ctx, c.ID, 20)
 	offsiteRuns, _ := s.st.ListOffsiteRuns(ctx, c.ID, 20)
+	offsiteObjects, _ := s.st.ListOffsiteObjects(ctx, c.ID)
 	allRemotes, _ := s.st.ListRemotes(ctx)
 	var latest *model.Run
 	if len(runs) > 0 {
 		latest = &runs[0]
 	}
 	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
+
+	// Load local snapshots from the hot store (best-effort — directory may not exist yet).
+	var localSnapshots []mode.Snapshot
+	if sm, ok := mode.Server(c.Mode); ok {
+		clientDir := filepath.Join(s.backupBaseDir, model.Slug(c.Name))
+		snaps, err := sm.List(ctx, clientDir)
+		if err == nil {
+			localSnapshots = snaps
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
-		"Username":    usernameFromContext(r.Context()),
-		"ActivePage":  "",
-		"Client":      c,
-		"Health":      string(h),
-		"HealthLabel": healthLabel(h),
-		"Icon":        healthIcon(h),
-		"Runs":        runs,
-		"OffsiteRuns": offsiteRuns,
-		"Remotes":     allRemotes,
-		"Flash":       r.URL.Query().Get("msg"),
-		"Error":       r.URL.Query().Get("err"),
+		"Username":       usernameFromContext(r.Context()),
+		"ActivePage":     "",
+		"Client":         c,
+		"Health":         string(h),
+		"HealthLabel":    healthLabel(h),
+		"Icon":           healthIcon(h),
+		"Runs":           runs,
+		"OffsiteRuns":    offsiteRuns,
+		"OffsiteObjects": offsiteObjects,
+		"LocalSnapshots": localSnapshots,
+		"Remotes":        allRemotes,
+		"Flash":          r.URL.Query().Get("msg"),
+		"Error":          r.URL.Query().Get("err"),
 	})
 }
 

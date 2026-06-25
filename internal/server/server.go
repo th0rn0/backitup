@@ -194,6 +194,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /clients/{name}/offsite", s.requireAdmin(s.postUpdateClientOffsite))
 	mux.HandleFunc("POST /clients/{name}/offsite/run", s.requireAdmin(s.postOffsiteRun))
 	mux.HandleFunc("POST /clients/{name}/offsite/test", s.requireAdmin(s.postTestClientOffsite))
+	mux.HandleFunc("GET /clients/{name}/snapshots/{snapshotID}", s.requireAdmin(s.getSnapshotDownload))
+	mux.HandleFunc("POST /clients/{name}/snapshots/{snapshotID}/delete", s.requireAdmin(s.postSnapshotDelete))
+	mux.HandleFunc("GET /clients/{name}/offsite/{snapshotID}/download", s.requireAdmin(s.getOffsiteDownload))
+	mux.HandleFunc("POST /clients/{name}/offsite/{snapshotID}/delete", s.requireAdmin(s.postOffsiteObjectDelete))
 	mux.HandleFunc("POST /clients/{name}/delete", s.requireAdmin(s.postDeleteClient))
 
 	mux.HandleFunc("GET /users", s.requireAdmin(s.getUsers))

@@ -127,6 +127,84 @@
         </div>
       </div>
 
+      <div class="section" data-tab-group>
+        <h2>Backup files</h2>
+        <div class="tabs">
+          <button class="tab-btn" data-tab-btn="local-files">Local</button>
+          {{if .Client.OffsiteRemote}}<button class="tab-btn" data-tab-btn="offsite-files">Offsite</button>{{end}}
+        </div>
+
+        <div data-tab="local-files">
+          {{if .LocalSnapshots}}
+          <table>
+            <thead>
+              <tr>
+                <th>Snapshot</th>
+                <th>Created</th>
+                <th>Size</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .LocalSnapshots}}
+              <tr>
+                <td class="mono">{{.ID}}</td>
+                <td class="mono">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                <td class="mono">{{humanBytes .Bytes}}</td>
+                <td class="flex-row-sm">
+                  <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}" class="btn btn-ghost btn-sm" download>Download</a>
+                  <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}?view=1" class="btn btn-ghost btn-sm" target="_blank" rel="noopener">Open</a>
+                  <form method="POST" action="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}/delete" class="d-inline"
+                        onsubmit="return confirm('Delete local snapshot {{.ID}}? This cannot be undone.')">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                  </form>
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="help-text">No local snapshots yet.</p>
+          {{end}}
+        </div>
+
+        {{if .Client.OffsiteRemote}}
+        <div data-tab="offsite-files">
+          {{if .OffsiteObjects}}
+          <table>
+            <thead>
+              <tr>
+                <th>Snapshot</th>
+                <th>Uploaded</th>
+                <th>Size</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .OffsiteObjects}}
+              <tr>
+                <td class="mono">{{.SnapshotID}}</td>
+                <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+                <td class="mono">{{humanBytes .Bytes}}</td>
+                <td class="flex-row-sm">
+                  <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>
+                  <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download?view=1" class="btn btn-ghost btn-sm" target="_blank" rel="noopener">Open</a>
+                  <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/delete" class="d-inline"
+                        onsubmit="return confirm('Delete offsite object {{.SnapshotID}}? This cannot be undone.')">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                  </form>
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="help-text">No offsite objects yet.</p>
+          {{end}}
+        </div>
+        {{end}}
+      </div>
+
       <div class="section">
         <h2>Offsite destination</h2>
         <p class="section-hint">Where to tier cold copies of this client's backups. Configure remotes on the <a href="/settings/remotes">Remote storage</a> page first.</p>
