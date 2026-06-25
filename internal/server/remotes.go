@@ -167,6 +167,31 @@ func (s *Server) postCreateGDriveRemote(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/settings/remotes?msg=Google+Drive+remote+%22"+url.QueryEscape(name)+"%22+created", http.StatusSeeOther)
 }
 
+// postTestRemote verifies that a remote is reachable by running rclone lsd
+// on its root. Redirects back with a ?msg or ?err flash.
+func (s *Server) postTestRemote(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !validRemoteName(name) {
+		http.NotFound(w, r)
+		return
+	}
+	if s.rcloneConfig == "" {
+		http.Redirect(w, r, "/settings/remotes?err=rclone+not+configured", http.StatusSeeOther)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "rclone", "--config", s.rcloneConfig, "lsd", name+":").CombinedOutput()
+	if err != nil {
+		log.Printf("rclone test %q: %v: %s", name, err, out)
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("\""+name+"\": "+strings.TrimSpace(string(out))), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/settings/remotes?msg="+url.QueryEscape("\""+name+"\" connected successfully"), http.StatusSeeOther)
+}
+
 // postDeleteRemote removes a remote from the rclone config by name.
 func (s *Server) postDeleteRemote(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

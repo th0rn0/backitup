@@ -7,7 +7,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -104,6 +106,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runs, _ := s.st.ListRuns(ctx, c.ID, 20)
+	offsiteObjects, _ := s.st.ListOffsiteObjects(ctx, c.ID)
 	var latest *model.Run
 	if len(runs) > 0 {
 		latest = &runs[0]
@@ -111,12 +114,15 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
-		"Username":    usernameFromContext(r.Context()),
-		"Client":      c,
-		"Health":      string(h),
-		"HealthLabel": healthLabel(h),
-		"Icon":        healthIcon(h),
-		"Runs":        runs,
+		"Username":       usernameFromContext(r.Context()),
+		"Client":         c,
+		"Health":         string(h),
+		"HealthLabel":    healthLabel(h),
+		"Icon":           healthIcon(h),
+		"Runs":           runs,
+		"OffsiteObjects": offsiteObjects,
+		"Flash":          r.URL.Query().Get("msg"),
+		"Error":          r.URL.Query().Get("err"),
 	})
 }
 
@@ -257,6 +263,51 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	}
 
 	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+}
+
+// postTestClientOffsite checks connectivity for a client's configured rclone
+// remote + dir by running rclone lsd on the target path. Synchronous (fast).
+func (s *Server) postTestClientOffsite(w http.ResponseWriter, r *http.Request) {
+	if s.rcloneConfig == "" {
+		http.Redirect(w, r, "/clients/"+r.PathValue("name")+"?err=rclone+not+configured", http.StatusSeeOther)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if c.OffsiteRemote == "" {
+		http.Redirect(w, r, "/clients/"+r.PathValue("name")+"?err=no+offsite+remote+configured", http.StatusSeeOther)
+		return
+	}
+
+	// Resolve the rclone path the same way the lifecycle worker does.
+	dir := c.OffsiteDir
+	if c.OffsiteRemote == "gdrive" && dir != "" {
+		dir = "{" + dir + "}"
+	}
+	path := c.OffsiteRemote + ":"
+	if dir != "" {
+		path += dir
+	}
+
+	out, err := exec.CommandContext(ctx, "rclone", "--config", s.rcloneConfig, "lsd", path).CombinedOutput()
+	slug := r.PathValue("name")
+	if err != nil {
+		log.Printf("offsite test: client=%q remote=%s: %v: %s", c.Name, path, err, out)
+		http.Redirect(w, r, "/clients/"+slug+"?err="+url.QueryEscape(strings.TrimSpace(string(out))), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/clients/"+slug+"?msg="+url.QueryEscape("Connected to "+path+" successfully"), http.StatusSeeOther)
 }
 
 // postOffsiteRun triggers an immediate offsite upload for a client in the

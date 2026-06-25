@@ -193,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /clients/{name}/rotate", s.requireAdmin(s.postRotateClient))
 	mux.HandleFunc("POST /clients/{name}/offsite", s.requireAdmin(s.postUpdateClientOffsite))
 	mux.HandleFunc("POST /clients/{name}/offsite/run", s.requireAdmin(s.postOffsiteRun))
+	mux.HandleFunc("POST /clients/{name}/offsite/test", s.requireAdmin(s.postTestClientOffsite))
 	mux.HandleFunc("POST /clients/{name}/delete", s.requireAdmin(s.postDeleteClient))
 
 	mux.HandleFunc("GET /users", s.requireAdmin(s.getUsers))
@@ -202,6 +203,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /settings/remotes", s.requireAdmin(s.getRemotes))
 	mux.HandleFunc("POST /settings/remotes/s3", s.requireAdmin(s.postCreateS3Remote))
 	mux.HandleFunc("POST /settings/remotes/gdrive", s.requireAdmin(s.postCreateGDriveRemote))
+	mux.HandleFunc("POST /settings/remotes/{name}/test", s.requireAdmin(s.postTestRemote))
 	mux.HandleFunc("POST /settings/remotes/{name}/delete", s.requireAdmin(s.postDeleteRemote))
 
 	// Fleet status API (session-authed); polled by the dashboard for live updates.

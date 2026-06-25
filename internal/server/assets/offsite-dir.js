@@ -32,8 +32,34 @@
   }
 
   var sel = document.getElementById('offsite_remote');
-  if (!sel) return;
+  if (sel) {
+    applyRemote(sel.value, false);
+    sel.addEventListener('change', function () { applyRemote(this.value, true); });
+  }
+}());
 
-  applyRemote(sel.value, false);
-  sel.addEventListener('change', function () { applyRemote(this.value, true); });
+// Tab switcher for elements with data-tab-group / data-tab attributes.
+// Clicking a [data-tab-btn] within a [data-tab-group] shows the matching
+// [data-tab] panel and hides the rest. No global state; each group is independent.
+(function () {
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-tab-btn]');
+    if (!btn) return;
+    var group = btn.closest('[data-tab-group]');
+    if (!group) return;
+    var target = btn.getAttribute('data-tab-btn');
+
+    group.querySelectorAll('[data-tab-btn]').forEach(function (b) {
+      b.classList.toggle('tab-active', b.getAttribute('data-tab-btn') === target);
+    });
+    group.querySelectorAll('[data-tab]').forEach(function (p) {
+      p.style.display = p.getAttribute('data-tab') === target ? '' : 'none';
+    });
+  });
+
+  // Activate the first tab in each group on load.
+  document.querySelectorAll('[data-tab-group]').forEach(function (group) {
+    var first = group.querySelector('[data-tab-btn]');
+    if (first) first.click();
+  });
 }());
