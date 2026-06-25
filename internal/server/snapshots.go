@@ -344,28 +344,6 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=offsite+objects+deleted", http.StatusSeeOther)
 }
 
-// rcloneLsf lists filenames in a remote directory using rclone lsf.
-func rcloneLsf(ctx context.Context, configPath, remote, dir string) ([]string, error) {
-	args := []string{"lsf", remote + ":" + dir}
-	if configPath != "" {
-		args = append([]string{"--config", configPath}, args...)
-	}
-	cmd := exec.CommandContext(ctx, "rclone", args...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("rclone lsf: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-		if line != "" {
-			files = append(files, line)
-		}
-	}
-	return files, nil
-}
-
 // rcloneCatStream pipes a remote object to w using rclone cat.
 func rcloneCatStream(ctx context.Context, configPath, remotePath string, w io.Writer) error {
 	args := []string{"cat", remotePath}

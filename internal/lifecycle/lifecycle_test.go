@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,16 @@ func (f *fakeOffsite) Upload(_ context.Context, local, _, obj string) (int64, er
 func (f *fakeOffsite) Delete(_ context.Context, _, obj string) error {
 	f.del = append(f.del, obj)
 	return nil
+}
+
+func (f *fakeOffsite) Lsf(_ context.Context, _, _ string) ([]string, error) {
+	// Return the basenames of everything that was uploaded.
+	var files []string
+	for obj := range f.up {
+		parts := strings.SplitN(obj, "/", 2)
+		files = append(files, parts[len(parts)-1])
+	}
+	return files, nil
 }
 
 func mkArchive(t *testing.T, path string, mtime time.Time) {

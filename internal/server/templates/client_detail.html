@@ -216,9 +216,7 @@
                   {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge badge-missing">deleted</span>{{end}}
                 </td>
                 <td>
-                  {{if .RemoteExists}}
-                    {{if derefBool .RemoteExists}}<span class="badge badge-ok">verified</span>{{else}}<span class="badge badge-missing">missing</span>{{end}}
-                  {{else}}<span class="badge">unknown</span>{{end}}
+                  {{if .RemoteVerifiedAt.IsZero}}<span class="badge">not checked</span>{{else if .RemoteMissing}}<span class="badge badge-missing" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">missing</span>{{else}}<span class="badge badge-ok" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">verified</span>{{end}}
                 </td>
                 <td class="flex-row-sm">
                   <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>

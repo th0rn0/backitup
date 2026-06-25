@@ -41,6 +41,21 @@ func (r *Rclone) Delete(ctx context.Context, remote, objectName string) error {
 	return err
 }
 
+// Lsf returns the filenames (not paths) present in a remote directory.
+func (r *Rclone) Lsf(ctx context.Context, remote, dir string) ([]string, error) {
+	out, err := r.run(ctx, "lsf", remote+":"+dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
 func (r *Rclone) run(ctx context.Context, args ...string) (string, error) {
 	full := args
 	if r.config != "" {

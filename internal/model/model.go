@@ -132,6 +132,10 @@ type OffsiteObject struct {
 	Remote     string
 	Bytes      int64
 	UploadedAt time.Time
+
+	// Populated by the lifecycle verification pass.
+	RemoteMissing    bool      // true if last rclone lsf confirmed the file is gone
+	RemoteVerifiedAt time.Time // zero = never verified
 }
 
 // OffsiteRun records one upload session (scheduled or adhoc). Mirrors the runs

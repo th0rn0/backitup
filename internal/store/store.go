@@ -56,6 +56,8 @@ func Open(dsn string) (*Store, error) {
 		`ALTER TABLE clients ADD COLUMN offsite_interval_secs INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE clients ADD COLUMN token_prefix          TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN offsite_upload_mode   TEXT    NOT NULL DEFAULT 'all'`,
+		`ALTER TABLE offsite_objects ADD COLUMN remote_missing    INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE offsite_objects ADD COLUMN remote_verified_at TEXT   NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
@@ -397,7 +399,7 @@ func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) 
 // ListOffsiteObjects returns the offsite objects for a client, newest first.
 func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model.OffsiteObject, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, client_id, snapshot_id, remote, bytes, uploaded_at
+		SELECT id, client_id, snapshot_id, remote, bytes, uploaded_at, remote_missing, remote_verified_at
 		FROM offsite_objects WHERE client_id = ? ORDER BY uploaded_at DESC`, clientID)
 	if err != nil {
 		return nil, err
@@ -406,14 +408,29 @@ func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model
 	var out []model.OffsiteObject
 	for rows.Next() {
 		var o model.OffsiteObject
-		var uploaded string
-		if err := rows.Scan(&o.ID, &o.ClientID, &o.SnapshotID, &o.Remote, &o.Bytes, &uploaded); err != nil {
+		var uploaded, verifiedAt string
+		var remoteMissing int
+		if err := rows.Scan(&o.ID, &o.ClientID, &o.SnapshotID, &o.Remote, &o.Bytes, &uploaded, &remoteMissing, &verifiedAt); err != nil {
 			return nil, err
 		}
 		o.UploadedAt, _ = time.Parse(rfc3339, uploaded)
+		o.RemoteMissing = remoteMissing != 0
+		o.RemoteVerifiedAt, _ = time.Parse(rfc3339, verifiedAt)
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// UpdateOffsiteRemoteStatus records the result of a remote existence check.
+func (s *Store) UpdateOffsiteRemoteStatus(ctx context.Context, id int64, missing bool, verifiedAt time.Time) error {
+	m := 0
+	if missing {
+		m = 1
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE offsite_objects SET remote_missing=?, remote_verified_at=? WHERE id=?`,
+		m, verifiedAt.UTC().Format(rfc3339), id)
+	return err
 }
 
 // DeleteOffsiteObject removes an offsite record (after the remote object is gone).

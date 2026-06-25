@@ -157,40 +157,15 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check which offsite objects actually exist in the remote (best-effort).
+	// Wrap each offsite object with the local-existence flag (remote status is
+	// populated by the lifecycle verification pass, not on page load).
 	type offsiteObjectView struct {
 		model.OffsiteObject
-		LocalExists  bool
-		RemoteExists *bool // nil = unknown
+		LocalExists bool
 	}
 	offsiteViews := make([]offsiteObjectView, len(offsiteObjects))
-	var remoteFileSet map[string]bool // nil = not checked
-	if c.OffsiteRemote != "" && s.rcloneConfig != "" && len(offsiteObjects) > 0 {
-		lsfDir := c.OffsiteDir
-		if lsfDir == "" {
-			lsfDir = model.Slug(c.Name)
-		}
-		lsfCtx, lsfCancel := context.WithTimeout(r.Context(), 8*time.Second)
-		files, err := rcloneLsf(lsfCtx, s.rcloneConfig, c.OffsiteRemote, lsfDir)
-		lsfCancel()
-		if err == nil {
-			remoteFileSet = make(map[string]bool, len(files))
-			for _, f := range files {
-				remoteFileSet[f] = true
-			}
-		}
-	}
 	for i, o := range offsiteObjects {
-		v := offsiteObjectView{OffsiteObject: o, LocalExists: localIDs[o.SnapshotID]}
-		if remoteFileSet != nil {
-			expectedName := o.SnapshotID
-			if c.Mode == model.ModeRsync {
-				expectedName += ".tar.gz"
-			}
-			exists := remoteFileSet[expectedName]
-			v.RemoteExists = &exists
-		}
-		offsiteViews[i] = v
+		offsiteViews[i] = offsiteObjectView{OffsiteObject: o, LocalExists: localIDs[o.SnapshotID]}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

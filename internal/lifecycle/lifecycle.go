@@ -34,6 +34,8 @@ const DefaultLogRetentionDays = 7
 type Offsite interface {
 	Upload(ctx context.Context, localPath, remote, objectName string) (bytes int64, err error)
 	Delete(ctx context.Context, remote, objectName string) error
+	// Lsf returns the filenames (no path prefix) inside a remote directory.
+	Lsf(ctx context.Context, remote, dir string) ([]string, error)
 }
 
 // Deps are the worker's dependencies. Offsite nil disables cold tiering.
@@ -143,6 +145,9 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	}
 
 	pruneHot(ctx, d, c, sm, clientDir, snaps, offsiteOn, offsited)
+	if offsiteOn {
+		verifyOffsiteObjects(ctx, d, c)
+	}
 	verifyLatest(ctx, c, sm, clientDir, snaps)
 	checkStaleAlert(ctx, d, c)
 
@@ -330,6 +335,61 @@ func offsiteDir(c model.Client) string {
 		return c.OffsiteDir
 	}
 	return model.Slug(c.Name)
+}
+
+// verifyOffsiteObjects calls rclone lsf for the client's remote directory and
+// updates the remote_missing / remote_verified_at fields on each offsite_objects
+// row. Throttled to once per hour per client: if the oldest verified_at is
+// within the last hour, the check is skipped.
+func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client) {
+	objects, err := d.Store.ListOffsiteObjects(ctx, c.ID)
+	if err != nil || len(objects) == 0 {
+		return
+	}
+
+	// Skip if all objects have been checked within the last hour.
+	oldestVerified := time.Time{}
+	for _, o := range objects {
+		if o.RemoteVerifiedAt.IsZero() {
+			oldestVerified = time.Time{} // force run
+			break
+		}
+		if oldestVerified.IsZero() || o.RemoteVerifiedAt.Before(oldestVerified) {
+			oldestVerified = o.RemoteVerifiedAt
+		}
+	}
+	if !oldestVerified.IsZero() && d.now().Sub(oldestVerified) < time.Hour {
+		return
+	}
+
+	dir := offsiteDir(c)
+	lsfCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	files, err := d.Offsite.Lsf(lsfCtx, c.OffsiteRemote, dir)
+	cancel()
+	if err != nil {
+		log.Printf("lifecycle: offsite verify: client=%s: lsf: %v", c.Name, err)
+		return // don't update status on lsf failure; keep last known state
+	}
+
+	fileSet := make(map[string]bool, len(files))
+	for _, f := range files {
+		fileSet[f] = true
+	}
+
+	now := d.now().UTC()
+	for _, o := range objects {
+		expectedName := o.SnapshotID
+		if c.Mode == model.ModeRsync {
+			expectedName += ".tar.gz"
+		}
+		missing := !fileSet[expectedName]
+		if err := d.Store.UpdateOffsiteRemoteStatus(ctx, o.ID, missing, now); err != nil {
+			log.Printf("lifecycle: offsite verify: update: %v", err)
+		}
+		if missing {
+			log.Printf("lifecycle: offsite verify: client=%s snap=%s missing from %s", c.Name, o.SnapshotID, c.OffsiteRemote)
+		}
+	}
 }
 
 // offsiteDue returns true when enough time has passed since the last upload to
