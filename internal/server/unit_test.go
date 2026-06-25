@@ -42,7 +42,8 @@ func TestConfigureIngest(t *testing.T) {
 	// Non-empty args override.
 	s.ConfigureIngest("/ak", "/b", "host:22", "http://host:8080", "img", "/hostkey.pub")
 	if s.authKeysPath != "/ak" || s.backupBaseDir != "/b" || s.publicHost != "host:22" || s.publicAPI != "http://host:8080" || s.clientImage != "img" || s.sshHostKeyPath != "/hostkey.pub" {
-		t.Fatalf("ConfigureIngest did not apply: %+v", *s)
+		t.Fatalf("ConfigureIngest did not apply: authKeysPath=%q backupBaseDir=%q publicHost=%q publicAPI=%q clientImage=%q sshHostKeyPath=%q",
+			s.authKeysPath, s.backupBaseDir, s.publicHost, s.publicAPI, s.clientImage, s.sshHostKeyPath)
 	}
 }
 
