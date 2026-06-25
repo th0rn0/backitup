@@ -19,23 +19,28 @@ type dashboardView struct {
 type summaryCounts struct{ OK, Stale, Failed, Never, Running int }
 
 type clientRow struct {
-	ID          int64
-	Name        string
-	Slug        string // URL/filesystem-safe identifier derived from Name
-	Mode        string
-	Health      string // css class: ok/stale/failed/never
-	HealthLabel string // "OK" / "Stale" / "Failed" / "Never"
-	Icon        string // ● / ▲ / ✖ / ○  (icon+colour+text; never colour alone, DD2)
-	LastBackup  string
-	Size        string
-	Retention   string
-	Offsite     string
+	ID              int64
+	Name            string
+	Slug            string // URL/filesystem-safe identifier derived from Name
+	Mode            string
+	Health          string // css class: ok/stale/failed/never
+	HealthLabel     string // "OK" / "Stale" / "Failed" / "Never"
+	Icon            string // ● / ▲ / ✖ / ○  (icon+colour+text; never colour alone, DD2)
+	LastBackup      string
+	Size            string
+	Retention       string
+	Offsite         string
+	OffsiteUploading bool // true while an adhoc offsite run is in progress
 }
 
 // buildDashboard loads the fleet and shapes it for the template: per-client
 // health, human-friendly fields, summary counts, and failed/stale-first order.
 func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 	clients, err := s.st.ListClients(ctx)
+	if err != nil {
+		return dashboardView{}, err
+	}
+	uploading, err := s.st.RunningOffsiteClientIDs(ctx)
 	if err != nil {
 		return dashboardView{}, err
 	}
@@ -54,8 +59,9 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 		row := clientRow{
 			ID: c.ID, Name: c.Name, Slug: c.Slug(), Mode: string(c.Mode),
 			Health: string(h), HealthLabel: healthLabel(h), Icon: healthIcon(h),
-			Retention: fmt.Sprintf("%dd", c.RetentionDays),
-			Offsite:   offsiteLabel(c, lastOffsite),
+			Retention:        fmt.Sprintf("%dd", c.RetentionDays),
+			Offsite:          offsiteLabel(c, lastOffsite),
+			OffsiteUploading: uploading[c.ID],
 		}
 		switch {
 		case latest == nil:

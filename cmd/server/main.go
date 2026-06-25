@@ -39,6 +39,9 @@ func main() {
 	if err := bootstrapAdmin(st); err != nil {
 		log.Fatalf("bootstrap admin: %v", err)
 	}
+	if err := st.MarkStaleOffsiteRunsFailed(context.Background()); err != nil {
+		log.Printf("warn: cleanup stale offsite runs: %v", err)
+	}
 
 	srv := server.New(st, secure)
 	backupDir := getenv("BACKITUP_BACKUP_DIR", "/srv/backups")

@@ -422,9 +422,62 @@ func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, 
 	}
 }
 
+// StartOffsiteRun inserts an offsite_runs row with status="running" so the
+// dashboard can show upload progress. Call FinishOffsiteRun when done.
+// Use only for adhoc (user-triggered) runs; scheduled runs use RecordOffsiteRun.
+func (s *Store) StartOffsiteRun(ctx context.Context, clientID int64, triggeredBy string, startedAt time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO offsite_runs (client_id, triggered_by, started_at, status)
+		 VALUES (?, ?, ?, 'running')`,
+		clientID, triggeredBy, startedAt.UTC().Format(rfc3339))
+	if err != nil {
+		return 0, fmt.Errorf("start offsite run: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// FinishOffsiteRun sets the final state of a run started by StartOffsiteRun.
+func (s *Store) FinishOffsiteRun(ctx context.Context, id int64, status string, snaps int, bytes int64, errText string, finishedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE offsite_runs
+		 SET status=?, snapshots_uploaded=?, bytes_uploaded=?, error_text=?, finished_at=?
+		 WHERE id=?`,
+		status, snaps, bytes, errText, finishedAt.UTC().Format(rfc3339), id)
+	return err
+}
+
+// MarkStaleOffsiteRunsFailed marks any rows still in "running" status as
+// failed. Call once at server startup to clean up rows left by a crash or
+// restart that interrupted an upload.
+func (s *Store) MarkStaleOffsiteRunsFailed(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE offsite_runs SET status='failed', error_text='interrupted by server restart'
+		 WHERE status='running'`)
+	return err
+}
+
+// RunningOffsiteClientIDs returns the set of client IDs that currently have
+// an offsite run with status='running', for dashboard progress indicators.
+func (s *Store) RunningOffsiteClientIDs(ctx context.Context) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT client_id FROM offsite_runs WHERE status='running'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // RecordOffsiteRun inserts a completed offsite session record in a single
-// INSERT. Use this instead of a Start/Finish pair so no orphaned "running"
-// rows accumulate if the server restarts mid-upload.
+// INSERT. Use for scheduled runs where no intermediate "running" state is needed.
 func (s *Store) RecordOffsiteRun(ctx context.Context, r model.OffsiteRun) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO offsite_runs

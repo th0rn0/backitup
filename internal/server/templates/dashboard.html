@@ -50,7 +50,10 @@
             <td data-label="Last backup" class="mono" data-field="last_backup">{{.LastBackup}}</td>
             <td data-label="Size" class="mono" data-field="size">{{.Size}}</td>
             <td data-label="Retention" class="mono">{{.Retention}}</td>
-            <td data-label="Offsite" class="mono">{{.Offsite}}</td>
+            <td data-label="Offsite" class="mono">
+              {{if .OffsiteUploading}}<span class="status running"><span class="dot" aria-hidden="true">◎</span>uploading…</span>
+              {{else}}{{.Offsite}}{{end}}
+            </td>
           </tr>
           {{end}}
         </tbody>

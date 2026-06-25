@@ -344,7 +344,7 @@ func offsiteDue(ctx context.Context, d Deps, c model.Client) (bool, error) {
 // OffsiteClient runs an immediate offsite upload + prune pass for a single
 // client, bypassing the per-client interval check. Safe to call concurrently
 // with the background worker because all state mutations go through the store.
-// Always records a run entry so adhoc triggers appear in the history log.
+// Uses a two-step Start/Finish so the dashboard can show upload progress.
 func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if d.Offsite == nil || c.OffsiteRemote == "" {
 		return fmt.Errorf("client %q has no offsite remote configured", c.Name)
@@ -364,15 +364,27 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if err != nil {
 		return err
 	}
-	start := d.now()
+
+	// Insert a "running" row immediately so the dashboard can show progress.
+	runID, startErr := d.Store.StartOffsiteRun(ctx, c.ID, "adhoc", d.now())
 	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited)
 	pruneErr := pruneOffsite(ctx, d, c)
 	combinedErr := uploadErr
 	if combinedErr == nil {
 		combinedErr = pruneErr
 	}
-	// Always record adhoc runs regardless of whether new snapshots were uploaded.
-	recordOffsiteRun(ctx, d, c, "adhoc", start, snapsUploaded, bytesUploaded, combinedErr)
+	if startErr == nil {
+		status, errText := "ok", ""
+		if combinedErr != nil {
+			status, errText = "failed", combinedErr.Error()
+		}
+		if err := d.Store.FinishOffsiteRun(ctx, runID, status, snapsUploaded, bytesUploaded, errText, d.now()); err != nil {
+			log.Printf("offsite run: finish failed for client=%q: %v", c.Name, err)
+		}
+	} else {
+		// StartOffsiteRun failed — fall back to single-INSERT so the run is still recorded.
+		recordOffsiteRun(ctx, d, c, "adhoc", d.now(), snapsUploaded, bytesUploaded, combinedErr)
+	}
 	return combinedErr
 }
 
