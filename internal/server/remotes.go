@@ -135,6 +135,100 @@ func (s *Server) postCreateRemote(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings/remotes?msg="+url.QueryEscape("Remote \""+name+"\" created"), http.StatusSeeOther)
 }
 
+// getEditRemote renders the edit form for an existing remote.
+func (s *Server) getEditRemote(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !validRemoteName(name) {
+		http.NotFound(w, r)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	remote, err := s.st.GetRemoteByName(ctx, name)
+	if err != nil || remote == nil {
+		http.NotFound(w, r)
+		return
+	}
+	def := model.FindBackend(remote.Backend)
+	if def == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.ExecuteTemplate(w, "remote_edit.html", map[string]any{
+		"Username":   usernameFromContext(r.Context()),
+		"ActivePage": "remotes",
+		"Remote":     remote,
+		"Def":        def,
+		"Flash":      r.URL.Query().Get("msg"),
+		"Error":      r.URL.Query().Get("err"),
+	})
+}
+
+// postEditRemote updates the config of an existing remote.
+func (s *Server) postEditRemote(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !validRemoteName(name) {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/settings/remotes/"+name+"/edit?err=invalid+form", http.StatusSeeOther)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	existing, err := s.st.GetRemoteByName(ctx, name)
+	if err != nil || existing == nil {
+		http.NotFound(w, r)
+		return
+	}
+	def := model.FindBackend(existing.Backend)
+	if def == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	cfg := map[string]string{}
+	for _, f := range def.Fields {
+		val := strings.TrimSpace(r.PostFormValue(f.Key))
+		if val == "" {
+			// Keep existing value (critical for obscured password fields).
+			if v, ok := existing.Config[f.Key]; ok {
+				cfg[f.Key] = v
+			}
+			continue
+		}
+		if f.Obscure {
+			obscured, oErr := rcloneObscure(ctx, s.rcloneConfig, val)
+			if oErr != nil {
+				log.Printf("rclone obscure for %s/%s: %v", name, f.Key, oErr)
+				http.Redirect(w, r, "/settings/remotes/"+name+"/edit?err="+url.QueryEscape("Could not obscure password: "+oErr.Error()), http.StatusSeeOther)
+				return
+			}
+			val = obscured
+		}
+		cfg[f.Key] = val
+	}
+
+	if err := s.st.UpdateRemote(ctx, name, cfg); err != nil {
+		log.Printf("update remote %q: %v", name, err)
+		http.Redirect(w, r, "/settings/remotes/"+name+"/edit?err="+url.QueryEscape("Could not save remote: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+
+	if err := s.writeRcloneConfig(ctx); err != nil {
+		log.Printf("write rclone config after edit %q: %v", name, err)
+	}
+
+	http.Redirect(w, r, "/settings/remotes?msg="+url.QueryEscape("Remote \""+name+"\" updated"), http.StatusSeeOther)
+}
+
 // postTestRemote verifies a remote is reachable with rclone lsd.
 func (s *Server) postTestRemote(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

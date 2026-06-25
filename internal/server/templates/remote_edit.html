@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>backitup — edit remote</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+</head>
+<body>
+  <div class="app">
+    {{template "sidebar" .}}
+
+    <main class="main">
+      <div class="topbar">
+        <h1>Edit remote — <span class="mono">{{.Remote.Name}}</span></h1>
+      </div>
+
+      {{if .Flash}}<div class="alert alert-ok" role="status">{{.Flash}}</div>{{end}}
+      {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
+
+      <div class="section">
+        <p class="section-hint">
+          Backend: <span class="badge">{{.Remote.BackendLabel}}</span> &nbsp;
+          The backend type cannot be changed. To use a different backend, delete this remote and add a new one.
+        </p>
+
+        <form method="POST" action="/settings/remotes/{{.Remote.Name}}/edit" class="form" autocomplete="off">
+          {{range .Def.Fields}}
+          <label>
+            {{.Label}}{{if not .Required}} <span class="label-optional">(optional)</span>{{end}}
+          </label>
+          {{if eq .Type "textarea"}}
+          <textarea name="{{.Key}}" rows="8"
+                    class="textarea-code"
+                    placeholder="{{.Default}}" autocomplete="off">{{index $.Remote.Config .Key}}</textarea>
+          {{else if eq .Type "select"}}
+          {{$cur := index $.Remote.Config .Key}}
+          <select name="{{.Key}}">
+            {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+          {{else if eq .Type "password"}}
+          <input name="{{.Key}}" type="password" placeholder="unchanged" autocomplete="new-password">
+          {{else}}
+          <input name="{{.Key}}" type="text" value="{{index $.Remote.Config .Key}}"
+                 placeholder="{{.Default}}" autocomplete="off">
+          {{end}}
+          {{if .Hint}}<div class="field-hint">{{.Hint}}</div>{{end}}
+          {{if .Obscure}}<div class="field-hint">Leave blank to keep the existing value.</div>{{end}}
+          {{end}}
+
+          <div class="form-actions">
+            <button type="submit" class="btn">Save changes</button>
+            <a href="/settings/remotes" class="btn btn-ghost">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

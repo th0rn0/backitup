@@ -216,6 +216,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /settings/remotes", s.requireAdmin(s.getRemotes))
 	mux.HandleFunc("POST /settings/remotes", s.requireAdmin(s.postCreateRemote))
+	mux.HandleFunc("GET /settings/remotes/{name}/edit", s.requireAdmin(s.getEditRemote))
+	mux.HandleFunc("POST /settings/remotes/{name}/edit", s.requireAdmin(s.postEditRemote))
 	mux.HandleFunc("POST /settings/remotes/{name}/test", s.requireAdmin(s.postTestRemote))
 	mux.HandleFunc("POST /settings/remotes/{name}/delete", s.requireAdmin(s.postDeleteRemote))
 

@@ -612,6 +612,16 @@ func (s *Store) GetRemoteByName(ctx context.Context, name string) (*model.Remote
 	return &r, nil
 }
 
+// UpdateRemote replaces the config for an existing remote (name and backend are immutable).
+func (s *Store) UpdateRemote(ctx context.Context, name string, cfg map[string]string) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal remote config: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE remotes SET config=? WHERE name=?`, string(b), name)
+	return err
+}
+
 // DeleteRemote removes a remote by name.
 func (s *Store) DeleteRemote(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM remotes WHERE name=?`, name)

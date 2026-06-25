@@ -39,8 +39,9 @@
                 <form method="POST" action="/settings/remotes/{{.Name}}/test" class="d-inline">
                   <button type="submit" class="btn btn-ghost btn-sm">Test</button>
                 </form>
+                <a href="/settings/remotes/{{.Name}}/edit" class="btn btn-ghost btn-sm">Edit</a>
                 <form method="POST" action="/settings/remotes/{{.Name}}/delete" class="d-inline"
-                      onsubmit="return confirm('Delete remote {{.Name}}? No data is removed from the destination.')">
+                      data-confirm="Delete remote {{.Name}}? No data is removed from the destination.">
                   <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
               </td>
@@ -117,5 +118,6 @@
     </main>
   </div>
   <script src="/static/remote-form.js"></script>
+  <script src="/static/backup-files.js"></script>
 </body>
 </html>
