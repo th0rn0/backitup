@@ -376,6 +376,13 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 		status, errText := "ok", ""
 		if combinedErr != nil {
 			status, errText = "failed", combinedErr.Error()
+			log.Printf("offsite: client=%q remote=%s adhoc FAILED: %v", c.Name, c.OffsiteRemote, combinedErr)
+			if d.DiscordWebhook != "" {
+				go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
+					"❌ **backitup** — `%s` offsite adhoc **FAILED**\nRemote: `%s`\nError: %s",
+					c.Name, c.OffsiteRemote, combinedErr.Error(),
+				))
+			}
 		}
 		if err := d.Store.FinishOffsiteRun(ctx, runID, status, snapsUploaded, bytesUploaded, errText, d.now()); err != nil {
 			log.Printf("offsite run: finish failed for client=%q: %v", c.Name, err)
@@ -393,6 +400,13 @@ func recordOffsiteRun(ctx context.Context, d Deps, c model.Client, triggeredBy s
 	status, errText := "ok", ""
 	if runErr != nil {
 		status, errText = "failed", runErr.Error()
+		log.Printf("offsite: client=%q remote=%s %s FAILED: %v", c.Name, c.OffsiteRemote, triggeredBy, runErr)
+		if d.DiscordWebhook != "" {
+			go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
+				"❌ **backitup** — `%s` offsite %s **FAILED**\nRemote: `%s`\nError: %s",
+				c.Name, triggeredBy, c.OffsiteRemote, runErr.Error(),
+			))
+		}
 	}
 	if err := d.Store.RecordOffsiteRun(ctx, model.OffsiteRun{
 		ClientID:          c.ID,

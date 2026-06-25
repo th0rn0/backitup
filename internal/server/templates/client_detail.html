@@ -113,6 +113,11 @@
                 <td data-label="Size" class="mono">{{humanBytes .BytesUploaded}}</td>
                 <td data-label="Triggered by"><span class="badge">{{.TriggeredBy}}</span></td>
               </tr>
+              {{if .ErrorText}}
+              <tr>
+                <td colspan="6" style="padding:0 12px 10px;color:var(--red);font-size:12px;font-family:var(--mono);white-space:pre-wrap;word-break:break-all">{{.ErrorText}}</td>
+              </tr>
+              {{end}}
               {{end}}
             </tbody>
           </table>
