@@ -12,6 +12,9 @@
         el.disabled = !match;
       });
     });
+    document.querySelectorAll('[data-backend-warning]').forEach(function (el) {
+      el.style.display = el.getAttribute('data-backend-warning') === backend ? '' : 'none';
+    });
     var submit = document.getElementById('add-remote-submit');
     if (submit) submit.style.display = backend ? '' : 'none';
   }

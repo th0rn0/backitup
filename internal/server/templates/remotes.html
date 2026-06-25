@@ -71,6 +71,15 @@
             {{end}}
           </select>
 
+          <!-- ── per-backend warnings ── -->
+          <div data-backend-warning="drive" class="alert alert-warn" style="display:none" role="alert">
+            <strong>Google Workspace required.</strong>
+            Service accounts have no personal storage quota, so uploads to My Drive always fail.
+            The Shared Drive ID field below is required — but Shared Drives only exist on
+            <strong>paid Google Workspace accounts</strong> (not personal @gmail.com accounts).
+            If you're on a personal account, use a different backend such as Backblaze B2 instead.
+          </div>
+
           <!-- ── per-backend field groups ── -->
           {{range .Backends}}
           <div data-backend-fields="{{.ID}}" style="display:none">
