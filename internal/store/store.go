@@ -637,6 +637,31 @@ func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir s
 	return nil
 }
 
+// UpdateClientRetention changes the hot and offsite retention horizons.
+func (s *Store) UpdateClientRetention(ctx context.Context, id int64, hotDays, offsiteDays int) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE clients SET retention_days=?, offsite_retention_days=? WHERE id=?`,
+		hotDays, offsiteDays, id)
+	if err != nil {
+		return fmt.Errorf("update retention: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("client %d: not found", id)
+	}
+	return nil
+}
+
+// ForgetOffsiteObject removes the offsite tracking record without touching the
+// remote file. Use when the local copy has already been pruned and the operator
+// just wants to clear the stale entry.
+func (s *Store) ForgetOffsiteObject(ctx context.Context, clientID int64, snapshotID, remote string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM offsite_objects WHERE client_id=? AND snapshot_id=? AND remote=?`,
+		clientID, snapshotID, remote)
+	return err
+}
+
 // ErrConflict is returned by RotateClientCreds when a concurrent rotation
 // has already incremented the client's version since the caller read it.
 var ErrConflict = fmt.Errorf("concurrent modification: version mismatch")

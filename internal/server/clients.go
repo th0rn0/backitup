@@ -290,6 +290,62 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// postUpdateClientRetention updates the hot and offsite retention horizons.
+func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	hotDays := atoiDefault(r.PostFormValue("retention_days"), 14)
+	offsiteDays := atoiDefault(r.PostFormValue("offsite_retention_days"), 90)
+	if hotDays < 1 {
+		hotDays = 1
+	}
+	if offsiteDays < 0 {
+		offsiteDays = 0
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := s.st.UpdateClientRetention(ctx, c.ID, hotDays, offsiteDays); err != nil {
+		http.Error(w, "update failed", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+}
+
+// postForgetOffsiteObject removes the offsite tracking record without deleting
+// the remote file. Used for "missing on disk" entries the operator wants to clear.
+func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	snapshotID := r.PathValue("snapshotID")
+	if err := s.st.ForgetOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote); err != nil {
+		log.Printf("forget offsite object: client=%s snap=%s: %v", c.Name, snapshotID, err)
+		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=forget+failed", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=entry+removed", http.StatusSeeOther)
+}
+
 // postUpdateClientOffsite changes the offsite_remote for an existing client.
 func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
