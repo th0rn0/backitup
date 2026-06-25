@@ -247,18 +247,20 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	}
 
 	remote := r.PostFormValue("offsite_remote")
-	// Only accept the known set of values to prevent arbitrary rclone remote injection.
-	switch remote {
-	case "", "s3", "gdrive":
-	default:
-		http.Error(w, "invalid offsite_remote value", http.StatusBadRequest)
-		return
-	}
 	dir := strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/"))
 	intervalSecs := atoiDefault(r.PostFormValue("offsite_interval_secs"), 0)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+
+	// Validate that the remote exists in the DB (empty = disable offsite).
+	if remote != "" {
+		known, err := s.st.GetRemoteByName(ctx, remote)
+		if err != nil || known == nil {
+			http.Error(w, "invalid offsite_remote value", http.StatusBadRequest)
+			return
+		}
+	}
 
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
