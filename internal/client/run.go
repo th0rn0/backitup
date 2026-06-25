@@ -15,7 +15,7 @@ import (
 // is reported as "overlap" and is not an error (fire-and-forget; design doc).
 func Run(ctx context.Context, cfg Config, lockPath string) error {
 	rl := NewRunLogger(cfg.Quiet)
-	api, err := NewAPI(cfg.APIBase, cfg.Token, cfg.CABundle, cfg.Insecure)
+	api, err := NewAPI(cfg.APIBase, cfg.Token, cfg.CABundle, cfg.InsecureTLS)
 	if err != nil {
 		return err
 	}
@@ -61,7 +61,7 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		SSHUser:      cfg.SSHUser,
 		SSHKey:       cfg.SSHKey,
 		KnownHosts:   cfg.KnownHosts,
-		Insecure:     cfg.Insecure,
+		InsecureSSH:  cfg.InsecureSSH,
 	})
 	if backupErr != nil {
 		rl.Printf("backup error: %v", backupErr)

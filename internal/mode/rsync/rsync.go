@@ -170,7 +170,7 @@ func sshTransport(o mode.BackupOpts) (host, sshArgs string, err error) {
 	if os.Getenv("BACKITUP_SSH_DEBUG") == "1" {
 		parts = append(parts, "-vvv")
 	}
-	if o.Insecure {
+	if o.InsecureSSH {
 		parts = append(parts, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null")
 	} else {
 		if o.KnownHosts == "" {

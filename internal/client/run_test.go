@@ -54,7 +54,7 @@ func TestRunOverlap(t *testing.T) {
 	}
 	defer held.Release()
 
-	cfg := Config{APIBase: ts.URL, Token: "t", SSHServer: "h:22", SSHKey: "/k", Source: "/s", Mode: model.ModeTarGz, Insecure: true}
+	cfg := Config{APIBase: ts.URL, Token: "t", SSHServer: "h:22", SSHKey: "/k", Source: "/s", Mode: model.ModeTarGz, InsecureTLS: true}
 	if err := Run(context.Background(), cfg, lockPath); err != nil {
 		t.Fatalf("Run on overlap should return nil, got %v", err)
 	}

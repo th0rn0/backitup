@@ -99,8 +99,9 @@ type Client struct {
 
 	// Auth. The private SSH key is shown once at creation and NOT retained (D4);
 	// only the public key and a hash of the token live here.
-	SSHPubKey string
-	TokenHash string // argon2id of the bearer token
+	SSHPubKey   string
+	TokenHash   string // argon2id of the bearer token
+	TokenPrefix string // first 8 chars of the raw token (non-secret fast discriminator)
 
 	Enabled   bool
 	CreatedAt time.Time

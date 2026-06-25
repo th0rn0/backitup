@@ -32,7 +32,7 @@ func TestParseStatsMissing(t *testing.T) {
 }
 
 func TestSSHTransportInsecure(t *testing.T) {
-	host, args, err := sshTransport(mode.BackupOpts{SSHServer: "h:2222", SSHKey: "/k", Insecure: true})
+	host, args, err := sshTransport(mode.BackupOpts{SSHServer: "h:2222", SSHKey: "/k", InsecureSSH: true})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestSSHTransportRequiresVerification(t *testing.T) {
 }
 
 func TestSSHTransportBadServer(t *testing.T) {
-	if _, _, err := sshTransport(mode.BackupOpts{SSHServer: "no-port", SSHKey: "/k", Insecure: true}); err == nil {
+	if _, _, err := sshTransport(mode.BackupOpts{SSHServer: "no-port", SSHKey: "/k", InsecureSSH: true}); err == nil {
 		t.Fatal("expected error for host without port")
 	}
 }

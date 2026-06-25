@@ -3,7 +3,6 @@ package server
 import (
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -11,6 +10,7 @@ import (
 const (
 	loginWindow   = time.Minute
 	loginMaxFails = 10 // failed attempts per IP per minute
+	limiterGCRate = 5 * time.Minute
 )
 
 // loginLimiter tracks failed login attempts with a per-IP sliding window.
@@ -22,7 +22,26 @@ type loginLimiter struct {
 }
 
 func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{ips: make(map[string][]time.Time)}
+	l := &loginLimiter{ips: make(map[string][]time.Time)}
+	go l.gc()
+	return l
+}
+
+// gc periodically removes stale entries from the ips map so memory doesn't
+// grow unbounded under a distributed scan with many unique attacker IPs.
+func (l *loginLimiter) gc() {
+	t := time.NewTicker(limiterGCRate)
+	defer t.Stop()
+	for range t.C {
+		cutoff := time.Now().Add(-loginWindow)
+		l.mu.Lock()
+		for ip, ts := range l.ips {
+			if len(ts) == 0 || ts[len(ts)-1].Before(cutoff) {
+				delete(l.ips, ip)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 // allow returns true if the IP is within the rate limit, false if it has
@@ -58,18 +77,10 @@ func (l *loginLimiter) record(r *http.Request) {
 	l.ips[ip] = append(l.ips[ip], time.Now())
 }
 
-// realIP extracts the client IP from the request. Checks X-Real-IP and
-// X-Forwarded-For for reverse-proxy deployments; falls back to RemoteAddr.
+// realIP returns the client IP from RemoteAddr. X-Forwarded-For is not trusted:
+// an attacker can spoof it to bypass the rate limiter. Reverse proxies should
+// be placed in front and strip/rewrite RemoteAddr at the TCP layer instead.
 func realIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return strings.TrimSpace(ip)
-	}
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if i := strings.Index(fwd, ","); i != -1 {
-			return strings.TrimSpace(fwd[:i])
-		}
-		return strings.TrimSpace(fwd)
-	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	return host
 }

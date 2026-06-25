@@ -119,7 +119,7 @@ func TestRotateClientCreds(t *testing.T) {
 	if err != nil || cl0 == nil {
 		t.Fatalf("get before rotate: %v", err)
 	}
-	if err := st.RotateClientCreds(ctx, id, "ssh-ed25519 BBBB new", "newhash", cl0.Version); err != nil {
+	if err := st.RotateClientCreds(ctx, id, "ssh-ed25519 BBBB new", "newhash", "prefix12", cl0.Version); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 
@@ -127,8 +127,8 @@ func TestRotateClientCreds(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("get after rotate: %v, nil=%v", err, got == nil)
 	}
-	if got.SSHPubKey != "ssh-ed25519 BBBB new" || got.TokenHash != "newhash" {
-		t.Fatalf("creds not updated: pubkey=%q hash=%q", got.SSHPubKey, got.TokenHash)
+	if got.SSHPubKey != "ssh-ed25519 BBBB new" || got.TokenHash != "newhash" || got.TokenPrefix != "prefix12" {
+		t.Fatalf("creds not updated: pubkey=%q hash=%q prefix=%q", got.SSHPubKey, got.TokenHash, got.TokenPrefix)
 	}
 	// Other fields must be untouched.
 	if got.Name != "rotate-me" || got.RetentionDays != 7 {
@@ -140,12 +140,12 @@ func TestRotateClientCreds(t *testing.T) {
 	}
 
 	// Stale version must return ErrConflict.
-	if err := st.RotateClientCreds(ctx, id, "key", "hash", cl0.Version); !errors.Is(err, ErrConflict) {
+	if err := st.RotateClientCreds(ctx, id, "key", "hash", "pfx", cl0.Version); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale version: want ErrConflict, got %v", err)
 	}
 
 	// Rotating a nonexistent client must return an error.
-	if err := st.RotateClientCreds(ctx, 9999, "key", "hash", 1); err == nil {
+	if err := st.RotateClientCreds(ctx, 9999, "key", "hash", "pfx", 1); err == nil {
 		t.Fatal("expected error for missing client, got nil")
 	}
 }

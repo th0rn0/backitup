@@ -23,7 +23,7 @@ steps:
         curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Lint Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
 
   - name: lint
-    image: golangci/golangci-lint:latest
+    image: golangci/golangci-lint:v2.1.6
     commands:
       - golangci-lint run --timeout 5m ./...
 
@@ -385,7 +385,7 @@ steps:
 # Only runs on v* tags.
 
   - name: release
-    image: alpine:latest
+    image: alpine:3.21
     environment:
       GITHUB_TOKEN:
         from_secret: github_token
@@ -420,7 +420,7 @@ steps:
         - tag
 
   - name: release-server-binary
-    image: alpine:latest
+    image: alpine:3.21
     environment:
       GITHUB_TOKEN:
         from_secret: github_token

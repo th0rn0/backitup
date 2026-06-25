@@ -37,7 +37,7 @@ type BackupOpts struct {
 	SSHUser      string      // ssh login user (the single ingest user, "backitup")
 	SSHKey       string      // path to the client's private key
 	KnownHosts   string      // path to known_hosts for host-key verification
-	Insecure     bool        // skip host-key verification (dev/test only)
+	InsecureSSH  bool        // skip SSH host-key verification (dev/test only)
 }
 
 // Logger returns the configured logger, falling back to the default logger.

@@ -28,7 +28,7 @@
             <td class="mono">{{.CreatedAt.Format "2006-01-02"}}</td>
             <td>
               {{if ne .Username $.Username}}
-              <form method="POST" action="/users/{{.ID}}/delete" style="display:inline">
+              <form method="POST" action="/users/{{.ID}}/delete" class="d-inline">
                 <input type="hidden" name="confirm" value="1">
                 <button type="submit" class="btn btn-danger btn-sm">Delete</button>
               </form>
@@ -42,7 +42,7 @@
 
       <div class="section">
         <h2>Add user</h2>
-        <form method="POST" action="/users" class="form" style="max-width:360px">
+        <form method="POST" action="/users" class="form form-narrow">
           <label for="new-username">Username</label>
           <input type="text" id="new-username" name="username" placeholder="Username" required autocomplete="off">
           <label for="new-password">Password</label>

@@ -87,7 +87,7 @@ func dial(o mode.BackupOpts) (*ssh.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	cb, err := sshutil.HostKeyCallback(o.KnownHosts, o.Insecure)
+	cb, err := sshutil.HostKeyCallback(o.KnownHosts, o.InsecureSSH)
 	if err != nil {
 		return nil, err
 	}

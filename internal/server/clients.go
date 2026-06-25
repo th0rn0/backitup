@@ -50,7 +50,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	privPEM, pubLine, token, tokenHash, ok := generateClientCreds(w, name)
+	privPEM, pubLine, token, tokenHash, tokenPrefix, ok := generateClientCreds(w, name)
 	if !ok {
 		return
 	}
@@ -70,6 +70,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		SkipSymlinks:         r.PostFormValue("skip_symlinks") == "1",
 		SSHPubKey:            pubLine,
 		TokenHash:            tokenHash,
+		TokenPrefix:          tokenPrefix,
 		Enabled:              true,
 	})
 	if err != nil {
@@ -195,12 +196,12 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	privPEM, pubLine, token, tokenHash, ok := generateClientCreds(w, c.Name)
+	privPEM, pubLine, token, tokenHash, tokenPrefix, ok := generateClientCreds(w, c.Name)
 	if !ok {
 		return
 	}
 
-	if err := s.st.RotateClientCreds(ctx, c.ID, pubLine, tokenHash, c.Version); err != nil {
+	if err := s.st.RotateClientCreds(ctx, c.ID, pubLine, tokenHash, tokenPrefix, c.Version); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			http.Error(w, "concurrent rotation detected — reload the page and try again", http.StatusConflict)
 			return
@@ -313,7 +314,7 @@ func (s *Server) postTestClientOffsite(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("name")
 	if err != nil {
 		log.Printf("offsite test: client=%q remote=%s: %v: %s", c.Name, path, err, out)
-		http.Redirect(w, r, "/clients/"+slug+"?err="+url.QueryEscape(strings.TrimSpace(string(out))), http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+slug+"?err="+url.QueryEscape("Connection test failed for "+path+" — check server logs for details"), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/clients/"+slug+"?msg="+url.QueryEscape("Connected to "+path+" successfully"), http.StatusSeeOther)
@@ -401,7 +402,9 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 
 // generateClientCreds generates a new SSH keypair and bearer token for the
 // named client, writing errors directly to w. Returns ok=false on any error.
-func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, token, tokenHash string, ok bool) {
+// tokenPrefix is the first 8 chars of the raw token stored in plaintext as a
+// non-secret discriminator to short-circuit argon2 verification in clientByToken.
+func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, token, tokenHash, tokenPrefix string, ok bool) {
 	var err error
 	privPEM, pubLine, err = keys.GenerateKeypair("backitup:" + name)
 	if err != nil {
@@ -417,6 +420,9 @@ func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, 
 	if err != nil {
 		http.Error(w, "token hash failed", http.StatusInternalServerError)
 		return
+	}
+	if len(token) >= 8 {
+		tokenPrefix = token[:8]
 	}
 	ok = true
 	return

@@ -153,7 +153,7 @@ func (s *Server) postTestRemote(w http.ResponseWriter, r *http.Request) {
 	out, err := exec.CommandContext(ctx, "rclone", "--config", s.rcloneConfig, "lsd", name+":").CombinedOutput()
 	if err != nil {
 		log.Printf("rclone test %q: %v: %s", name, err, out)
-		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("\""+name+"\": "+strings.TrimSpace(string(out))), http.StatusSeeOther)
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Connection test failed for \""+name+"\" — check server logs for details"), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/settings/remotes?msg="+url.QueryEscape("\""+name+"\" connected successfully"), http.StatusSeeOther)
@@ -183,14 +183,17 @@ func (s *Server) postDeleteRemote(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings/remotes?msg=Remote+%22"+url.QueryEscape(name)+"%22+deleted", http.StatusSeeOther)
 }
 
-// rcloneObscure runs `rclone obscure <pass>` and returns the obscured value.
-// This is required for SFTP / FTP / WebDAV password fields.
+// rcloneObscure runs `rclone obscure -` (reading from stdin) and returns the
+// obscured value. Piping via stdin keeps the plaintext password out of
+// /proc/<pid>/cmdline and ps output.
 func rcloneObscure(ctx context.Context, cfgPath, pass string) (string, error) {
-	args := []string{"obscure", pass}
+	args := []string{"obscure", "-"}
 	if cfgPath != "" {
 		args = append([]string{"--config", cfgPath}, args...)
 	}
-	out, err := exec.CommandContext(ctx, "rclone", args...).Output()
+	cmd := exec.CommandContext(ctx, "rclone", args...)
+	cmd.Stdin = strings.NewReader(pass)
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}

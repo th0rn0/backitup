@@ -24,12 +24,12 @@
       <div class="topbar">
         <h1>
           {{.Client.Name}}
-          <span class="status {{.Health}}" style="font-size:13px;margin-left:8px">
+          <span class="status {{.Health}} status-badge">
             <span class="dot" aria-hidden="true">{{.Icon}}</span>{{.HealthLabel}}
           </span>
         </h1>
         {{if .Client.OffsiteRemote}}
-        <div style="display:flex;gap:8px;align-items:center">
+        <div class="flex-row">
           <form method="POST" action="/clients/{{.Client.Slug}}/offsite/run">
             <button type="submit" class="btn">Backup now</button>
           </form>
@@ -86,7 +86,7 @@
             </tbody>
           </table>
           {{else}}
-          <p style="color:var(--text-dim);font-size:13px">No runs yet. Paste the cron line on the host — this client will appear after its first backup.</p>
+          <p class="help-text">No runs yet. Paste the cron line on the host — this client will appear after its first backup.</p>
           {{end}}
         </div>
 
@@ -115,21 +115,21 @@
               </tr>
               {{if .ErrorText}}
               <tr>
-                <td colspan="6" style="padding:0 12px 10px;color:var(--red);font-size:12px;font-family:var(--mono);white-space:pre-wrap;word-break:break-all">{{.ErrorText}}</td>
+                <td colspan="6" class="error-row-detail">{{.ErrorText}}</td>
               </tr>
               {{end}}
               {{end}}
             </tbody>
           </table>
           {{else}}
-          <p style="color:var(--text-dim);font-size:13px">No offsite uploads yet. {{if .Client.OffsiteRemote}}The lifecycle worker will upload on its next pass, or click <strong>Backup now</strong> above.{{else}}Configure an offsite destination below to enable cold storage.{{end}}</p>
+          <p class="help-text">No offsite uploads yet. {{if .Client.OffsiteRemote}}The lifecycle worker will upload on its next pass, or click <strong>Backup now</strong> above.{{else}}Configure an offsite destination below to enable cold storage.{{end}}</p>
           {{end}}
         </div>
       </div>
 
       <div class="section">
         <h2>Offsite destination</h2>
-        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Where to tier cold copies of this client's backups. Configure remotes on the <a href="/settings/remotes">Remote storage</a> page first.</p>
+        <p class="section-hint">Where to tier cold copies of this client's backups. Configure remotes on the <a href="/settings/remotes">Remote storage</a> page first.</p>
         <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form">
           <label for="offsite_remote">Remote</label>
           <select id="offsite_remote" name="offsite_remote">
@@ -140,13 +140,13 @@
           </select>
           {{if not .Remotes}}<div class="field-hint">No remotes configured yet. <a href="/settings/remotes">Add one</a> to enable offsite backups.</div>{{end}}
 
-          <div id="offsite-dir-row" style="display:none">
+          <div id="offsite-dir-row" class="hidden">
             <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>
             <input id="offsite-dir-input" name="offsite_dir" value="{{.Client.OffsiteDir}}" placeholder="" autocomplete="off">
             <div id="offsite-dir-hint" class="field-hint"></div>
           </div>
 
-          <div id="offsite-interval-row" style="display:none">
+          <div id="offsite-interval-row" class="hidden">
             <label for="offsite_interval_secs">Upload interval</label>
             <select id="offsite_interval_secs" name="offsite_interval_secs">
               <option value="0"{{if eq .Client.OffsiteIntervalSecs 0}} selected{{end}}>Every lifecycle pass (default)</option>
@@ -167,7 +167,7 @@
 
       <div class="section danger-section">
         <h2>Rotate credentials</h2>
-        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Issues a new SSH key and bearer token. The old credentials stop working immediately — redeploy the cron line on the host after rotating.</p>
+        <p class="section-hint">Issues a new SSH key and bearer token. The old credentials stop working immediately — redeploy the cron line on the host after rotating.</p>
         <form method="POST" action="/clients/{{.Client.Slug}}/rotate">
           <label class="checkbox-label">
             <input type="checkbox" name="confirm" value="1" required>
@@ -179,16 +179,16 @@
         </form>
       </div>
 
-      <div class="section danger-section" style="margin-top:24px">
+      <div class="section danger-section mt-24">
         <h2>Delete client</h2>
-        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Permanently removes this client, its run history, and its SSH access. The host will need a new client added if you want to resume backups.</p>
+        <p class="section-hint">Permanently removes this client, its run history, and its SSH access. The host will need a new client added if you want to resume backups.</p>
         <form method="POST" action="/clients/{{.Client.Slug}}/delete">
           <label class="checkbox-label">
             <input type="checkbox" name="confirm" value="1" required>
             I understand this will permanently delete "{{.Client.Name}}" and all its history.
           </label>
           <div class="form-actions">
-            <button type="submit" class="btn btn-danger" style="opacity:0.85">Delete client</button>
+            <button type="submit" class="btn btn-danger">Delete client</button>
           </div>
         </form>
       </div>

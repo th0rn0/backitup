@@ -13,7 +13,7 @@
 
     <main class="main">
       <h1>Add a client</h1>
-      <p style="color:var(--text-dim);font-size:13px;margin-top:6px">A client backs up one directory on one host. You'll get a key, a token, and a cron line to paste on that host.</p>
+      <p class="form-subtext">A client backs up one directory on one host. You'll get a key, a token, and a cron line to paste on that host.</p>
 
       {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
 
@@ -56,13 +56,13 @@
         </select>
         {{if not .Remotes}}<div class="field-hint">No remotes configured yet. <a href="/settings/remotes">Add one</a> to enable offsite backups.</div>{{end}}
 
-        <div id="offsite-dir-row" style="display:none">
+        <div id="offsite-dir-row" class="hidden">
           <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>
           <input id="offsite-dir-input" name="offsite_dir" placeholder="" autocomplete="off">
           <div id="offsite-dir-hint" class="field-hint"></div>
         </div>
 
-        <div id="offsite-interval-row" style="display:none">
+        <div id="offsite-interval-row" class="hidden">
           <label for="offsite_interval_secs">Upload interval</label>
           <select id="offsite_interval_secs" name="offsite_interval_secs">
             <option value="0">Every lifecycle pass (default)</option>
@@ -75,7 +75,7 @@
           <div class="field-hint">How often the lifecycle worker uploads new snapshots for this client.</div>
         </div>
 
-        <label class="checkbox-label" style="margin-top:18px">
+        <label class="checkbox-label mt-18">
           <input type="checkbox" name="skip_symlinks" value="1">
           <span>
             Skip symlinks
@@ -83,7 +83,7 @@
           </span>
         </label>
 
-        <label style="margin-top:18px;display:block">API scheme <span style="color:var(--text-dim);font-weight:400">(for the generated docker run command)</span></label>
+        <label class="label-block">API scheme <span class="label-optional">(for the generated docker run command)</span></label>
         <div class="radio-group">
           <label><input type="radio" name="api_scheme" value="http" checked> http</label>
           <label><input type="radio" name="api_scheme" value="https"> https</label>

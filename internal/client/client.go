@@ -22,7 +22,8 @@ type Config struct {
 	CABundle     string     // optional CA cert file for the control channel (self-signed)
 	Source       string     // read-only source mount
 	Mode         model.Mode // fallback; the server's config is authoritative
-	Insecure     bool       // skip host-key / TLS verification (dev/test only)
+	InsecureTLS  bool       // skip TLS certificate verification (BACKITUP_INSECURE_TLS=1)
+	InsecureSSH  bool       // skip SSH host-key verification (BACKITUP_INSECURE_SSH=1)
 	SkipSymlinks bool       // local override: omit symlinks even if server didn't set it
 	Quiet        bool       // suppress progress output to stderr (BACKITUP_QUIET=1)
 }

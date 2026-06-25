@@ -50,10 +50,11 @@ func Open(dsn string) (*Store, error) {
 	// upgrades. SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS, so we ignore
 	// the "duplicate column name" error that fires when the column already exists.
 	for _, migration := range []string{
-		`ALTER TABLE clients ADD COLUMN version       INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE clients ADD COLUMN skip_symlinks INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE clients ADD COLUMN offsite_dir            TEXT    NOT NULL DEFAULT ''`,
-		`ALTER TABLE clients ADD COLUMN offsite_interval_secs  INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE clients ADD COLUMN version              INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE clients ADD COLUMN skip_symlinks        INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE clients ADD COLUMN offsite_dir          TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN offsite_interval_secs INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE clients ADD COLUMN token_prefix         TEXT    NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
@@ -145,11 +146,11 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO clients (name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
-			offsite_interval_secs, ssh_pubkey, token_hash, enabled, created_at, skip_symlinks)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, skip_symlinks)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Name, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
 		c.OffsiteRetentionDays, c.ExpectedIntervalSecs, c.OffsiteRemote, c.OffsiteDir,
-		c.OffsiteIntervalSecs, c.SSHPubKey, c.TokenHash, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
+		c.OffsiteIntervalSecs, c.SSHPubKey, c.TokenHash, c.TokenPrefix, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
 		b2i(c.SkipSymlinks))
 	if err != nil {
 		return 0, fmt.Errorf("insert client: %w", err)
@@ -162,7 +163,7 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
-			offsite_interval_secs, ssh_pubkey, token_hash, enabled, created_at, version, skip_symlinks
+			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -199,7 +200,7 @@ func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
-			offsite_interval_secs, ssh_pubkey, token_hash, enabled, created_at, version, skip_symlinks
+			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -616,10 +617,10 @@ var ErrConflict = fmt.Errorf("concurrent modification: version mismatch")
 // oldVersion is the version observed by the caller via GetClient; the UPDATE only
 // applies if the version has not changed (compare-and-swap). Returns ErrConflict
 // if a concurrent rotation already incremented the version.
-func (s *Store) RotateClientCreds(ctx context.Context, id int64, pubKey, tokenHash string, oldVersion int) error {
+func (s *Store) RotateClientCreds(ctx context.Context, id int64, pubKey, tokenHash, tokenPrefix string, oldVersion int) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET ssh_pubkey=?, token_hash=?, version=version+1 WHERE id=? AND version=?`,
-		pubKey, tokenHash, id, oldVersion)
+		`UPDATE clients SET ssh_pubkey=?, token_hash=?, token_prefix=?, version=version+1 WHERE id=? AND version=?`,
+		pubKey, tokenHash, tokenPrefix, id, oldVersion)
 	if err != nil {
 		return fmt.Errorf("rotate client creds: %w", err)
 	}
@@ -733,7 +734,7 @@ func scanClient(sc scanner) (model.Client, error) {
 	var enabled, skipSymlinks int
 	if err := sc.Scan(&c.ID, &c.Name, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.OffsiteRetentionDays, &c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
-		&c.OffsiteIntervalSecs, &c.SSHPubKey, &c.TokenHash, &enabled, &createdAt, &c.Version, &skipSymlinks); err != nil {
+		&c.OffsiteIntervalSecs, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)

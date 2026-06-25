@@ -220,7 +220,7 @@ func (r Remote) RcloneSection() string {
 				}
 			}
 		}
-		fmt.Fprintf(&sb, "%s = %s\n", k, v)
+		fmt.Fprintf(&sb, "%s = %s\n", k, strings.ReplaceAll(v, "\n", " "))
 	}
 	return sb.String()
 }

@@ -51,16 +51,23 @@ func bearerToken(r *http.Request) string {
 }
 
 // clientByToken finds the enabled client whose token hash verifies against the
-// presented token. O(n) argon2 verifications per request; fine at homelab fleet
-// size. TODO(scale): add a fast non-secret token id to narrow the lookup.
+// presented token. TokenPrefix (first 8 chars, non-secret) is compared first so
+// argon2 verification only runs for the (usually 1) matching client.
 func (s *Server) clientByToken(ctx context.Context, token string) (*model.Client, error) {
 	clients, err := s.st.ListClients(ctx)
 	if err != nil {
 		return nil, err
 	}
+	prefix := ""
+	if len(token) >= 8 {
+		prefix = token[:8]
+	}
 	for i := range clients {
 		c := clients[i]
 		if !c.Enabled || c.TokenHash == "" {
+			continue
+		}
+		if c.TokenPrefix != "" && c.TokenPrefix != prefix {
 			continue
 		}
 		if ok, err := auth.VerifyPassword(token, c.TokenHash); err == nil && ok {

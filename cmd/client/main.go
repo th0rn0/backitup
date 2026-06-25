@@ -34,7 +34,8 @@ func main() {
 		CABundle:     client.Env("BACKITUP_CA", ""),
 		Source:       client.Env("BACKITUP_SOURCE", "/source"),
 		Mode:         model.Mode(client.Env("BACKITUP_MODE", "targz")),
-		Insecure:     client.Env("BACKITUP_INSECURE", "") == "1",
+		InsecureTLS:  client.Env("BACKITUP_INSECURE_TLS", "") == "1" || client.Env("BACKITUP_INSECURE", "") == "1",
+		InsecureSSH:  client.Env("BACKITUP_INSECURE_SSH", "") == "1" || client.Env("BACKITUP_INSECURE", "") == "1",
 		SkipSymlinks: client.Env("BACKITUP_SKIP_SYMLINKS", "") == "1",
 		Quiet:        client.Env("BACKITUP_QUIET", "") == "1",
 	}
@@ -45,6 +46,13 @@ func main() {
 	flag.StringVar(&cfg.KnownHosts, "known-hosts", cfg.KnownHosts, "known_hosts file")
 	flag.StringVar(&cfg.Source, "source", cfg.Source, "read-only source dir")
 	flag.Parse()
+
+	if cfg.InsecureTLS {
+		log.Print("SECURITY WARNING: TLS certificate verification disabled (BACKITUP_INSECURE_TLS=1)")
+	}
+	if cfg.InsecureSSH {
+		log.Print("SECURITY WARNING: SSH host-key verification disabled (BACKITUP_INSECURE_SSH=1)")
+	}
 
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
