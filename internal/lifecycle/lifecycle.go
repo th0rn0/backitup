@@ -317,11 +317,6 @@ func checkStaleAlert(ctx context.Context, d Deps, c model.Client) {
 // existing deployments are unaffected.
 func offsiteDir(c model.Client) string {
 	if c.OffsiteDir != "" {
-		if c.OffsiteRemote == "gdrive" {
-			// rclone Google Drive accepts {folderID} as a path component to
-			// navigate directly to a folder by its Drive ID.
-			return "{" + c.OffsiteDir + "}"
-		}
 		return c.OffsiteDir
 	}
 	return model.Slug(c.Name)

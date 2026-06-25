@@ -19,29 +19,28 @@
 
       {{if .NoRclone}}
       <div class="alert alert-warn" role="alert">
-        <code>BACKITUP_RCLONE_CONFIG</code> is not configured — remote storage is disabled. Set it to enable offsite tiering.
+        <code>BACKITUP_RCLONE_CONFIG</code> is not set — remote storage is disabled. Set it to a writable file path to enable offsite tiering.
       </div>
       {{else}}
 
       {{if .Remotes}}
       <div class="section">
         <h2>Configured remotes</h2>
-        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Each remote name must match the <strong>Offsite destination</strong> value set on a client. The built-in dropdown offers <code>s3</code> and <code>gdrive</code>.</p>
         <table>
           <thead>
-            <tr><th>Name</th><th>Type</th><th></th></tr>
+            <tr><th>Name</th><th>Backend</th><th></th></tr>
           </thead>
           <tbody>
             {{range .Remotes}}
             <tr>
               <td class="mono">{{.Name}}</td>
-              <td><span class="badge">{{.Type}}</span></td>
+              <td><span class="badge">{{.BackendLabel}}</span></td>
               <td style="display:flex;gap:6px;align-items:center">
                 <form method="POST" action="/settings/remotes/{{.Name}}/test" style="display:inline">
                   <button type="submit" class="btn btn-ghost btn-sm">Test</button>
                 </form>
                 <form method="POST" action="/settings/remotes/{{.Name}}/delete" style="display:inline"
-                      onsubmit="return confirm('Delete remote {{.Name}}? This only removes the config entry — no data is deleted from the remote.')">
+                      onsubmit="return confirm('Delete remote {{.Name}}? No data is removed from the destination.')">
                   <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
               </td>
@@ -52,80 +51,55 @@
       </div>
       {{end}}
 
-      <!-- ── S3-compatible ── -->
+      <!-- ── Add remote form ── -->
       <div class="section">
-        <h2>Add S3-compatible remote</h2>
+        <h2>Add remote</h2>
         <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">
-          Works with AWS S3, Cloudflare R2, Wasabi, Backblaze B2 (S3-compatible), MinIO, and any other S3-compatible provider.
-          Leave <em>Endpoint</em> empty for AWS; set it for other providers.
+          Configure an rclone backend. backitup writes and manages <code>rclone.conf</code> automatically — do not edit the file by hand.
         </p>
-        <form method="POST" action="/settings/remotes/s3" class="form">
-          <label for="s3-name">Remote name</label>
-          <input id="s3-name" name="name" value="s3" required placeholder="s3" autocomplete="off">
-          <div class="field-hint">Must match the client's <strong>Offsite destination</strong> value. The built-in dropdown uses <code>s3</code>.</div>
 
-          <label for="s3-access-key">Access Key ID</label>
-          <input id="s3-access-key" name="access_key_id" required autocomplete="off">
+        <form method="POST" action="/settings/remotes" class="form" autocomplete="off">
+          <label for="remote-name">Remote name</label>
+          <input id="remote-name" name="name" required placeholder="my-s3" autocomplete="off">
+          <div class="field-hint">Used to identify this remote in client offsite settings. Letters, digits, hyphens, underscores, and dots only.</div>
 
-          <label for="s3-secret-key">Secret Access Key</label>
-          <input id="s3-secret-key" name="secret_access_key" type="password" required autocomplete="new-password">
+          <label for="add-remote-backend">Backend</label>
+          <select id="add-remote-backend" name="backend">
+            <option value="">— choose a backend —</option>
+            {{range .Backends}}
+            <option value="{{.ID}}">{{.Label}}</option>
+            {{end}}
+          </select>
 
-          <label for="s3-region">Region</label>
-          <input id="s3-region" name="region" placeholder="us-east-1" autocomplete="off">
-          <div class="field-hint">Leave empty for region-less providers (Cloudflare R2, MinIO).</div>
-
-          <label for="s3-endpoint">Endpoint</label>
-          <input id="s3-endpoint" name="endpoint" placeholder="https://&lt;account&gt;.r2.cloudflarestorage.com" autocomplete="off">
-          <div class="field-hint">Leave empty for AWS S3. Required for Cloudflare R2, Wasabi, MinIO, and similar.</div>
-
-          <div class="form-actions">
-            <button type="submit" class="btn">Add remote</button>
+          <!-- ── per-backend field groups ── -->
+          {{range .Backends}}
+          <div data-backend-fields="{{.ID}}" style="display:none">
+            {{range .Fields}}
+            <label>
+              {{.Label}}{{if not .Required}} <span style="font-weight:400;color:var(--text-dim)">(optional)</span>{{end}}
+            </label>
+            {{if eq .Type "textarea"}}
+            <textarea name="{{.Key}}" rows="8" disabled
+                      style="font-family:var(--mono);font-size:11px;resize:vertical"
+                      placeholder="{{.Default}}" autocomplete="off"></textarea>
+            {{else if eq .Type "select"}}
+            <select name="{{.Key}}" disabled>
+              {{range .Options}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+            </select>
+            {{else if eq .Type "password"}}
+            <input name="{{.Key}}" type="password" disabled
+                   placeholder="{{.Default}}" autocomplete="new-password">
+            {{else}}
+            <input name="{{.Key}}" type="text" disabled
+                   placeholder="{{.Default}}" autocomplete="off">
+            {{end}}
+            {{if .Hint}}<div class="field-hint">{{.Hint}}</div>{{end}}
+            {{end}}
           </div>
-        </form>
-      </div>
-
-      <!-- ── Google Drive (service account) ── -->
-      <div class="section">
-        <h2>Add Google Drive remote</h2>
-        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">
-          Uses a <strong>service account</strong> — no browser redirect, no OAuth token expiry.
-          The service account authenticates via a JSON key; rclone handles JWT auth internally.
-        </p>
-
-        <details style="margin-bottom:20px;font-size:13px">
-          <summary style="cursor:pointer;color:var(--text-dim);user-select:none">How to create a Google service account ▸</summary>
-          <ol style="margin:10px 0 0 20px;color:var(--text-dim);line-height:1.8">
-            <li>Open <strong>Google Cloud Console → APIs &amp; Services → Library</strong> and enable the <strong>Google Drive API</strong>.</li>
-            <li>Go to <strong>IAM &amp; Admin → Service Accounts → Create Service Account</strong>. Give it a name and click through.</li>
-            <li>On the service account's page go to <strong>Keys → Add Key → Create new key → JSON</strong>. Download the file.</li>
-            <li>Paste the contents of that JSON file into the field below.</li>
-            <li>Grant the service account access to a Drive location — either:
-              <ul style="margin-top:4px">
-                <li><strong>Shared Drive (recommended):</strong> add the service account email as a member of the Shared Drive. Paste the Shared Drive ID in the optional field below.</li>
-                <li><strong>Regular folder:</strong> share a folder in your Drive with the service account email address (found in the JSON under <code>"client_email"</code>).</li>
-              </ul>
-            </li>
-          </ol>
-        </details>
-
-        <form method="POST" action="/settings/remotes/gdrive" class="form">
-          <label for="gdrive-name">Remote name</label>
-          <input id="gdrive-name" name="name" value="gdrive" required placeholder="gdrive" autocomplete="off">
-          <div class="field-hint">Must match the client's <strong>Offsite destination</strong> value. The built-in dropdown uses <code>gdrive</code>.</div>
-
-          <label for="gdrive-sa">Service account JSON</label>
-          <textarea id="gdrive-sa" name="service_account_credentials" required rows="8"
-                    style="font-family:var(--mono);font-size:11px;resize:vertical"
-                    placeholder='{"type":"service_account","project_id":"...","private_key_id":"...","private_key":"-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n","client_email":"...@....iam.gserviceaccount.com",...}'
-                    autocomplete="off"></textarea>
-          <div class="field-hint">Paste the full contents of the downloaded JSON key file.</div>
-
-          <label for="gdrive-team-drive">Shared Drive ID <span style="font-weight:400;color:var(--text-dim)">(optional)</span></label>
-          <input id="gdrive-team-drive" name="team_drive_id" placeholder="0ABCdef123..." autocomplete="off">
-          <div class="field-hint">The ID from the Shared Drive URL. Leave empty if using a shared regular folder instead.</div>
+          {{end}}
 
           <div class="form-actions">
-            <button type="submit" class="btn">Add remote</button>
+            <button type="submit" id="add-remote-submit" class="btn" style="display:none">Add remote</button>
           </div>
         </form>
       </div>
@@ -133,5 +107,6 @@
       {{end}}
     </main>
   </div>
+  <script src="/static/remote-form.js"></script>
 </body>
 </html>

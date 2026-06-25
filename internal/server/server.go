@@ -201,8 +201,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /users/{id}/delete", s.requireAdmin(s.postDeleteUser))
 
 	mux.HandleFunc("GET /settings/remotes", s.requireAdmin(s.getRemotes))
-	mux.HandleFunc("POST /settings/remotes/s3", s.requireAdmin(s.postCreateS3Remote))
-	mux.HandleFunc("POST /settings/remotes/gdrive", s.requireAdmin(s.postCreateGDriveRemote))
+	mux.HandleFunc("POST /settings/remotes", s.requireAdmin(s.postCreateRemote))
 	mux.HandleFunc("POST /settings/remotes/{name}/test", s.requireAdmin(s.postTestRemote))
 	mux.HandleFunc("POST /settings/remotes/{name}/delete", s.requireAdmin(s.postDeleteRemote))
 

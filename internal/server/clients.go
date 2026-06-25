@@ -24,10 +24,14 @@ import (
 
 // getNewClient renders the add-client form.
 func (s *Server) getNewClient(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	remotes, _ := s.st.ListRemotes(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "clients/new",
+		"Remotes":    remotes,
 	})
 }
 
@@ -111,6 +115,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, _ := s.st.ListRuns(ctx, c.ID, 20)
 	offsiteRuns, _ := s.st.ListOffsiteRuns(ctx, c.ID, 20)
+	allRemotes, _ := s.st.ListRemotes(ctx)
 	var latest *model.Run
 	if len(runs) > 0 {
 		latest = &runs[0]
@@ -126,6 +131,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"Icon":        healthIcon(h),
 		"Runs":        runs,
 		"OffsiteRuns": offsiteRuns,
+		"Remotes":     allRemotes,
 		"Flash":       r.URL.Query().Get("msg"),
 		"Error":       r.URL.Query().Get("err"),
 	})
@@ -415,11 +421,15 @@ func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, 
 }
 
 func (s *Server) renderNewClientError(w http.ResponseWriter, r *http.Request, msg string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	remotes, _ := s.st.ListRemotes(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
 	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "clients/new",
+		"Remotes":    remotes,
 		"Error":      msg,
 	})
 }

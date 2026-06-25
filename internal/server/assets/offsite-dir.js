@@ -1,46 +1,55 @@
 // offsite-dir.js: show/hide and relabel the backup-location field based on
-// the selected rclone remote type. Loaded by clients_new.html and
-// client_detail.html; requires id="offsite_remote" on the select and
-// id="offsite-dir-row/label/input/hint" on the field group.
+// the selected remote's backend type (read from data-backend on the option).
+// Loaded by clients_new.html and client_detail.html.
 (function () {
-  function applyRemote(remote, clearValue) {
-    var row      = document.getElementById('offsite-dir-row');
-    var label    = document.getElementById('offsite-dir-label');
-    var input    = document.getElementById('offsite-dir-input');
-    var hint     = document.getElementById('offsite-dir-hint');
-    var intRow   = document.getElementById('offsite-interval-row');
+  // Hints keyed by rclone backend type.
+  var HINTS = {
+    s3:         { label: 'Bucket / path (optional)',    placeholder: 'my-bucket/clients',           hint: 'Bucket name and optional prefix. Leave empty to use the client name.' },
+    's3-compat':{ label: 'Bucket / path (optional)',    placeholder: 'my-bucket/clients',           hint: 'Bucket name and optional prefix. Leave empty to use the client name.' },
+    b2:         { label: 'Bucket / path (optional)',    placeholder: 'my-bucket',                  hint: 'Bucket name. Leave empty to use the client name.' },
+    drive:      { label: 'Folder path (optional)',      placeholder: '',                            hint: 'Path inside Drive relative to the root folder. Leave empty to write to the root.' },
+    sftp:       { label: 'Remote path (optional)',      placeholder: '/srv/backups/clients',        hint: 'Absolute path on the server. Leave empty to use the client name.' },
+    webdav:     { label: 'Remote path (optional)',      placeholder: 'backups/clients',             hint: 'Path on the WebDAV server. Leave empty to use the client name.' },
+    azureblob:  { label: 'Container / path (optional)', placeholder: 'backups',                    hint: 'Container name and optional path. Leave empty to use the client name.' },
+    ftp:        { label: 'Remote path (optional)',      placeholder: '/backups/clients',            hint: 'Path on the FTP server. Leave empty to use the client name.' },
+  };
+
+  function applyRemote(sel, clearValue) {
+    var row    = document.getElementById('offsite-dir-row');
+    var label  = document.getElementById('offsite-dir-label');
+    var input  = document.getElementById('offsite-dir-input');
+    var hint   = document.getElementById('offsite-dir-hint');
+    var intRow = document.getElementById('offsite-interval-row');
     if (!row) return;
+
+    var opt     = sel.options[sel.selectedIndex];
+    var backend = opt ? (opt.getAttribute('data-backend') || '') : '';
+    var remote  = sel.value;
 
     if (clearValue && input) input.value = '';
 
-    if (remote === 'gdrive') {
-      row.style.display = '';
-      if (label) label.textContent = 'GDrive Folder ID (optional)';
-      if (input) input.placeholder = '0BwwA4oUTeiV1TGRPeTVjaWRDY1E';
-      if (hint)  hint.textContent  = 'Paste the folder ID from the Drive URL (.../drive/folders/{ID}). Leave empty to upload to the Drive root.';
-      if (intRow) intRow.style.display = '';
-    } else if (remote === 's3') {
-      row.style.display = '';
-      if (label) label.textContent = 'Backup path (optional)';
-      if (input) input.placeholder = 'Backups/MyLaptop';
-      if (hint)  hint.textContent  = 'Path prefix within the S3 bucket. Leave empty to use the client name.';
-      if (intRow) intRow.style.display = '';
-    } else {
+    if (!remote) {
       row.style.display = 'none';
       if (intRow) intRow.style.display = 'none';
+      return;
     }
+
+    var info = HINTS[backend] || { label: 'Backup path (optional)', placeholder: '', hint: '' };
+    row.style.display = '';
+    if (label) label.textContent = info.label;
+    if (input) input.placeholder = info.placeholder;
+    if (hint)  hint.textContent  = info.hint;
+    if (intRow) intRow.style.display = '';
   }
 
   var sel = document.getElementById('offsite_remote');
   if (sel) {
-    applyRemote(sel.value, false);
-    sel.addEventListener('change', function () { applyRemote(this.value, true); });
+    applyRemote(sel, false);
+    sel.addEventListener('change', function () { applyRemote(this, true); });
   }
 }());
 
 // Tab switcher for elements with data-tab-group / data-tab attributes.
-// Clicking a [data-tab-btn] within a [data-tab-group] shows the matching
-// [data-tab] panel and hides the rest. No global state; each group is independent.
 (function () {
   document.addEventListener('click', function (e) {
     var btn = e.target.closest('[data-tab-btn]');
@@ -57,7 +66,6 @@
     });
   });
 
-  // Activate the first tab in each group on load.
   document.querySelectorAll('[data-tab-group]').forEach(function (group) {
     var first = group.querySelector('[data-tab-btn]');
     if (first) first.click();

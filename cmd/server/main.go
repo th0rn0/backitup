@@ -54,6 +54,9 @@ func main() {
 		getenv("BACKITUP_SSH_HOST_KEY", "/srv/hostkeys/ssh_host_ed25519_key.pub"),
 	)
 	srv.ConfigureRclone(getenv("BACKITUP_RCLONE_CONFIG", "/data/rclone.conf"))
+	if err := srv.RegenerateRcloneConfig(context.Background()); err != nil {
+		log.Printf("warn: regenerate rclone config: %v", err)
+	}
 	srv.ConfigureDiscord(os.Getenv("BACKITUP_DISCORD_WEBHOOK"))
 	verbose := os.Getenv("BACKITUP_VERBOSE") == "true" || os.Getenv("BACKITUP_VERBOSE") == "1"
 	srv.ConfigureVerbose(verbose)
@@ -72,7 +75,7 @@ func main() {
 	// is tiered; rclone is only invoked for clients that opt in.
 	lcDeps := lifecycle.Deps{
 		Store:            st,
-		Offsite:          lifecycle.NewRclone(os.Getenv("BACKITUP_RCLONE_CONFIG")),
+		Offsite:          lifecycle.NewRclone(getenv("BACKITUP_RCLONE_CONFIG", "/data/rclone.conf")),
 		BackupBaseDir:    backupDir,
 		LogRetentionDays: atoiEnv("BACKITUP_LOG_RETENTION_DAYS", 0),
 		DiscordWebhook:   os.Getenv("BACKITUP_DISCORD_WEBHOOK"),

@@ -49,10 +49,12 @@
 
         <label for="offsite_remote">Offsite destination</label>
         <select id="offsite_remote" name="offsite_remote">
-          <option value="">None</option>
-          <option value="s3">S3</option>
-          <option value="gdrive">GDrive</option>
+          <option value="">None (disabled)</option>
+          {{range .Remotes}}
+          <option value="{{.Name}}" data-backend="{{.Backend}}">{{.Name}} — {{.BackendLabel}}</option>
+          {{end}}
         </select>
+        {{if not .Remotes}}<div class="field-hint">No remotes configured yet. <a href="/settings/remotes">Add one</a> to enable offsite backups.</div>{{end}}
 
         <div id="offsite-dir-row" style="display:none">
           <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>

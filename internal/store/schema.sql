@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS offsite_objects (
 CREATE INDEX IF NOT EXISTS idx_offsite_client
     ON offsite_objects (client_id, uploaded_at DESC);
 
+CREATE TABLE IF NOT EXISTS remotes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    backend    TEXT NOT NULL,
+    config     TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS offsite_runs (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     client_id           INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

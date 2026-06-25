@@ -2,44 +2,39 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/th0rn0/backitup/internal/model"
 )
 
-type rcloneRemote struct {
-	Name string
-	Type string
+// writeRcloneConfig regenerates the rclone config file from all remotes stored
+// in the database. Called after every create/delete and once on server startup.
+func (s *Server) writeRcloneConfig(ctx context.Context) error {
+	if s.rcloneConfig == "" {
+		return nil
+	}
+	remotes, err := s.st.ListRemotes(ctx)
+	if err != nil {
+		return err
+	}
+	var sb strings.Builder
+	for _, r := range remotes {
+		sb.WriteString(r.RcloneSection())
+		sb.WriteString("\n")
+	}
+	return os.WriteFile(s.rcloneConfig, []byte(sb.String()), 0600)
 }
 
-// listRcloneRemotes returns all remotes in the rclone config, sorted by name.
-func (s *Server) listRcloneRemotes(ctx context.Context) ([]rcloneRemote, error) {
-	if s.rcloneConfig == "" {
-		return nil, nil
-	}
-	out, err := exec.CommandContext(ctx, "rclone", "--config", s.rcloneConfig, "config", "dump").Output()
-	if err != nil {
-		return nil, fmt.Errorf("rclone config dump: %w", err)
-	}
-	if len(strings.TrimSpace(string(out))) == 0 || strings.TrimSpace(string(out)) == "null" {
-		return nil, nil
-	}
-	var dump map[string]map[string]string
-	if err := json.Unmarshal(out, &dump); err != nil {
-		return nil, fmt.Errorf("parse rclone config: %w", err)
-	}
-	remotes := make([]rcloneRemote, 0, len(dump))
-	for name, cfg := range dump {
-		remotes = append(remotes, rcloneRemote{Name: name, Type: cfg["type"]})
-	}
-	sort.Slice(remotes, func(i, j int) bool { return remotes[i].Name < remotes[j].Name })
-	return remotes, nil
+// RegenerateRcloneConfig is the exported entry point called from main after
+// all server options are wired up.
+func (s *Server) RegenerateRcloneConfig(ctx context.Context) error {
+	return s.writeRcloneConfig(ctx)
 }
 
 // getRemotes renders the remote storage management page.
@@ -47,11 +42,11 @@ func (s *Server) getRemotes(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	remotes, listErr := s.listRcloneRemotes(ctx)
+	remotes, err := s.st.ListRemotes(ctx)
 	errMsg := r.URL.Query().Get("err")
 	flash := r.URL.Query().Get("msg")
-	if listErr != nil && errMsg == "" {
-		errMsg = "Could not list remotes: " + listErr.Error()
+	if err != nil && errMsg == "" {
+		errMsg = "Could not list remotes: " + err.Error()
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -59,27 +54,26 @@ func (s *Server) getRemotes(w http.ResponseWriter, r *http.Request) {
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "remotes",
 		"Remotes":    remotes,
+		"Backends":   model.Backends,
 		"Flash":      flash,
 		"Error":      errMsg,
 		"NoRclone":   s.rcloneConfig == "",
 	})
 }
 
-// postCreateS3Remote creates an S3-compatible rclone remote non-interactively.
-func (s *Server) postCreateS3Remote(w http.ResponseWriter, r *http.Request) {
+// postCreateRemote creates a new remote, obscuring passwords where rclone
+// requires it, then regenerates rclone.conf.
+func (s *Server) postCreateRemote(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Redirect(w, r, "/settings/remotes?err=invalid+form", http.StatusSeeOther)
 		return
 	}
 
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	accessKeyID := strings.TrimSpace(r.PostFormValue("access_key_id"))
-	secretKey := strings.TrimSpace(r.PostFormValue("secret_access_key"))
-	region := strings.TrimSpace(r.PostFormValue("region"))
-	endpoint := strings.TrimSpace(r.PostFormValue("endpoint"))
+	backend := model.RemoteBackend(r.PostFormValue("backend"))
 
-	if name == "" || accessKeyID == "" || secretKey == "" {
-		http.Redirect(w, r, "/settings/remotes?err=Name%2C+access+key%2C+and+secret+are+required", http.StatusSeeOther)
+	if name == "" {
+		http.Redirect(w, r, "/settings/remotes?err=Remote+name+is+required", http.StatusSeeOther)
 		return
 	}
 	if !validRemoteName(name) {
@@ -87,89 +81,61 @@ func (s *Server) postCreateS3Remote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use provider=Other when a custom endpoint is given so rclone doesn't
-	// apply AWS-specific defaults that would conflict with other providers.
-	provider := "AWS"
-	if endpoint != "" {
-		provider = "Other"
+	def := model.FindBackend(backend)
+	if def == nil {
+		http.Redirect(w, r, "/settings/remotes?err=Unknown+backend", http.StatusSeeOther)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	args := []string{"--config", s.rcloneConfig, "config", "create", name, "s3",
-		"provider=" + provider,
-		"access_key_id=" + accessKeyID,
-		"secret_access_key=" + secretKey,
-	}
-	if region != "" {
-		args = append(args, "region="+region)
-	}
-	if endpoint != "" {
-		args = append(args, "endpoint="+endpoint)
+	cfg := map[string]string{}
+	for _, f := range def.Fields {
+		val := strings.TrimSpace(r.PostFormValue(f.Key))
+		if val == "" {
+			if f.Required {
+				http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(f.Label+" is required"), http.StatusSeeOther)
+				return
+			}
+			continue
+		}
+		if f.Obscure {
+			obscured, err := rcloneObscure(ctx, s.rcloneConfig, val)
+			if err != nil {
+				log.Printf("rclone obscure for %s/%s: %v", name, f.Key, err)
+				http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Could not obscure password: "+err.Error()), http.StatusSeeOther)
+				return
+			}
+			val = obscured
+		}
+		cfg[f.Key] = val
 	}
 
-	if out, err := exec.CommandContext(ctx, "rclone", args...).CombinedOutput(); err != nil {
-		log.Printf("rclone config create s3 %q: %v: %s", name, err, out)
-		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("rclone error: "+strings.TrimSpace(string(out))), http.StatusSeeOther)
+	remote := model.Remote{
+		Name:      name,
+		Backend:   backend,
+		Config:    cfg,
+		CreatedAt: time.Now(),
+	}
+	if err := s.st.CreateRemote(ctx, remote); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("A remote named \""+name+"\" already exists"), http.StatusSeeOther)
+			return
+		}
+		log.Printf("create remote %q: %v", name, err)
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Could not save remote: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
-	http.Redirect(w, r, "/settings/remotes?msg=Remote+%22"+url.QueryEscape(name)+"%22+created", http.StatusSeeOther)
+	if err := s.writeRcloneConfig(ctx); err != nil {
+		log.Printf("write rclone config after create %q: %v", name, err)
+	}
+
+	http.Redirect(w, r, "/settings/remotes?msg="+url.QueryEscape("Remote \""+name+"\" created"), http.StatusSeeOther)
 }
 
-// postCreateGDriveRemote creates a Google Drive rclone remote using a service
-// account credentials JSON. Service accounts need no OAuth browser flow and no
-// token refresh — rclone handles JWT auth internally.
-func (s *Server) postCreateGDriveRemote(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/settings/remotes?err=invalid+form", http.StatusSeeOther)
-		return
-	}
-
-	name := strings.TrimSpace(r.PostFormValue("name"))
-	credJSON := strings.TrimSpace(r.PostFormValue("service_account_credentials"))
-	teamDriveID := strings.TrimSpace(r.PostFormValue("team_drive_id"))
-
-	if name == "" || credJSON == "" {
-		http.Redirect(w, r, "/settings/remotes?err=Name+and+service+account+JSON+are+required", http.StatusSeeOther)
-		return
-	}
-	if !validRemoteName(name) {
-		http.Redirect(w, r, "/settings/remotes?err=Remote+name+may+only+contain+letters%2C+digits%2C+hyphens%2C+underscores%2C+and+dots", http.StatusSeeOther)
-		return
-	}
-
-	// Validate and compact the JSON so rclone receives a clean single-line value.
-	var raw json.RawMessage
-	if err := json.Unmarshal([]byte(credJSON), &raw); err != nil {
-		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Invalid service account JSON: "+err.Error()), http.StatusSeeOther)
-		return
-	}
-	compact, _ := json.Marshal(raw)
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	args := []string{"--config", s.rcloneConfig, "config", "create", name, "drive",
-		"scope=drive",
-		"service_account_credentials=" + string(compact),
-	}
-	if teamDriveID != "" {
-		args = append(args, "team_drive="+teamDriveID)
-	}
-
-	if out, err := exec.CommandContext(ctx, "rclone", args...).CombinedOutput(); err != nil {
-		log.Printf("rclone config create drive %q: %v: %s", name, err, out)
-		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("rclone error: "+strings.TrimSpace(string(out))), http.StatusSeeOther)
-		return
-	}
-
-	http.Redirect(w, r, "/settings/remotes?msg=Google+Drive+remote+%22"+url.QueryEscape(name)+"%22+created", http.StatusSeeOther)
-}
-
-// postTestRemote verifies that a remote is reachable by running rclone lsd
-// on its root. Redirects back with a ?msg or ?err flash.
+// postTestRemote verifies a remote is reachable with rclone lsd.
 func (s *Server) postTestRemote(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !validRemoteName(name) {
@@ -193,7 +159,7 @@ func (s *Server) postTestRemote(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings/remotes?msg="+url.QueryEscape("\""+name+"\" connected successfully"), http.StatusSeeOther)
 }
 
-// postDeleteRemote removes a remote from the rclone config by name.
+// postDeleteRemote removes a remote from the database and regenerates rclone.conf.
 func (s *Server) postDeleteRemote(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !validRemoteName(name) {
@@ -204,13 +170,31 @@ func (s *Server) postDeleteRemote(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	if out, err := exec.CommandContext(ctx, "rclone", "--config", s.rcloneConfig, "config", "delete", name).CombinedOutput(); err != nil {
-		log.Printf("rclone config delete %q: %v: %s", name, err, out)
-		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("delete failed: "+strings.TrimSpace(string(out))), http.StatusSeeOther)
+	if err := s.st.DeleteRemote(ctx, name); err != nil {
+		log.Printf("delete remote %q: %v", name, err)
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Delete failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
+	if err := s.writeRcloneConfig(ctx); err != nil {
+		log.Printf("write rclone config after delete %q: %v", name, err)
+	}
+
 	http.Redirect(w, r, "/settings/remotes?msg=Remote+%22"+url.QueryEscape(name)+"%22+deleted", http.StatusSeeOther)
+}
+
+// rcloneObscure runs `rclone obscure <pass>` and returns the obscured value.
+// This is required for SFTP / FTP / WebDAV password fields.
+func rcloneObscure(ctx context.Context, cfgPath, pass string) (string, error) {
+	args := []string{"obscure", pass}
+	if cfgPath != "" {
+		args = append([]string{"--config", cfgPath}, args...)
+	}
+	out, err := exec.CommandContext(ctx, "rclone", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // validRemoteName accepts the character set rclone allows for remote names.

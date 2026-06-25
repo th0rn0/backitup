@@ -47,9 +47,7 @@
           <tr><td>Hot retention</td><td>{{.Client.RetentionDays}}d</td></tr>
           <tr><td>Offsite retention</td><td>{{.Client.OffsiteRetentionDays}}d</td></tr>
           <tr><td>Offsite remote</td><td>{{if .Client.OffsiteRemote}}{{.Client.OffsiteRemote}}{{else}}—{{end}}</td></tr>
-          {{if eq .Client.OffsiteRemote "gdrive"}}<tr><td>Folder ID</td><td class="mono">{{if .Client.OffsiteDir}}{{.Client.OffsiteDir}}{{else}}—{{end}}</td></tr>
-          {{else if .Client.OffsiteRemote}}<tr><td>Offsite path</td><td class="mono">{{if .Client.OffsiteDir}}{{.Client.OffsiteDir}}{{else}}—{{end}}</td></tr>
-          {{end}}
+          {{if .Client.OffsiteRemote}}<tr><td>Offsite path</td><td class="mono">{{if .Client.OffsiteDir}}{{.Client.OffsiteDir}}{{else}}—{{end}}</td></tr>{{end}}
           {{if .Client.OffsiteRemote}}<tr><td>Upload interval</td><td>{{fmtInterval .Client.OffsiteIntervalSecs}}</td></tr>{{end}}
         </tbody>
       </table>
@@ -126,14 +124,16 @@
 
       <div class="section">
         <h2>Offsite destination</h2>
-        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Where to tier cold copies of this client's backups. Requires the matching rclone remote to be configured on the server.</p>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Where to tier cold copies of this client's backups. Configure remotes on the <a href="/settings/remotes">Remote storage</a> page first.</p>
         <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form">
           <label for="offsite_remote">Remote</label>
           <select id="offsite_remote" name="offsite_remote">
-            <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None</option>
-            <option value="s3"{{if eq .Client.OffsiteRemote "s3"}} selected{{end}}>S3</option>
-            <option value="gdrive"{{if eq .Client.OffsiteRemote "gdrive"}} selected{{end}}>GDrive</option>
+            <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None (disabled)</option>
+            {{range .Remotes}}
+            <option value="{{.Name}}" data-backend="{{.Backend}}"{{if eq $.Client.OffsiteRemote .Name}} selected{{end}}>{{.Name}} — {{.BackendLabel}}</option>
+            {{end}}
           </select>
+          {{if not .Remotes}}<div class="field-hint">No remotes configured yet. <a href="/settings/remotes">Add one</a> to enable offsite backups.</div>{{end}}
 
           <div id="offsite-dir-row" style="display:none">
             <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>
