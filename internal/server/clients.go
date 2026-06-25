@@ -259,6 +259,41 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
 }
 
+// postOffsiteRun triggers an immediate offsite upload for a client, bypassing
+// the normal lifecycle schedule. Redirects back to the client detail page when
+// done; returns an error page if the trigger is unconfigured or fails.
+func (s *Server) postOffsiteRun(w http.ResponseWriter, r *http.Request) {
+	if s.offsiteTrigger == nil {
+		http.Error(w, "offsite not configured on this server", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if c.OffsiteRemote == "" {
+		http.Error(w, "client has no offsite remote configured", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.offsiteTrigger(ctx, c.ID); err != nil {
+		log.Printf("offsite run: client=%q: %v", c.Name, err)
+		http.Error(w, "offsite run failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+}
+
 // postDeleteClient removes a client and all its run history, regenerates
 // authorized_keys, then redirects to the dashboard.
 func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {

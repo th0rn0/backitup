@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -66,15 +67,31 @@ func main() {
 	// Lifecycle worker: offsite tiering + retention + integrity, on the server's
 	// own schedule (D1/D8/D9). Per-client OffsiteRemote gates whether a client
 	// is tiered; rclone is only invoked for clients that opt in.
-	stopLifecycle := lifecycle.StartWorker(context.Background(), lifecycle.Deps{
+	lcDeps := lifecycle.Deps{
 		Store:            st,
 		Offsite:          lifecycle.NewRclone(os.Getenv("BACKITUP_RCLONE_CONFIG")),
 		BackupBaseDir:    backupDir,
 		LogRetentionDays: atoiEnv("BACKITUP_LOG_RETENTION_DAYS", 0),
 		DiscordWebhook:   os.Getenv("BACKITUP_DISCORD_WEBHOOK"),
 		Verbose:          verbose,
-	}, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "1h")))
+	}
+	stopLifecycle := lifecycle.StartWorker(context.Background(), lcDeps, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "1h")))
 	defer stopLifecycle()
+
+	// Wire the "Backup now" button: resolves client by ID then runs an immediate
+	// offsite pass using the same deps as the background worker.
+	srv.ConfigureOffsiteTrigger(func(ctx context.Context, clientID int64) error {
+		clients, err := st.ListClients(ctx)
+		if err != nil {
+			return err
+		}
+		for _, c := range clients {
+			if c.ID == clientID {
+				return lifecycle.OffsiteClient(ctx, lcDeps, c)
+			}
+		}
+		return fmt.Errorf("client %d not found", clientID)
+	})
 	if secure {
 		log.Printf("backitup server: listening on %s (TLS)", addr)
 		err = http.ListenAndServeTLS(addr, tlsCert, tlsKey, srv.Handler())

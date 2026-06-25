@@ -117,6 +117,11 @@
             <button type="submit" class="btn">Save</button>
           </div>
         </form>
+        {{if .Client.OffsiteRemote}}
+        <form method="POST" action="/clients/{{.Client.Slug}}/offsite/run" style="margin-top:10px">
+          <button type="submit" class="btn btn-ghost">Backup now</button>
+        </form>
+        {{end}}
       </div>
 
       <div class="section danger-section">

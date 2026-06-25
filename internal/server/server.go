@@ -49,6 +49,10 @@ type Server struct {
 
 	// verbose enables a log line for every client status change.
 	verbose bool
+
+	// offsiteTrigger runs an immediate offsite pass for a single client.
+	// Nil disables the "Backup now" button. Wired by ConfigureOffsiteTrigger.
+	offsiteTrigger func(ctx context.Context, clientID int64) error
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
@@ -148,6 +152,13 @@ func (s *Server) ConfigureVerbose(v bool) {
 	s.verbose = v
 }
 
+// ConfigureOffsiteTrigger wires the function called by the "Backup now" button
+// to immediately run an offsite upload for a specific client. A nil fn disables
+// the button.
+func (s *Server) ConfigureOffsiteTrigger(fn func(ctx context.Context, clientID int64) error) {
+	s.offsiteTrigger = fn
+}
+
 // ConfigureRclone sets the path to the rclone config file used by the remote
 // storage management UI. Empty path disables the feature.
 func (s *Server) ConfigureRclone(path string) {
@@ -181,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /clients/{name}/runs/{runID}", s.requireAdmin(s.getRunLog))
 	mux.HandleFunc("POST /clients/{name}/rotate", s.requireAdmin(s.postRotateClient))
 	mux.HandleFunc("POST /clients/{name}/offsite", s.requireAdmin(s.postUpdateClientOffsite))
+	mux.HandleFunc("POST /clients/{name}/offsite/run", s.requireAdmin(s.postOffsiteRun))
 	mux.HandleFunc("POST /clients/{name}/delete", s.requireAdmin(s.postDeleteClient))
 
 	mux.HandleFunc("GET /users", s.requireAdmin(s.getUsers))

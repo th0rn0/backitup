@@ -326,6 +326,34 @@ func offsiteDue(ctx context.Context, d Deps, c model.Client) (bool, error) {
 	return d.now().Sub(*last) >= time.Duration(c.OffsiteIntervalSecs)*time.Second, nil
 }
 
+// OffsiteClient runs an immediate offsite upload + prune pass for a single
+// client, bypassing the per-client interval check. Safe to call concurrently
+// with the background worker because all state mutations go through the store.
+func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
+	if d.Offsite == nil || c.OffsiteRemote == "" {
+		return fmt.Errorf("client %q has no offsite remote configured", c.Name)
+	}
+	sm, ok := mode.Server(c.Mode)
+	if !ok {
+		return fmt.Errorf("no server mode for %q", c.Mode)
+	}
+	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
+	snaps, err := sm.List(ctx, clientDir)
+	if err != nil {
+		return fmt.Errorf("list snapshots: %w", err)
+	}
+	sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt.After(snaps[j].CreatedAt) })
+
+	offsited, err := d.offsitedSet(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	if err := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited); err != nil {
+		return err
+	}
+	return pruneOffsite(ctx, d, c)
+}
+
 func objectPath(dir string, m model.Mode, snapshotID string) string {
 	name := snapshotID
 	if m == model.ModeRsync {
