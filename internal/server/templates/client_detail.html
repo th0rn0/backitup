@@ -28,6 +28,9 @@
         <span>{{.Client.Name}}</span>
       </div>
 
+      {{if .Flash}}<div class="alert alert-ok" role="status">{{.Flash}}</div>{{end}}
+      {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
+
       <div class="topbar">
         <h1>
           {{.Client.Name}}
@@ -35,6 +38,16 @@
             <span class="dot" aria-hidden="true">{{.Icon}}</span>{{.HealthLabel}}
           </span>
         </h1>
+        {{if .Client.OffsiteRemote}}
+        <div style="display:flex;gap:8px;align-items:center">
+          <form method="POST" action="/clients/{{.Client.Slug}}/offsite/run">
+            <button type="submit" class="btn">Backup now</button>
+          </form>
+          <form method="POST" action="/clients/{{.Client.Slug}}/offsite/test">
+            <button type="submit" class="btn btn-ghost">Test connection</button>
+          </form>
+        </div>
+        {{end}}
       </div>
 
       <table class="kv">
@@ -117,9 +130,6 @@
         </div>
       </div>
 
-      {{if .Flash}}<div class="alert alert-ok" role="status">{{.Flash}}</div>{{end}}
-      {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
-
       <div class="section">
         <h2>Offsite destination</h2>
         <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">Where to tier cold copies of this client's backups. Requires the matching rclone remote to be configured on the server.</p>
@@ -154,16 +164,6 @@
             <button type="submit" class="btn">Save</button>
           </div>
         </form>
-        {{if .Client.OffsiteRemote}}
-        <div style="display:flex;gap:8px;margin-top:10px">
-          <form method="POST" action="/clients/{{.Client.Slug}}/offsite/run">
-            <button type="submit" class="btn btn-ghost">Backup now</button>
-          </form>
-          <form method="POST" action="/clients/{{.Client.Slug}}/offsite/test">
-            <button type="submit" class="btn btn-ghost">Test connection</button>
-          </form>
-        </div>
-        {{end}}
       </div>
 
       <div class="section danger-section">
