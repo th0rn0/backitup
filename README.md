@@ -305,74 +305,33 @@ object each (no hardlink inflation, no destructive `sync`).
 
 #### Setting up remotes via the webgui (recommended)
 
-Open **Remote storage** in the sidebar. Two forms are available:
+Open **Remote storage** in the sidebar. Select a backend from the dropdown and fill
+in the required fields — the app writes `rclone.conf` immediately and the remote
+appears in every client's **Offsite destination** selector.
 
-- **S3-compatible** — enter your access key, secret, region, and (for non-AWS providers)
-  a custom endpoint. Works with AWS S3, Cloudflare R2, Wasabi, MinIO, Backblaze B2
-  (S3-compatible), and any other S3-compatible provider. The remote is created instantly.
+Supported backends:
 
-- **Google Drive** — uses a **service account**, not OAuth. No browser redirect, no token
-  expiry surprises, no `BACKITUP_PUBLIC_API` requirement. Paste the service account JSON
-  key and optionally a Shared Drive ID. Setup:
+| Backend | Notes |
+|---------|-------|
+| **Amazon S3** | Access key + secret + region + bucket |
+| **S3-compatible** | Same fields + custom endpoint; covers Cloudflare R2, Wasabi, MinIO, etc. |
+| **Backblaze B2** | Account ID + application key + bucket |
+| **Google Drive** | Service account JSON + optional folder path. Uses a service account (no OAuth browser redirect, no token expiry). |
+| **SFTP** | Host, port, username, private key path |
+| **WebDAV** | URL, username, password |
+| **Azure Blob** | Account, SAS URL or key, container |
+| **FTP** | Host, port, username, password |
 
-  1. Enable the **Google Drive API** in Google Cloud Console → APIs & Services → Library.
-  2. Create a service account (IAM & Admin → Service Accounts → Create Service Account).
-  3. Create a JSON key for it (Keys → Add Key → JSON) and download it.
-  4. Paste the JSON into the webgui form.
-  5. Share a Google Drive folder (or Shared Drive) with the service account's email
-     (`client_email` in the JSON) so it has somewhere to write.
+> **Google Drive service account setup:**
+> 1. Enable the **Google Drive API** in Google Cloud Console → APIs & Services → Library.
+> 2. Create a service account (IAM & Admin → Service Accounts → Create Service Account).
+> 3. Create a JSON key for it (Keys → Add Key → JSON) and download it.
+> 4. Paste the JSON into the webgui form.
+> 5. Share a Google Drive folder with the service account's email (`client_email` in the JSON).
 
-#### Setting up rclone via the CLI
-
-If you prefer the CLI, or need a provider not covered by the webgui forms:
-
-```sh
-docker compose exec app sh
-rclone --config /data/rclone.conf config
-```
-
-Follow the interactive prompts. Name the remote to match the client's **Offsite
-destination** dropdown value (`s3` or `gdrive`). The config is written to the
-`app-data` volume and persists across restarts.
-
-#### Recommended: wrap the provider in a crypt remote
-
-Rclone's `crypt` remote encrypts before upload so the storage provider only ever sees
-ciphertext. Create the provider remote first, then wrap it:
-
-```sh
-docker compose exec app sh
-rclone --config /data/rclone.conf config
-
-# Step 1 — provider remote (e.g. S3):
-# New remote → name: s3 → type: s3 → fill in credentials, bucket, region
-
-# Step 2 — encryption layer on top:
-# New remote → name: s3 (overwrite the existing one? no — use a new name like s3-crypt)
-# → type: crypt → remote: s3:my-bucket/backitup
-# Enter a strong password; rclone stores it obscured in the config
-```
-
-Set the webgui's offsite remote to `s3-crypt` (not `s3`) so uploads are encrypted.
-The resulting config looks like:
-
-```ini
-[s3]
-type = s3
-provider = AWS
-access_key_id = AKIA...
-secret_access_key = ...
-region = eu-west-1
-
-[s3-crypt]
-type = crypt
-remote = s3:my-bucket/backitup
-password = <rclone-obscured value>
-password2 = <rclone-obscured salt>
-```
-
-> **Warning:** losing the `password` and `password2` values means losing access to
-> your offsite data permanently. Back them up separately from the server.
+The app **owns `rclone.conf`** — it regenerates it from the database after every
+remote create/delete and on startup. Do not edit the file directly; your changes
+will be overwritten. If you need a backend not listed above, open an issue.
 
 > Set `BACKITUP_ADMIN_USER` + `BACKITUP_ADMIN_PASSWORD` to create the webgui login.
 > Set `BACKITUP_TLS_CERT` + `BACKITUP_TLS_KEY` to serve HTTPS (required in production —
