@@ -123,8 +123,7 @@ func (s *Server) getOffsiteDownload(w http.ResponseWriter, r *http.Request) {
 	if offsiteDir == "" {
 		offsiteDir = model.Slug(c.Name)
 	}
-	objectName := string(c.Mode) + "-" + snapshotID // fallback filename
-	var objectPath string
+	var objectName, objectPath string
 	if c.Mode == model.ModeRsync {
 		objectPath = offsiteDir + "/" + snapshotID + ".tar.gz"
 		objectName = snapshotID + ".tar.gz"
