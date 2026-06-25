@@ -180,6 +180,10 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		}
 		if d.Verbose {
 			log.Printf("offsite: client=%q remote=%s snapshot=%s uploaded bytes=%d", c.Name, c.OffsiteRemote, s.ID, bytes)
+			go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
+				"☁️ **backitup** — `%s` offsite upload complete\nRemote: %s | snapshot: %s | bytes: %d",
+				c.Name, c.OffsiteRemote, s.ID, bytes,
+			))
 		}
 		if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{
 			ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Bytes: bytes,
@@ -211,6 +215,10 @@ func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
 		}
 		if d.Verbose {
 			log.Printf("offsite: client=%q remote=%s snapshot=%s pruned (exceeded %dd retention)", c.Name, c.OffsiteRemote, o.SnapshotID, c.OffsiteRetentionDays)
+			go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
+				"🗑️ **backitup** — `%s` offsite snapshot pruned\nRemote: %s | snapshot: %s (exceeded %dd retention)",
+				c.Name, c.OffsiteRemote, o.SnapshotID, c.OffsiteRetentionDays,
+			))
 		}
 		if err := d.Store.DeleteOffsiteObject(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
 			return err

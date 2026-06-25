@@ -133,12 +133,7 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 		if s.verbose {
 			log.Printf("status: client=%q run=%d status=%s files=%d bytes=%d", cl.Name, req.RunID, st, req.Files, req.Bytes)
 		}
-		if st == model.StatusFailed {
-			go alert.Discord(s.discordWebhook, fmt.Sprintf(
-				"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nFinished: %s UTC",
-				cl.Name, cl.SourceLabel, finished.Format("2006-01-02 15:04:05"),
-			))
-		}
+		go s.notifyStatus(cl, st, req.Files, req.Bytes, finished)
 		writeJSON(w, http.StatusCreated, map[string]any{"run_id": req.RunID})
 		return
 	}
@@ -163,13 +158,42 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("status: client=%q run=%d status=%s files=%d bytes=%d", cl.Name, id, st, req.Files, req.Bytes)
 	}
-	if st == model.StatusFailed {
-		go alert.Discord(s.discordWebhook, fmt.Sprintf(
-			"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nFinished: %s UTC",
-			cl.Name, cl.SourceLabel, finished.Format("2006-01-02 15:04:05"),
-		))
-	}
+	go s.notifyStatus(cl, st, req.Files, req.Bytes, started)
 	writeJSON(w, http.StatusCreated, map[string]any{"run_id": id})
+}
+
+// notifyStatus sends a Discord message for a status change. Failures always
+// fire; all other statuses only fire when verbose mode is enabled.
+// Call as a goroutine — never blocks the response path.
+func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes int64, ts time.Time) {
+	switch st {
+	case model.StatusFailed:
+		alert.Discord(s.discordWebhook, fmt.Sprintf(
+			"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nAt: %s UTC",
+			cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"),
+		))
+	case model.StatusOK:
+		if s.verbose {
+			alert.Discord(s.discordWebhook, fmt.Sprintf(
+				"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s UTC | files=%d bytes=%d",
+				cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"), files, bytes,
+			))
+		}
+	case model.StatusRunning:
+		if s.verbose {
+			alert.Discord(s.discordWebhook, fmt.Sprintf(
+				"▶️ **backitup** — `%s` backup **STARTED**\nSource: %s\nStarted: %s UTC",
+				cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"),
+			))
+		}
+	case model.StatusOverlap:
+		if s.verbose {
+			alert.Discord(s.discordWebhook, fmt.Sprintf(
+				"⏭️ **backitup** — `%s` backup **SKIPPED** (overlap — previous run still in progress)\nSource: %s",
+				cl.Name, cl.SourceLabel,
+			))
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
