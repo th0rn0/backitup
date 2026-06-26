@@ -55,8 +55,13 @@ func (f *fakeOffsite) Lsf(_ context.Context, _, _ string) ([]string, error) {
 
 func mkArchive(t *testing.T, path string, mtime time.Time) {
 	t.Helper()
+	mkArchiveContent(t, path, mtime, "payload")
+}
+
+func mkArchiveContent(t *testing.T, path string, mtime time.Time, content string) {
+	t.Helper()
 	src := t.TempDir()
-	_ = os.WriteFile(filepath.Join(src, "f.txt"), []byte("payload"), 0o644)
+	_ = os.WriteFile(filepath.Join(src, "f.txt"), []byte(content), 0o644)
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -99,9 +104,9 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
 		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
 	})
-	mkArchive(t, filepath.Join(dir, "old.tar.gz"), now.Add(-40*24*time.Hour))
-	mkArchive(t, filepath.Join(dir, "mid.tar.gz"), now.Add(-5*24*time.Hour))
-	mkArchive(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour))
+	mkArchiveContent(t, filepath.Join(dir, "old.tar.gz"), now.Add(-40*24*time.Hour), "payload-old")
+	mkArchiveContent(t, filepath.Join(dir, "mid.tar.gz"), now.Add(-5*24*time.Hour), "payload-mid")
+	mkArchiveContent(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour), "payload-new")
 
 	deps := Deps{Store: st, Offsite: &fakeOffsite{}, BackupBaseDir: base, Now: func() time.Time { return now }}
 	off := deps.Offsite.(*fakeOffsite)
@@ -211,5 +216,48 @@ func TestRunOnceOffsiteRetention(t *testing.T) {
 	objs, _ := st.ListOffsiteObjects(context.Background(), id)
 	if len(objs) != 1 || objs[0].SnapshotID != "fresh" {
 		t.Fatalf("offsite retention should leave only fresh: %+v", objs)
+	}
+}
+
+// Stale .part files (older than PartOrphanAge) are removed; a recently-touched
+// .part file (simulating an in-progress upload) is left alone.
+func TestPrunePartOrphans(t *testing.T) {
+	st := openStore(t)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	_, base, dir := newClient(t, st, model.Client{
+		Name: "c", Mode: model.ModeTarGz, RetentionDays: 14, Enabled: true,
+	})
+
+	write := func(name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	stale := write("backup-20260617T120000Z-000.tar.gz.part")
+	active := write("backup-20260618T115900Z-000.tar.gz.part")
+	keep := write("backup-20260618T110000Z-000.tar.gz") // real archive — must not be touched
+
+	// Stale: mtime 3h before now (> DefaultPartOrphanAge of 2h).
+	_ = os.Chtimes(stale, now.Add(-3*time.Hour), now.Add(-3*time.Hour))
+	// Active: mtime 1 minute before now (< threshold).
+	_ = os.Chtimes(active, now.Add(-1*time.Minute), now.Add(-1*time.Minute))
+	_ = os.Chtimes(keep, now.Add(-1*time.Hour), now.Add(-1*time.Hour))
+
+	deps := Deps{Store: st, BackupBaseDir: base, Now: func() time.Time { return now }}
+	if err := RunOnce(context.Background(), deps); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("stale .part file should have been removed")
+	}
+	if _, err := os.Stat(active); err != nil {
+		t.Error("active .part file should NOT have been removed")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Error("completed archive must not be touched")
 	}
 }

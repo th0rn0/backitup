@@ -25,10 +25,15 @@ func StartWorker(ctx context.Context, d Deps, interval time.Duration) (stop func
 				return
 			case <-timer.C:
 			}
+			start := time.Now()
 			if err := RunOnce(ctx, d); err != nil {
 				log.Printf("lifecycle: pass completed with errors: %v", err)
 			}
-			timer.Reset(interval)
+			next := interval - time.Since(start)
+			if next < 0 {
+				next = 0
+			}
+			timer.Reset(next)
 		}
 	}()
 	return cancel
@@ -52,10 +57,15 @@ func StartOffsiteWorker(ctx context.Context, d Deps, pollInterval time.Duration)
 				return
 			case <-timer.C:
 			}
+			start := time.Now()
 			if err := RunOffsiteOnce(ctx, d); err != nil {
 				log.Printf("offsite worker: pass completed with errors: %v", err)
 			}
-			timer.Reset(pollInterval)
+			next := pollInterval - time.Since(start)
+			if next < 0 {
+				next = 0
+			}
+			timer.Reset(next)
 		}
 	}()
 	return cancel

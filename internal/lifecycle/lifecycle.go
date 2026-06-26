@@ -15,11 +15,14 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/alert"
@@ -35,6 +38,11 @@ const DefaultRunsKeepDays = 90
 // DefaultLogRetentionDays is how long log_tail is kept before being cleared.
 const DefaultLogRetentionDays = 7
 
+// DefaultPartOrphanAge is how old a .tar.gz.part file must be before it is
+// considered an abandoned upload and removed. An active upload continuously
+// updates the file's mtime, so anything older than this threshold is stale.
+const DefaultPartOrphanAge = 2 * time.Hour
+
 // Offsite is the cold-storage backend (rclone crypt in production). objectName
 // is the path within the remote, e.g. "client-3/20260618T....tar.gz".
 type Offsite interface {
@@ -49,8 +57,9 @@ type Deps struct {
 	Store            *store.Store
 	Offsite          Offsite
 	BackupBaseDir    string
-	RunsKeepDays     int // 0 -> DefaultRunsKeepDays
-	LogRetentionDays int // 0 -> DefaultLogRetentionDays; how long log_tail is kept
+	RunsKeepDays     int           // 0 -> DefaultRunsKeepDays
+	LogRetentionDays int           // 0 -> DefaultLogRetentionDays; how long log_tail is kept
+	PartOrphanAge    time.Duration // 0 -> DefaultPartOrphanAge; min age before a .part file is removed
 	Now              func() time.Time
 
 	DiscordWebhook string              // empty disables Discord alerts
@@ -122,6 +131,9 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	if err != nil {
 		return err
 	}
+
+	// Remove stale .part files left by interrupted uploads before any pruning.
+	prunePartOrphans(d, clientDir, c.Name)
 
 	// Uploads are handled exclusively by the offsite worker (RunOffsiteOnce /
 	// StartOffsiteWorker). The lifecycle worker only prunes and verifies.
@@ -245,12 +257,26 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		if c.Mode == model.ModeRsync {
 			defer os.Remove(obj)
 		}
+
+		checksum, err := fileChecksum(obj)
+		if err != nil {
+			return totalSnaps, totalBytes, fmt.Errorf("checksum %s: %w", s.ID, err)
+		}
+		dup, err := d.Store.OffsiteChecksumExists(ctx, c.ID, c.OffsiteRemote, checksum)
+		if err != nil {
+			return totalSnaps, totalBytes, fmt.Errorf("checksum lookup %s: %w", s.ID, err)
+		}
+		if dup {
+			log.Printf("offsite: client=%q snap=%s: identical content already on remote (sha256=%s…), skipping upload", c.Name, s.ID, checksum[:12])
+			continue
+		}
+
 		bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, s.ID))
 		if err != nil {
 			return totalSnaps, totalBytes, fmt.Errorf("offsite upload %s: %w", s.ID, err)
 		}
 		if d.Verbose {
-			log.Printf("offsite: client=%q remote=%s snapshot=%s uploaded bytes=%d", c.Name, c.OffsiteRemote, s.ID, bytes)
+			log.Printf("offsite: client=%q remote=%s snapshot=%s uploaded bytes=%d sha256=%s…", c.Name, c.OffsiteRemote, s.ID, bytes, checksum[:12])
 		}
 		if d.DiscordWebhook != "" {
 			go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
@@ -259,7 +285,7 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 			))
 		}
 		if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{
-			ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Bytes: bytes,
+			ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Bytes: bytes, Checksum: checksum,
 		}); err != nil {
 			return totalSnaps, totalBytes, fmt.Errorf("record offsite %s: %w", s.ID, err)
 		}
@@ -271,9 +297,11 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 }
 
 // pruneOffsite enforces the INDEPENDENT offsite retention horizon (D8), keeping
-// the newest offsite object regardless of age.
+// the newest offsite object regardless of age. Skipped when DisableOffsitePruning
+// is set so operators can delegate pruning to the storage provider's own lifecycle
+// policy (e.g. B2 lifecycle rules).
 func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
-	if c.OffsiteRetentionDays <= 0 {
+	if c.DisableOffsitePruning || c.OffsiteRetentionDays <= 0 {
 		return nil
 	}
 	objs, err := d.Store.ListOffsiteObjects(ctx, c.ID) // newest first
@@ -302,6 +330,43 @@ func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
 		}
 	}
 	return nil
+}
+
+// prunePartOrphans removes .tar.gz.part files older than PartOrphanAge from
+// clientDir. These are left by interrupted tar.gz uploads (backitup-recv writes
+// to a .part then renames on success). An in-progress upload continuously
+// updates mtime, so any .part file whose mtime is older than the threshold is
+// safe to remove.
+func prunePartOrphans(d Deps, clientDir, clientName string) {
+	age := d.PartOrphanAge
+	if age == 0 {
+		age = DefaultPartOrphanAge
+	}
+	cutoff := d.now().Add(-age)
+
+	entries, err := os.ReadDir(clientDir)
+	if err != nil {
+		return // directory may not exist yet; not an error
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz.part") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue // recently touched — upload may still be in progress
+		}
+		path := filepath.Join(clientDir, e.Name())
+		if err := os.Remove(path); err != nil {
+			log.Printf("lifecycle: client=%q: remove stale part file %s: %v", clientName, e.Name(), err)
+		} else {
+			log.Printf("lifecycle: client=%q: removed stale part file %s (last modified %s ago)",
+				clientName, e.Name(), d.now().Sub(info.ModTime()).Round(time.Second))
+		}
+	}
 }
 
 // pruneHot deletes hot snapshots older than retention, never the newest, and —
@@ -537,4 +602,18 @@ func objectPath(dir string, m model.Mode, snapshotID string) string {
 		name = snapshotID + ".tar.gz" // rsync snapshot dir -> one offsite archive
 	}
 	return dir + "/" + name
+}
+
+// fileChecksum returns the SHA-256 hex digest of the file at path.
+func fileChecksum(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }

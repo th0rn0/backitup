@@ -56,8 +56,10 @@ func Open(dsn string) (*Store, error) {
 		`ALTER TABLE clients ADD COLUMN offsite_interval_secs INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE clients ADD COLUMN token_prefix          TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN offsite_upload_mode   TEXT    NOT NULL DEFAULT 'all'`,
-		`ALTER TABLE offsite_objects ADD COLUMN remote_missing    INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE offsite_objects ADD COLUMN remote_verified_at TEXT   NOT NULL DEFAULT ''`,
+		`ALTER TABLE offsite_objects ADD COLUMN remote_missing         INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE offsite_objects ADD COLUMN remote_verified_at    TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE offsite_objects ADD COLUMN checksum              TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN disable_offsite_pruning       INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
@@ -171,7 +173,7 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode
+			offsite_upload_mode, disable_offsite_pruning
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -209,7 +211,7 @@ func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) 
 		SELECT id, name, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_interval_secs, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode
+			offsite_upload_mode, disable_offsite_pruning
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -386,10 +388,10 @@ func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) 
 		uploaded = time.Now().UTC()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at)
-		VALUES (?,?,?,?,?)
-		ON CONFLICT(client_id, snapshot_id, remote) DO UPDATE SET bytes=excluded.bytes, uploaded_at=excluded.uploaded_at`,
-		o.ClientID, o.SnapshotID, o.Remote, o.Bytes, uploaded.UTC().Format(rfc3339))
+		INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at, checksum)
+		VALUES (?,?,?,?,?,?)
+		ON CONFLICT(client_id, snapshot_id, remote) DO UPDATE SET bytes=excluded.bytes, uploaded_at=excluded.uploaded_at, checksum=excluded.checksum`,
+		o.ClientID, o.SnapshotID, o.Remote, o.Bytes, uploaded.UTC().Format(rfc3339), o.Checksum)
 	if err != nil {
 		return fmt.Errorf("record offsite object: %w", err)
 	}
@@ -399,7 +401,7 @@ func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) 
 // ListOffsiteObjects returns the offsite objects for a client, newest first.
 func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model.OffsiteObject, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, client_id, snapshot_id, remote, bytes, uploaded_at, remote_missing, remote_verified_at
+		SELECT id, client_id, snapshot_id, remote, bytes, uploaded_at, remote_missing, remote_verified_at, checksum
 		FROM offsite_objects WHERE client_id = ? ORDER BY uploaded_at DESC`, clientID)
 	if err != nil {
 		return nil, err
@@ -410,7 +412,7 @@ func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model
 		var o model.OffsiteObject
 		var uploaded, verifiedAt string
 		var remoteMissing int
-		if err := rows.Scan(&o.ID, &o.ClientID, &o.SnapshotID, &o.Remote, &o.Bytes, &uploaded, &remoteMissing, &verifiedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.ClientID, &o.SnapshotID, &o.Remote, &o.Bytes, &uploaded, &remoteMissing, &verifiedAt, &o.Checksum); err != nil {
 			return nil, err
 		}
 		o.UploadedAt, _ = time.Parse(rfc3339, uploaded)
@@ -419,6 +421,29 @@ func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// OffsiteChecksumExists returns true if any offsite object for this client and
+// remote already carries the given checksum, indicating identical content has
+// already been uploaded and a new upload can be skipped.
+func (s *Store) OffsiteChecksumExists(ctx context.Context, clientID int64, remote, checksum string) (bool, error) {
+	if checksum == "" {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM offsite_objects WHERE client_id=? AND remote=? AND checksum=?`,
+		clientID, remote, checksum).Scan(&n)
+	return n > 0, err
+}
+
+// TotalOffsiteBytes returns the sum of all recorded offsite object sizes across
+// all clients and remotes. Dedup records (uploaded=false) are included since
+// their bytes field reflects the content already held by the original upload.
+func (s *Store) TotalOffsiteBytes(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes), 0) FROM offsite_objects`).Scan(&n)
+	return n, err
 }
 
 // UpdateOffsiteRemoteStatus records the result of a remote existence check.
@@ -628,15 +653,15 @@ func (s *Store) DeleteRemote(ctx context.Context, name string) error {
 	return err
 }
 
-// UpdateClientOffsite changes the offsite_remote, offsite_dir, offsite_interval_secs, and offsite_upload_mode for a client.
+// UpdateClientOffsite changes the offsite destination settings for a client.
 // An empty remote disables offsite tiering for this client.
-func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir string, intervalSecs int, uploadMode string) error {
+func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir string, intervalSecs int, uploadMode string, disablePruning bool) error {
 	if uploadMode == "" {
 		uploadMode = "all"
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_interval_secs=?, offsite_upload_mode=? WHERE id=?`,
-		remote, dir, intervalSecs, uploadMode, id)
+		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_interval_secs=?, offsite_upload_mode=?, disable_offsite_pruning=? WHERE id=?`,
+		remote, dir, intervalSecs, uploadMode, b2i(disablePruning), id)
 	if err != nil {
 		return fmt.Errorf("update offsite remote: %w", err)
 	}
@@ -647,11 +672,12 @@ func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir s
 	return nil
 }
 
-// UpdateClientRetention changes the hot and offsite retention horizons.
-func (s *Store) UpdateClientRetention(ctx context.Context, id int64, hotDays, offsiteDays int) error {
+// UpdateClientRetention changes the hot/offsite retention horizons and the
+// expected backup interval used for health-status derivation.
+func (s *Store) UpdateClientRetention(ctx context.Context, id int64, hotDays, offsiteDays, expectedIntervalSecs int) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET retention_days=?, offsite_retention_days=? WHERE id=?`,
-		hotDays, offsiteDays, id)
+		`UPDATE clients SET retention_days=?, offsite_retention_days=?, expected_interval_secs=? WHERE id=?`,
+		hotDays, offsiteDays, expectedIntervalSecs, id)
 	if err != nil {
 		return fmt.Errorf("update retention: %w", err)
 	}
@@ -794,16 +820,17 @@ type scanner interface{ Scan(...any) error }
 func scanClient(sc scanner) (model.Client, error) {
 	var c model.Client
 	var mode, excludes, createdAt string
-	var enabled, skipSymlinks int
+	var enabled, skipSymlinks, disableOffsitePruning int
 	if err := sc.Scan(&c.ID, &c.Name, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.OffsiteRetentionDays, &c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
 		&c.OffsiteIntervalSecs, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks,
-		&c.OffsiteUploadMode); err != nil {
+		&c.OffsiteUploadMode, &disableOffsitePruning); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)
 	c.Enabled = enabled != 0
 	c.SkipSymlinks = skipSymlinks != 0
+	c.DisableOffsitePruning = disableOffsitePruning != 0
 	if excludes != "" {
 		_ = json.Unmarshal([]byte(excludes), &c.Excludes)
 	}

@@ -30,9 +30,12 @@ func (s *Server) getNewClient(w http.ResponseWriter, r *http.Request) {
 	remotes, _ := s.st.ListRemotes(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
-		"Username":   usernameFromContext(r.Context()),
-		"ActivePage": "clients/new",
-		"Remotes":    remotes,
+		"Username":    usernameFromContext(r.Context()),
+		"ActivePage":  "clients/new",
+		"Remotes":     remotes,
+		"PublicHost":  s.publicHost,
+		"PublicAPI":   s.publicAPI,
+		"ClientImage": s.clientImage,
 	})
 }
 
@@ -86,7 +89,9 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
-	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase)
+	backupPath  := r.PostFormValue("backup_path")
+	secretsPath := r.PostFormValue("secrets_path")
+	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, backupPath, secretsPath)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
 		"Username":          usernameFromContext(r.Context()),
@@ -99,6 +104,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		"KnownHostsLine":    knownHostsLine(s.publicHost, s.sshHostKeyPath),
 		"DockerRunKnown":    dockerKnown,
 		"DockerRunInsecure": dockerInsecure,
+		"PathsPrefilled":    backupPath != "" || secretsPath != "",
 	})
 }
 
@@ -168,23 +174,82 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		offsiteViews[i] = offsiteObjectView{OffsiteObject: o, LocalExists: localIDs[o.SnapshotID]}
 	}
 
+	// Compute per-client dashboard stats.
+	var localTotalBytes int64
+	for _, sn := range localSnapshots {
+		localTotalBytes += sn.Bytes
+	}
+	var offsiteTotalBytes int64
+	for _, o := range offsiteObjects {
+		offsiteTotalBytes += o.Bytes
+	}
+	var lastBackupAge, lastBackupSize string
+	switch {
+	case latest == nil:
+		lastBackupAge, lastBackupSize = "never", "—"
+	case latest.Status == model.StatusRunning:
+		lastBackupAge, lastBackupSize = "in progress", "…"
+	case latest.Status == model.StatusFailed:
+		lastBackupAge = "FAILED " + relTime(time.Since(latest.FinishedAt))
+		lastBackupSize = "—"
+	default:
+		lastBackupAge = relTime(time.Since(latest.FinishedAt))
+		lastBackupSize = humanBytes(latest.Bytes)
+	}
+	var expectedIntervalStr, nextExpected string
+	if c.ExpectedIntervalSecs > 0 {
+		d2 := time.Duration(c.ExpectedIntervalSecs) * time.Second
+		switch {
+		case d2 < time.Hour:
+			expectedIntervalStr = fmt.Sprintf("%dm", int(d2.Minutes()))
+		case d2 < 24*time.Hour:
+			expectedIntervalStr = fmt.Sprintf("%dh", int(d2.Hours()))
+		default:
+			expectedIntervalStr = fmt.Sprintf("%dd", int(d2.Hours()/24))
+		}
+		if latest != nil && !latest.FinishedAt.IsZero() {
+			next := latest.FinishedAt.Add(d2)
+			remaining := time.Until(next)
+			if remaining < 0 {
+				nextExpected = "overdue"
+			} else {
+				switch {
+				case remaining < time.Hour:
+					nextExpected = fmt.Sprintf("in %dm", int(remaining.Minutes()))
+				case remaining < 24*time.Hour:
+					nextExpected = fmt.Sprintf("in %dh", int(remaining.Hours()))
+				default:
+					nextExpected = fmt.Sprintf("in %dd", int(remaining.Hours()/24))
+				}
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
-		"Username":          usernameFromContext(r.Context()),
-		"ActivePage":        "",
-		"Client":            c,
-		"ClientDir":         clientDir,
-		"Health":            string(h),
-		"HealthLabel":       healthLabel(h),
-		"Icon":              healthIcon(h),
-		"Runs":              runs,
-		"OffsiteRuns":       offsiteRuns,
-		"OffsiteObjects":    offsiteViews,
-		"LocalSnapshots":    localSnapshots,
-		"MissingLocalSnaps": missingLocalSnaps,
-		"Remotes":           allRemotes,
-		"Flash":             r.URL.Query().Get("msg"),
-		"Error":             r.URL.Query().Get("err"),
+		"Username":            usernameFromContext(r.Context()),
+		"ActivePage":          "",
+		"Client":              c,
+		"ClientDir":           clientDir,
+		"Health":              string(h),
+		"HealthLabel":         healthLabel(h),
+		"Icon":                healthIcon(h),
+		"Runs":                runs,
+		"OffsiteRuns":         offsiteRuns,
+		"OffsiteObjects":      offsiteViews,
+		"LocalSnapshots":      localSnapshots,
+		"MissingLocalSnaps":   missingLocalSnaps,
+		"Remotes":             allRemotes,
+		"Flash":               r.URL.Query().Get("msg"),
+		"Error":               r.URL.Query().Get("err"),
+		"LastBackupAge":       lastBackupAge,
+		"LastBackupSize":      lastBackupSize,
+		"LocalCount":          len(localSnapshots),
+		"LocalTotalBytes":     localTotalBytes,
+		"OffsiteCount":        len(offsiteViews),
+		"OffsiteTotalBytes":   offsiteTotalBytes,
+		"ExpectedIntervalStr": expectedIntervalStr,
+		"NextExpected":        nextExpected,
 	})
 }
 
@@ -272,7 +337,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
-	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase)
+	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, "", "")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
 		"Username":          usernameFromContext(r.Context()),
@@ -298,11 +363,15 @@ func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Reques
 	}
 	hotDays := atoiDefault(r.PostFormValue("retention_days"), 14)
 	offsiteDays := atoiDefault(r.PostFormValue("offsite_retention_days"), 90)
+	expectedInterval := atoiDefault(r.PostFormValue("expected_interval_secs"), 0)
 	if hotDays < 1 {
 		hotDays = 1
 	}
 	if offsiteDays < 0 {
 		offsiteDays = 0
+	}
+	if expectedInterval < 0 {
+		expectedInterval = 0
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -316,7 +385,7 @@ func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.st.UpdateClientRetention(ctx, c.ID, hotDays, offsiteDays); err != nil {
+	if err := s.st.UpdateClientRetention(ctx, c.ID, hotDays, offsiteDays, expectedInterval); err != nil {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
@@ -360,6 +429,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	if uploadMode != "latest" {
 		uploadMode = "all"
 	}
+	disablePruning := r.PostFormValue("disable_offsite_pruning") == "1"
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -383,7 +453,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, intervalSecs, uploadMode); err != nil {
+	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, intervalSecs, uploadMode, disablePruning); err != nil {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
@@ -545,10 +615,13 @@ func (s *Server) renderNewClientError(w http.ResponseWriter, r *http.Request, ms
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
 	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
-		"Username":   usernameFromContext(r.Context()),
-		"ActivePage": "clients/new",
-		"Remotes":    remotes,
-		"Error":      msg,
+		"Username":    usernameFromContext(r.Context()),
+		"ActivePage":  "clients/new",
+		"Remotes":     remotes,
+		"Error":       msg,
+		"PublicHost":  s.publicHost,
+		"PublicAPI":   s.publicAPI,
+		"ClientImage": s.clientImage,
 	})
 }
 
@@ -605,12 +678,21 @@ func (s *Server) apiBase(apiScheme string) string {
 // dockerCmds returns two ready-to-run docker commands for a client:
 //   - known: mounts /secrets with BACKITUP_KNOWN_HOSTS (recommended)
 //   - insecure: adds BACKITUP_INSECURE=1, no host-key verification
-func (s *Server) dockerCmds(token, apiBase string) (known, insecure string) {
+//
+// backupPath and secretsPath are the user-supplied host paths; empty values
+// fall back to the /PATH/TO/… placeholders.
+func (s *Server) dockerCmds(token, apiBase, backupPath, secretsPath string) (known, insecure string) {
+	if backupPath == "" {
+		backupPath = "/PATH/TO/BACKUP"
+	}
+	if secretsPath == "" {
+		secretsPath = "/PATH/TO/SECRETS"
+	}
 	base := []string{
 		"docker run --rm \\",
 		"  --user $(id -u):$(id -g) \\",
-		"  --mount type=bind,src=/PATH/TO/BACKUP,dst=/source,readonly \\",
-		"  -v /PATH/TO/SECRETS:/secrets:ro \\",
+		fmt.Sprintf("  --mount type=bind,src=%s,dst=/source,readonly \\", backupPath),
+		fmt.Sprintf("  -v %s:/secrets:ro \\", secretsPath),
 		fmt.Sprintf("  -e BACKITUP_API=%s \\", apiBase),
 		fmt.Sprintf("  -e BACKITUP_SERVER=%s \\", s.publicHost),
 		fmt.Sprintf("  -e BACKITUP_TOKEN=%s \\", token),
