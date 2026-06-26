@@ -162,6 +162,35 @@ h2 {
 .fleet-meta .failed { color: var(--failed); }
 .fleet-meta .never  { color: var(--never); }
 
+/* ── Storage stats ── */
+.storage-stats {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.stat-chip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 6px 14px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stat-chip .stat-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.stat-chip .stat-value {
+  font-family: var(--mono);
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* ── Buttons ── */
 .btn {
   display: inline-flex;
@@ -440,6 +469,8 @@ pre.log {
 .d-inline       { display: inline; }
 .flex-row       { display: flex; gap: 8px; align-items: center; }
 .flex-row-sm    { display: flex; gap: 6px; align-items: center; }
+.mt-4           { margin-top: 4px; }
+.mt-10          { margin-top: 10px; }
 .mt-16          { margin-top: 16px; }
 .mt-18          { margin-top: 18px; }
 .mt-24          { margin-top: 24px; }
@@ -454,6 +485,104 @@ pre.log {
 .mode-warn-hint { font-size: 12px; color: var(--stale); margin-bottom: 8px; }
 .textarea-code  { font-family: var(--mono); font-size: 11px; resize: vertical; }
 .error-row-detail { padding: 0 12px 10px; color: var(--red); font-size: 12px; font-family: var(--mono); white-space: pre-wrap; word-break: break-all; }
+
+/* ── Client detail hero ── */
+.client-hero {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.client-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.client-title-row h1 { font-size: 20px; }
+.hero-status { font-size: 13px; }
+.client-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.client-source {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+.client-hero-actions {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+/* ── Client stat cards ── */
+.client-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.client-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+}
+.client-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.client-stat-value {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+.client-stat-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  font-family: var(--mono);
+}
+
+/* ── Settings groups (inside Settings tab) ── */
+.settings-group {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-group:first-child { padding-top: 8px; }
+.settings-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.danger-group {
+  border-bottom-color: rgba(248,81,73,0.2);
+}
+.danger-group .settings-group-title { color: var(--failed); }
+.danger-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 16px;
+}
 
 /* ── Responsive ── */
 @media (max-width: 640px) {

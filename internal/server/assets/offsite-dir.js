@@ -47,8 +47,16 @@
   }
 }());
 
-// Tab switcher for elements with data-tab-group / data-tab attributes.
+// Tab switcher for elements with data-tab-group / data-tab-btn / data-tab.
+// scopedQuery only returns elements whose nearest data-tab-group ancestor is
+// exactly `group`, so nested tab groups don't bleed into each other.
 (function () {
+  function scopedQuery(group, selector) {
+    return Array.from(group.querySelectorAll(selector)).filter(function (el) {
+      return el.closest('[data-tab-group]') === group;
+    });
+  }
+
   document.addEventListener('click', function (e) {
     var btn = e.target.closest('[data-tab-btn]');
     if (!btn) return;
@@ -56,16 +64,17 @@
     if (!group) return;
     var target = btn.getAttribute('data-tab-btn');
 
-    group.querySelectorAll('[data-tab-btn]').forEach(function (b) {
+    scopedQuery(group, '[data-tab-btn]').forEach(function (b) {
       b.classList.toggle('tab-active', b.getAttribute('data-tab-btn') === target);
     });
-    group.querySelectorAll('[data-tab]').forEach(function (p) {
+    scopedQuery(group, '[data-tab]').forEach(function (p) {
       p.style.display = p.getAttribute('data-tab') === target ? '' : 'none';
     });
   });
 
+  // Initialise each group by clicking its first directly-owned button.
   document.querySelectorAll('[data-tab-group]').forEach(function (group) {
-    var first = group.querySelector('[data-tab-btn]');
+    var first = scopedQuery(group, '[data-tab-btn]')[0];
     if (first) first.click();
   });
 }());

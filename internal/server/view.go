@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -14,6 +16,12 @@ type dashboardView struct {
 	ActivePage string
 	Summary    summaryCounts
 	Clients    []clientRow
+	Storage    storageStats
+}
+
+type storageStats struct {
+	HotBytes  int64
+	ColdBytes int64
 }
 
 type summaryCounts struct{ OK, Stale, Failed, Never, Running int }
@@ -92,6 +100,19 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 	sort.SliceStable(v.Clients, func(i, j int) bool {
 		return healthRank(v.Clients[i].Health) < healthRank(v.Clients[j].Health)
 	})
+
+	// Storage totals: walk the backup dir for hot, query DB for cold.
+	v.Storage.ColdBytes, _ = s.st.TotalOffsiteBytes(ctx)
+	_ = filepath.WalkDir(s.backupBaseDir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			v.Storage.HotBytes += info.Size()
+		}
+		return nil
+	})
+
 	return v, nil
 }
 

@@ -89,6 +89,23 @@
           <label><input type="radio" name="api_scheme" value="https"> https</label>
         </div>
 
+        <div class="section mt-18">
+          <h2>Docker command</h2>
+          <p class="form-subtext">Fill in the paths so the command is ready to copy after creation.</p>
+
+          <label for="backup_path">Path to back up</label>
+          <input id="backup_path" name="backup_path" placeholder="/home/user/Documents" autocomplete="off">
+          <div class="field-hint">Directory on the host that Docker will mount as the backup source.</div>
+
+          <label for="secrets_path" class="mt-10">Secrets directory</label>
+          <input id="secrets_path" name="secrets_path" placeholder="/etc/backitup/client-name" autocomplete="off">
+          <div class="field-hint">Where the SSH key and <code>known_hosts</code> file will live on the host.</div>
+
+          <label for="docker-preview" class="mt-10">Preview <span class="label-optional">(token is filled in after creation)</span></label>
+          <textarea id="docker-preview" class="textarea-code" rows="10" readonly spellcheck="false"></textarea>
+          <button class="btn btn-ghost btn-copy" style="margin-top:6px" data-target="docker-preview" type="button">Copy</button>
+        </div>
+
         <div class="form-actions">
           <button class="btn" type="submit">Create client</button>
           <a href="/" class="btn-ghost btn">Cancel</a>
@@ -96,6 +113,12 @@
       </form>
     </main>
   </div>
+  <span id="docker-meta"
+    data-public-api="{{.PublicAPI}}"
+    data-public-host="{{.PublicHost}}"
+    data-client-image="{{.ClientImage}}"
+    hidden></span>
   <script src="/static/offsite-dir.js"></script>
+  <script src="/static/new-client.js"></script>
 </body>
 </html>

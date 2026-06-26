@@ -24,6 +24,16 @@
       </div>
 
       {{if .Clients}}
+      <div class="storage-stats">
+        <div class="stat-chip">
+          <span class="stat-label">On disk</span>
+          <span class="stat-value">{{humanBytes .Storage.HotBytes}}</span>
+        </div>
+        <div class="stat-chip">
+          <span class="stat-label">On remote</span>
+          <span class="stat-value">{{humanBytes .Storage.ColdBytes}}</span>
+        </div>
+      </div>
       <table>
         <thead>
           <tr>

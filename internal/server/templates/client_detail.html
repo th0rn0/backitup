@@ -21,314 +21,372 @@
       {{if .Flash}}<div class="alert alert-ok" role="status">{{.Flash}}</div>{{end}}
       {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
 
-      <div class="topbar">
-        <h1>
-          {{.Client.Name}}
-          <span class="status {{.Health}} status-badge">
-            <span class="dot" aria-hidden="true">{{.Icon}}</span>{{.HealthLabel}}
-          </span>
-        </h1>
-        {{if .Client.OffsiteRemote}}
-        <div class="flex-row">
+      <!-- Hero card -->
+      <div class="client-hero">
+        <div class="client-hero-main">
+          <div class="client-title-row">
+            <h1>{{.Client.Name}}</h1>
+            <span class="status {{.Health}} hero-status">
+              <span class="dot" aria-hidden="true">{{.Icon}}</span>{{.HealthLabel}}
+            </span>
+          </div>
+          <div class="client-meta">
+            <span class="badge">{{.Client.Mode}}</span>
+            {{if .Client.OffsiteRemote}}<span class="badge">{{.Client.OffsiteRemote}}</span>{{end}}
+            {{if .Client.SourceLabel}}<span class="client-source">{{.Client.SourceLabel}}</span>{{end}}
+          </div>
+        </div>
+        <div class="client-hero-actions">
+          {{if .Client.OffsiteRemote}}
           <form method="POST" action="/clients/{{.Client.Slug}}/offsite/run">
             <button type="submit" class="btn">Backup now</button>
           </form>
           <form method="POST" action="/clients/{{.Client.Slug}}/offsite/test">
             <button type="submit" class="btn btn-ghost">Test connection</button>
           </form>
-        </div>
-        {{end}}
-      </div>
-
-      <table class="kv">
-        <tbody>
-          <tr><td>Mode</td><td><span class="badge">{{.Client.Mode}}</span></td></tr>
-          <tr><td>Source</td><td>{{.Client.SourceLabel}}</td></tr>
-          <tr><td>Hot retention</td><td>{{.Client.RetentionDays}}d</td></tr>
-          <tr><td>Offsite retention</td><td>{{.Client.OffsiteRetentionDays}}d</td></tr>
-          <tr><td>Offsite remote</td><td>{{if .Client.OffsiteRemote}}{{.Client.OffsiteRemote}}{{else}}—{{end}}</td></tr>
-          {{if .Client.OffsiteRemote}}<tr><td>Offsite path</td><td class="mono">{{if .Client.OffsiteDir}}{{.Client.OffsiteDir}}{{else}}—{{end}}</td></tr>{{end}}
-          {{if .Client.OffsiteRemote}}<tr><td>Upload interval</td><td>{{fmtInterval .Client.OffsiteIntervalSecs}}</td></tr>{{end}}
-        </tbody>
-      </table>
-
-      <div class="section" data-tab-group>
-        <h2>History</h2>
-        <div class="tabs">
-          <button class="tab-btn" data-tab-btn="runs">Backups</button>
-          <button class="tab-btn" data-tab-btn="offsite">Offsite</button>
-        </div>
-
-        <div data-tab="runs">
-          {{if .Runs}}
-          <table>
-            <thead>
-              <tr>
-                <th>Status</th>
-                <th>Started</th>
-                <th>Duration</th>
-                <th>Files</th>
-                <th>Size</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .Runs}}
-              <tr>
-                <td data-label="Status"><span class="status {{.Status}}">{{.Status}}</span></td>
-                <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
-                <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
-                <td data-label="Files" class="mono">{{.Files}}</td>
-                <td data-label="Size" class="mono">{{humanBytes .Bytes}}</td>
-                <td>{{if .LogTail}}<a href="/clients/{{$.Client.Slug}}/runs/{{.ID}}">Log</a>{{end}}</td>
-              </tr>
-              {{end}}
-            </tbody>
-          </table>
-          {{else}}
-          <p class="help-text">No runs yet. Paste the cron line on the host — this client will appear after its first backup.</p>
-          {{end}}
-        </div>
-
-        <div data-tab="offsite">
-          {{if .OffsiteRuns}}
-          <table>
-            <thead>
-              <tr>
-                <th>Status</th>
-                <th>Started</th>
-                <th>Duration</th>
-                <th>Snapshots</th>
-                <th>Size</th>
-                <th>Triggered by</th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .OffsiteRuns}}
-              <tr>
-                <td data-label="Status"><span class="status {{.Status}}">{{.Status}}</span></td>
-                <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
-                <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
-                <td data-label="Snapshots" class="mono">{{.SnapshotsUploaded}}</td>
-                <td data-label="Size" class="mono">{{humanBytes .BytesUploaded}}</td>
-                <td data-label="Triggered by"><span class="badge">{{.TriggeredBy}}</span></td>
-              </tr>
-              {{if .ErrorText}}
-              <tr>
-                <td colspan="6" class="error-row-detail">{{.ErrorText}}</td>
-              </tr>
-              {{end}}
-              {{end}}
-            </tbody>
-          </table>
-          {{else}}
-          <p class="help-text">No offsite uploads yet. {{if .Client.OffsiteRemote}}The lifecycle worker will upload on its next pass, or click <strong>Backup now</strong> above.{{else}}Configure an offsite destination below to enable cold storage.{{end}}</p>
           {{end}}
         </div>
       </div>
 
-      <div class="section" data-tab-group>
-        <h2>Backup files</h2>
-        <div class="tabs">
-          <button class="tab-btn" data-tab-btn="local-files">Local</button>
-          {{if .Client.OffsiteRemote}}<button class="tab-btn" data-tab-btn="offsite-files">Offsite</button>{{end}}
+      <!-- Stat cards -->
+      <div class="client-stats">
+        <div class="client-stat">
+          <div class="client-stat-label">Last backup</div>
+          <div class="client-stat-value">{{.LastBackupAge}}</div>
+          <div class="client-stat-sub">{{.LastBackupSize}}</div>
         </div>
-
-        <div data-tab="local-files">
-          {{if or .LocalSnapshots .MissingLocalSnaps}}
-          <div class="bulk-toolbar">
-            <input type="checkbox" data-select-all="local" title="Select all">
-            <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/snapshots/bulk-delete" data-bulk-group="local">Delete selected</button>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th class="cb-col"></th>
-                <th>Snapshot</th>
-                <th>Created</th>
-                <th>Size</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .LocalSnapshots}}
-              <tr>
-                <td class="cb-col"><input type="checkbox" data-select-group="local" value="{{.ID}}"></td>
-                <td class="mono">{{.ID}}</td>
-                <td class="mono">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
-                <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
-                <td><span class="badge badge-ok">on disk</span></td>
-                <td class="flex-row-sm">
-                  <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}" class="btn btn-ghost btn-sm" download>Download</a>
-                  <form method="POST" action="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}/delete" class="d-inline"
-                        data-confirm="Delete local snapshot {{.ID}}? This cannot be undone.">
-                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-                  </form>
-                </td>
-              </tr>
-              {{end}}
-              {{range .MissingLocalSnaps}}
-              <tr>
-                <td class="cb-col"></td>
-                <td class="mono">{{.ID}}</td>
-                <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
-                <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
-                <td><span class="badge badge-missing">missing on disk</span></td>
-                <td class="flex-row-sm">
-                  <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/forget" class="d-inline"
-                        data-confirm="Remove tracking entry for {{.ID}}? The remote file (if any) is NOT deleted.">
-                    <button type="submit" class="btn btn-ghost btn-sm">Delete entry</button>
-                  </form>
-                </td>
-              </tr>
-              {{end}}
-            </tbody>
-          </table>
-          {{else}}
-          <p class="help-text">No local snapshots yet.</p>
-          {{end}}
+        <div class="client-stat">
+          <div class="client-stat-label">On disk</div>
+          <div class="client-stat-value">{{.LocalCount}} snapshot{{if ne .LocalCount 1}}s{{end}}</div>
+          <div class="client-stat-sub">{{humanBytes .LocalTotalBytes}}</div>
         </div>
-
         {{if .Client.OffsiteRemote}}
-        <div data-tab="offsite-files">
-          {{if .OffsiteObjects}}
-          <div class="bulk-toolbar">
-            <input type="checkbox" data-select-all="offsite" title="Select all">
-            <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/offsite/bulk-delete" data-bulk-group="offsite">Delete selected</button>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th class="cb-col"></th>
-                <th>Snapshot</th>
-                <th>Uploaded</th>
-                <th>Size</th>
-                <th>Local</th>
-                <th>Remote</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .OffsiteObjects}}
-              <tr>
-                <td class="cb-col"><input type="checkbox" data-select-group="offsite" value="{{.SnapshotID}}"></td>
-                <td class="mono">{{.SnapshotID}}</td>
-                <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
-                <td class="mono">{{humanBytes .Bytes}}</td>
-                <td>
-                  {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge badge-missing">deleted</span>{{end}}
-                </td>
-                <td>
-                  {{if .RemoteVerifiedAt.IsZero}}<span class="badge">not checked</span>{{else if .RemoteMissing}}<span class="badge badge-missing" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">missing</span>{{else}}<span class="badge badge-ok" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">verified</span>{{end}}
-                </td>
-                <td class="flex-row-sm">
-                  <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>
-                  <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/delete" class="d-inline"
-                        data-confirm="Delete offsite object {{.SnapshotID}}? This cannot be undone.">
-                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-                  </form>
-                </td>
-              </tr>
-              {{end}}
-            </tbody>
-          </table>
-          {{else}}
-          <p class="help-text">No offsite objects yet.</p>
-          {{end}}
+        <div class="client-stat">
+          <div class="client-stat-label">On remote</div>
+          <div class="client-stat-value">{{.OffsiteCount}} object{{if ne .OffsiteCount 1}}s{{end}}</div>
+          <div class="client-stat-sub">{{humanBytes .OffsiteTotalBytes}}</div>
+        </div>
+        {{end}}
+        <div class="client-stat">
+          <div class="client-stat-label">Hot retention</div>
+          <div class="client-stat-value">{{.Client.RetentionDays}} days</div>
+          {{if .Client.OffsiteRemote}}<div class="client-stat-sub">{{.Client.OffsiteRetentionDays}}d offsite</div>{{end}}
+        </div>
+        {{if .ExpectedIntervalStr}}
+        <div class="client-stat">
+          <div class="client-stat-label">Expected interval</div>
+          <div class="client-stat-value">{{.ExpectedIntervalStr}}</div>
+          {{if .NextExpected}}<div class="client-stat-sub">{{.NextExpected}}</div>{{end}}
         </div>
         {{end}}
       </div>
 
-      <div class="section">
-        <h2>Retention</h2>
-        <p class="section-hint">How long backups are kept before the lifecycle worker prunes them.</p>
-        <form method="POST" action="/clients/{{.Client.Slug}}/retention" class="form">
-          <label for="retention_days">Hot retention (days)</label>
-          <input type="number" id="retention_days" name="retention_days" min="1" value="{{.Client.RetentionDays}}" required>
-          <div class="field-hint">Local snapshots older than this are deleted once all older snapshots are safely in offsite (or offsite is disabled).</div>
+      <!-- Main tabs: History | Files | Settings -->
+      <div data-tab-group>
+        <div class="tabs">
+          <button class="tab-btn" data-tab-btn="history">History</button>
+          <button class="tab-btn" data-tab-btn="files">Files</button>
+          <button class="tab-btn" data-tab-btn="settings">Settings</button>
+        </div>
 
-          <label for="offsite_retention_days">Offsite retention (days)</label>
-          <input type="number" id="offsite_retention_days" name="offsite_retention_days" min="0" value="{{.Client.OffsiteRetentionDays}}">
-          <div class="field-hint">Offsite objects older than this are deleted from cold storage. Set to 0 to keep forever.</div>
+        <!-- ── History tab ── -->
+        <div data-tab="history">
+          <div data-tab-group>
+            <div class="tabs">
+              <button class="tab-btn" data-tab-btn="runs">Backups</button>
+              <button class="tab-btn" data-tab-btn="offsite-runs">Offsite</button>
+            </div>
 
-          <div class="form-actions">
-            <button type="submit" class="btn">Save</button>
+            <div data-tab="runs">
+              {{if .Runs}}
+              <table>
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                    <th>Files</th>
+                    <th>Size</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .Runs}}
+                  <tr>
+                    <td data-label="Status"><span class="status {{.Status}}">{{.Status}}</span></td>
+                    <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
+                    <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
+                    <td data-label="Files" class="mono">{{.Files}}</td>
+                    <td data-label="Size" class="mono">{{humanBytes .Bytes}}</td>
+                    <td>{{if .LogTail}}<a href="/clients/{{$.Client.Slug}}/runs/{{.ID}}">Log</a>{{end}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+              {{else}}
+              <p class="help-text">No runs yet. Paste the cron line on the host — this client will appear after its first backup.</p>
+              {{end}}
+            </div>
+
+            <div data-tab="offsite-runs">
+              {{if .OffsiteRuns}}
+              <table>
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                    <th>Snapshots</th>
+                    <th>Size</th>
+                    <th>Triggered by</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .OffsiteRuns}}
+                  <tr>
+                    <td data-label="Status"><span class="status {{.Status}}">{{.Status}}</span></td>
+                    <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
+                    <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
+                    <td data-label="Snapshots" class="mono">{{.SnapshotsUploaded}}</td>
+                    <td data-label="Size" class="mono">{{humanBytes .BytesUploaded}}</td>
+                    <td data-label="Triggered by"><span class="badge">{{.TriggeredBy}}</span></td>
+                  </tr>
+                  {{if .ErrorText}}
+                  <tr>
+                    <td colspan="6" class="error-row-detail">{{.ErrorText}}</td>
+                  </tr>
+                  {{end}}
+                  {{end}}
+                </tbody>
+              </table>
+              {{else}}
+              <p class="help-text">No offsite uploads yet. {{if .Client.OffsiteRemote}}The lifecycle worker will upload on its next pass, or click <strong>Backup now</strong> above.{{else}}Configure an offsite destination in Settings to enable cold storage.{{end}}</p>
+              {{end}}
+            </div>
           </div>
-        </form>
-      </div>
+        </div>
 
-      <div class="section">
-        <h2>Offsite destination</h2>
-        <p class="section-hint">Where to tier cold copies of this client's backups. Configure remotes on the <a href="/settings/remotes">Remote storage</a> page first.</p>
-        <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form">
-          <label for="offsite_remote">Remote</label>
-          <select id="offsite_remote" name="offsite_remote">
-            <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None (disabled)</option>
-            {{range .Remotes}}
-            <option value="{{.Name}}" data-backend="{{.Backend}}"{{if eq $.Client.OffsiteRemote .Name}} selected{{end}}>{{.Name}} — {{.BackendLabel}}</option>
+        <!-- ── Files tab ── -->
+        <div data-tab="files">
+          <div data-tab-group>
+            <div class="tabs">
+              <button class="tab-btn" data-tab-btn="local-files">Local</button>
+              {{if .Client.OffsiteRemote}}<button class="tab-btn" data-tab-btn="offsite-files">Offsite</button>{{end}}
+            </div>
+
+            <div data-tab="local-files">
+              {{if or .LocalSnapshots .MissingLocalSnaps}}
+              <div class="bulk-toolbar">
+                <input type="checkbox" data-select-all="local" title="Select all">
+                <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/snapshots/bulk-delete" data-bulk-group="local">Delete selected</button>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th class="cb-col"></th>
+                    <th>Snapshot</th>
+                    <th>Created</th>
+                    <th>Size</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .LocalSnapshots}}
+                  <tr>
+                    <td class="cb-col"><input type="checkbox" data-select-group="local" value="{{.ID}}"></td>
+                    <td class="mono">{{.ID}}</td>
+                    <td class="mono">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                    <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
+                    <td><span class="badge badge-ok">on disk</span></td>
+                    <td class="flex-row-sm">
+                      <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}" class="btn btn-ghost btn-sm" download>Download</a>
+                      <form method="POST" action="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}/delete" class="d-inline"
+                            data-confirm="Delete local snapshot {{.ID}}? This cannot be undone.">
+                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                      </form>
+                    </td>
+                  </tr>
+                  {{end}}
+                  {{range .MissingLocalSnaps}}
+                  <tr>
+                    <td class="cb-col"></td>
+                    <td class="mono">{{.ID}}</td>
+                    <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+                    <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
+                    <td><span class="badge badge-missing">missing on disk</span></td>
+                    <td class="flex-row-sm">
+                      <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/forget" class="d-inline"
+                            data-confirm="Remove tracking entry for {{.ID}}? The remote file (if any) is NOT deleted.">
+                        <button type="submit" class="btn btn-ghost btn-sm">Delete entry</button>
+                      </form>
+                    </td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+              {{else}}
+              <p class="help-text">No local snapshots yet.</p>
+              {{end}}
+            </div>
+
+            {{if .Client.OffsiteRemote}}
+            <div data-tab="offsite-files">
+              {{if .OffsiteObjects}}
+              <div class="bulk-toolbar">
+                <input type="checkbox" data-select-all="offsite" title="Select all">
+                <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/offsite/bulk-delete" data-bulk-group="offsite">Delete selected</button>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th class="cb-col"></th>
+                    <th>Snapshot</th>
+                    <th>Uploaded</th>
+                    <th>Size</th>
+                    <th>Local</th>
+                    <th>Remote</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .OffsiteObjects}}
+                  <tr>
+                    <td class="cb-col"><input type="checkbox" data-select-group="offsite" value="{{.SnapshotID}}"></td>
+                    <td class="mono">{{.SnapshotID}}</td>
+                    <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+                    <td class="mono">{{humanBytes .Bytes}}</td>
+                    <td>
+                      {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge badge-missing">deleted</span>{{end}}
+                    </td>
+                    <td>
+                      {{if .RemoteVerifiedAt.IsZero}}<span class="badge">not checked</span>{{else if .RemoteMissing}}<span class="badge badge-missing" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">missing</span>{{else}}<span class="badge badge-ok" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">verified</span>{{end}}
+                    </td>
+                    <td class="flex-row-sm">
+                      <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>
+                      <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/delete" class="d-inline"
+                            data-confirm="Delete offsite object {{.SnapshotID}}? This cannot be undone.">
+                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                      </form>
+                    </td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+              {{else}}
+              <p class="help-text">No offsite objects yet.</p>
+              {{end}}
+            </div>
             {{end}}
-          </select>
-          {{if not .Remotes}}<div class="field-hint">No remotes configured yet. <a href="/settings/remotes">Add one</a> to enable offsite backups.</div>{{end}}
+          </div>
+        </div>
 
-          <div id="offsite-dir-row" class="hidden">
-            <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>
-            <input id="offsite-dir-input" name="offsite_dir" value="{{.Client.OffsiteDir}}" placeholder="" autocomplete="off">
-            <div id="offsite-dir-hint" class="field-hint"></div>
+        <!-- ── Settings tab ── -->
+        <div data-tab="settings">
+
+          <div class="settings-group">
+            <div class="settings-group-title">Schedule &amp; Retention</div>
+            <p class="section-hint">How long backups are kept and the expected upload cadence.</p>
+            <form method="POST" action="/clients/{{.Client.Slug}}/retention" class="form" style="margin-top:0">
+              <label for="retention_days">Hot retention (days)</label>
+              <input type="number" id="retention_days" name="retention_days" min="1" value="{{.Client.RetentionDays}}" required>
+              <div class="field-hint">Local snapshots older than this are deleted once safely in offsite (or if offsite is disabled).</div>
+
+              <label for="offsite_retention_days">Offsite retention (days)</label>
+              <input type="number" id="offsite_retention_days" name="offsite_retention_days" min="0" value="{{.Client.OffsiteRetentionDays}}">
+              <div class="field-hint">Offsite objects older than this are deleted from cold storage. 0 = keep forever. Ignored if offsite pruning is disabled below.</div>
+
+              <label for="expected_interval_secs">Expected interval (seconds)</label>
+              <input type="number" id="expected_interval_secs" name="expected_interval_secs" min="0" value="{{.Client.ExpectedIntervalSecs}}">
+              <div class="field-hint">Used for health status. 0 = no staleness check.</div>
+
+              <div class="form-actions">
+                <button type="submit" class="btn">Save</button>
+              </div>
+            </form>
           </div>
 
-          <div id="offsite-interval-row" class="hidden">
-            <label for="offsite_interval_secs">Upload interval</label>
-            <select id="offsite_interval_secs" name="offsite_interval_secs">
-              <option value="0"{{if eq .Client.OffsiteIntervalSecs 0}} selected{{end}}>Every lifecycle pass (default)</option>
-              <option value="3600"{{if eq .Client.OffsiteIntervalSecs 3600}} selected{{end}}>Every 1 hour</option>
-              <option value="21600"{{if eq .Client.OffsiteIntervalSecs 21600}} selected{{end}}>Every 6 hours</option>
-              <option value="43200"{{if eq .Client.OffsiteIntervalSecs 43200}} selected{{end}}>Every 12 hours</option>
-              <option value="86400"{{if eq .Client.OffsiteIntervalSecs 86400}} selected{{end}}>Every 24 hours</option>
-              <option value="604800"{{if eq .Client.OffsiteIntervalSecs 604800}} selected{{end}}>Every 7 days</option>
-            </select>
-            <div class="field-hint">How often the lifecycle worker uploads new snapshots for this client.</div>
+          <div class="settings-group">
+            <div class="settings-group-title">Offsite destination</div>
+            <p class="section-hint">Where to tier cold copies of this client's backups. Configure remotes on the <a href="/settings/remotes">Remote storage</a> page.</p>
+            <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form" style="margin-top:0">
+              <label for="offsite_remote">Remote</label>
+              <select id="offsite_remote" name="offsite_remote">
+                <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None (disabled)</option>
+                {{range .Remotes}}
+                <option value="{{.Name}}" data-backend="{{.Backend}}"{{if eq $.Client.OffsiteRemote .Name}} selected{{end}}>{{.Name}} — {{.BackendLabel}}</option>
+                {{end}}
+              </select>
+              {{if not .Remotes}}<div class="field-hint">No remotes configured yet. <a href="/settings/remotes">Add one</a> to enable offsite backups.</div>{{end}}
+
+              <div id="offsite-dir-row" class="hidden">
+                <label id="offsite-dir-label" for="offsite-dir-input">Backup directory (optional)</label>
+                <input id="offsite-dir-input" name="offsite_dir" value="{{.Client.OffsiteDir}}" placeholder="" autocomplete="off">
+                <div id="offsite-dir-hint" class="field-hint"></div>
+              </div>
+
+              <div id="offsite-interval-row" class="hidden">
+                <label for="offsite_interval_secs">Upload interval</label>
+                <select id="offsite_interval_secs" name="offsite_interval_secs">
+                  <option value="0"{{if eq .Client.OffsiteIntervalSecs 0}} selected{{end}}>Every lifecycle pass (default)</option>
+                  <option value="3600"{{if eq .Client.OffsiteIntervalSecs 3600}} selected{{end}}>Every 1 hour</option>
+                  <option value="21600"{{if eq .Client.OffsiteIntervalSecs 21600}} selected{{end}}>Every 6 hours</option>
+                  <option value="43200"{{if eq .Client.OffsiteIntervalSecs 43200}} selected{{end}}>Every 12 hours</option>
+                  <option value="86400"{{if eq .Client.OffsiteIntervalSecs 86400}} selected{{end}}>Every 24 hours</option>
+                  <option value="604800"{{if eq .Client.OffsiteIntervalSecs 604800}} selected{{end}}>Every 7 days</option>
+                </select>
+                <div class="field-hint">How often the lifecycle worker uploads new snapshots for this client.</div>
+              </div>
+
+              <label>Upload scope</label>
+              <div class="radio-group">
+                <label><input type="radio" name="offsite_upload_mode" value="all"{{if ne .Client.OffsiteUploadMode "latest"}} checked{{end}}> All snapshots</label>
+                <label><input type="radio" name="offsite_upload_mode" value="latest"{{if eq .Client.OffsiteUploadMode "latest"}} checked{{end}}> Latest only</label>
+              </div>
+              <div class="field-hint">All: every local snapshot is mirrored offsite. Latest: only the newest snapshot is kept in cold storage.</div>
+
+              <label class="checkbox-label mt-16" style="margin-top:16px">
+                <input type="checkbox" name="disable_offsite_pruning" value="1"{{if .Client.DisableOffsitePruning}} checked{{end}}>
+                <span>Disable offsite pruning<span class="hint">backitup will not delete any offsite objects. Use this when you want to manage retention via a lifecycle policy on the storage provider (e.g. B2 lifecycle rules).</span></span>
+              </label>
+
+              <div class="form-actions">
+                <button type="submit" class="btn">Save</button>
+              </div>
+            </form>
           </div>
 
-          <label>Upload scope</label>
-          <div class="radio-group">
-            <label><input type="radio" name="offsite_upload_mode" value="all"{{if ne .Client.OffsiteUploadMode "latest"}} checked{{end}}> All snapshots</label>
-            <label><input type="radio" name="offsite_upload_mode" value="latest"{{if eq .Client.OffsiteUploadMode "latest"}} checked{{end}}> Latest only</label>
+          <div class="settings-group danger-group">
+            <div class="settings-group-title">Danger zone</div>
+            <div class="danger-row">
+              <div>
+                <p class="section-hint">Issues a new SSH key and bearer token. The old credentials stop working immediately — redeploy the cron line on the host after rotating.</p>
+                <form method="POST" action="/clients/{{.Client.Slug}}/rotate">
+                  <label class="checkbox-label">
+                    <input type="checkbox" name="confirm" value="1" required>
+                    I understand the old credentials will stop working immediately.
+                  </label>
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn-danger">Rotate credentials</button>
+                  </div>
+                </form>
+              </div>
+              <div>
+                <p class="section-hint">Permanently removes this client, its run history, and its SSH access. The host will need a new client added if you want to resume backups.</p>
+                <form method="POST" action="/clients/{{.Client.Slug}}/delete">
+                  <label class="checkbox-label">
+                    <input type="checkbox" name="confirm" value="1" required>
+                    I understand this will permanently delete "{{.Client.Name}}" and all its history.
+                  </label>
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn-danger">Delete client</button>
+                  </div>
+                </form>
+              </div>
+            </div>
           </div>
-          <div class="field-hint">All: every local snapshot is mirrored offsite. Latest: only the newest snapshot is kept in cold storage — saves space but offsite has less history.</div>
 
-          <div class="form-actions">
-            <button type="submit" class="btn">Save</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="section danger-section">
-        <h2>Rotate credentials</h2>
-        <p class="section-hint">Issues a new SSH key and bearer token. The old credentials stop working immediately — redeploy the cron line on the host after rotating.</p>
-        <form method="POST" action="/clients/{{.Client.Slug}}/rotate">
-          <label class="checkbox-label">
-            <input type="checkbox" name="confirm" value="1" required>
-            I understand the old credentials will stop working immediately.
-          </label>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-danger">Rotate credentials</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="section danger-section mt-24">
-        <h2>Delete client</h2>
-        <p class="section-hint">Permanently removes this client, its run history, and its SSH access. The host will need a new client added if you want to resume backups.</p>
-        <form method="POST" action="/clients/{{.Client.Slug}}/delete">
-          <label class="checkbox-label">
-            <input type="checkbox" name="confirm" value="1" required>
-            I understand this will permanently delete "{{.Client.Name}}" and all its history.
-          </label>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-danger">Delete client</button>
-          </div>
-        </form>
+        </div>
       </div>
     </main>
   </div>

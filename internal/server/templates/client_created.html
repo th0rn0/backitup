@@ -53,7 +53,11 @@
 
       <div class="section">
         <h2>{{if .KnownHostsLine}}3{{else}}2{{end}} — Run the client</h2>
+        {{if .PathsPrefilled}}
+        <p class="section-hint">Paths pre-filled from the form — the command below is ready to copy.</p>
+        {{else}}
         <p class="section-hint">Replace <code>/PATH/TO/BACKUP</code> and <code>/PATH/TO/SECRETS</code> with the actual paths on your host.</p>
+        {{end}}
 
         <div class="tabs" role="tablist">
           <button class="tab active" role="tab" aria-selected="true"  data-tab="known"    type="button">Secure{{if .KnownHostsLine}} ✓{{end}}</button>
