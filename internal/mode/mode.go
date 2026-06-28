@@ -29,15 +29,16 @@ var ErrNotImplemented = errors.New("not implemented")
 // The server-side directory is NOT here: it is baked into the forced command in
 // authorized_keys, so the client can only ever write into its own directory.
 type BackupOpts struct {
-	SourceDir    string
-	Excludes     []string
-	SkipSymlinks bool        // omit symlinks from the backup
-	Logger       *log.Logger // nil = use log.Default()
-	SSHServer    string      // host:port of the sshd ingest (data channel)
-	SSHUser      string      // ssh login user (the single ingest user, "backitup")
-	SSHKey       string      // path to the client's private key
-	KnownHosts   string      // path to known_hosts for host-key verification
-	InsecureSSH  bool        // skip SSH host-key verification (dev/test only)
+	SourceDir           string
+	Excludes            []string
+	SkipSymlinks        bool        // omit symlinks from the backup
+	HasPreviousSnapshot bool        // rsync: skip --link-dest when false (first backup)
+	Logger              *log.Logger // nil = use log.Default()
+	SSHServer           string      // host:port of the sshd ingest (data channel)
+	SSHUser             string      // ssh login user (the single ingest user, "backitup")
+	SSHKey              string      // path to the client's private key
+	KnownHosts          string      // path to known_hosts for host-key verification
+	InsecureSSH         bool        // skip SSH host-key verification (dev/test only)
 }
 
 // Logger returns the configured logger, falling back to the default logger.

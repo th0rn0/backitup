@@ -52,30 +52,23 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	snap := start.Format("20060102T150405Z")
 	target := fmt.Sprintf("%s@%s:snapshots/%s/", o.SSHUser, host, snap)
 
-	buildArgs := func(linkDest bool) []string {
-		a := []string{"-a", "--delete", "--stats"}
-		if linkDest {
-			a = append(a, "--link-dest=/snapshots/latest")
-		}
-		if os.Getenv("BACKITUP_RSYNC_DEBUG") == "1" {
-			a = append(a, "-vvv")
-		}
-		if o.SkipSymlinks {
-			a = append(a, "--no-links")
-		}
-		for _, ex := range o.Excludes {
-			a = append(a, "--exclude="+ex)
-		}
-		return append(a, "-e", sshArgs, ensureTrailingSlash(o.SourceDir), target)
+	args := []string{"-a", "--delete", "--stats"}
+	if o.HasPreviousSnapshot {
+		args = append(args, "--link-dest=/snapshots/latest")
 	}
+	if os.Getenv("BACKITUP_RSYNC_DEBUG") == "1" {
+		args = append(args, "-vvv")
+	}
+	if o.SkipSymlinks {
+		args = append(args, "--no-links")
+	}
+	for _, ex := range o.Excludes {
+		args = append(args, "--exclude="+ex)
+	}
+	args = append(args, "-e", sshArgs, ensureTrailingSlash(o.SourceDir), target)
 
 	logger.Printf("syncing %s → %s", o.SourceDir, target)
-	stdout, err := runRsync(ctx, logger, buildArgs(true))
-	if err != nil && strings.Contains(err.Error(), "link-dest arg does not exist") {
-		// First backup: no previous snapshot to link against. Run a full sync.
-		logger.Printf("no previous snapshot found; running full sync")
-		stdout, err = runRsync(ctx, logger, buildArgs(false))
-	}
+	stdout, err := runRsync(ctx, logger, args)
 	if err != nil {
 		return mode.BackupResult{}, err
 	}

@@ -50,10 +50,11 @@ func NewAPI(base, token, caBundle string, insecure bool) (*API, error) {
 
 // ConfigResp is the server's per-client config (the WHAT; design doc D1).
 type ConfigResp struct {
-	Mode          string   `json:"mode"`
-	Excludes      []string `json:"excludes"`
-	RetentionDays int      `json:"retention_days"`
-	SkipSymlinks  bool     `json:"skip_symlinks"`
+	Mode                string   `json:"mode"`
+	Excludes            []string `json:"excludes"`
+	RetentionDays       int      `json:"retention_days"`
+	SkipSymlinks        bool     `json:"skip_symlinks"`
+	HasPreviousSnapshot bool     `json:"has_previous_snapshot"`
 }
 
 // FetchConfig retrieves this client's config from the server.

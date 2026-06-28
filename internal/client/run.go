@@ -53,15 +53,16 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 	runID, _ := api.PostStatus(ctx, StatusReq{Status: string(model.StatusRunning), StartedAt: now})
 
 	res, backupErr := cm.Backup(ctx, mode.BackupOpts{
-		SourceDir:    cfg.Source,
-		Excludes:     scfg.Excludes,
-		SkipSymlinks: scfg.SkipSymlinks || cfg.SkipSymlinks,
-		Logger:       rl.Logger,
-		SSHServer:    cfg.SSHServer,
-		SSHUser:      cfg.SSHUser,
-		SSHKey:       cfg.SSHKey,
-		KnownHosts:   cfg.KnownHosts,
-		InsecureSSH:  cfg.InsecureSSH,
+		SourceDir:           cfg.Source,
+		Excludes:            scfg.Excludes,
+		SkipSymlinks:        scfg.SkipSymlinks || cfg.SkipSymlinks,
+		HasPreviousSnapshot: scfg.HasPreviousSnapshot,
+		Logger:              rl.Logger,
+		SSHServer:           cfg.SSHServer,
+		SSHUser:             cfg.SSHUser,
+		SSHKey:              cfg.SSHKey,
+		KnownHosts:          cfg.KnownHosts,
+		InsecureSSH:         cfg.InsecureSSH,
 	})
 	if backupErr != nil {
 		rl.Printf("backup error: %v", backupErr)
