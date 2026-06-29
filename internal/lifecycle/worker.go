@@ -13,7 +13,7 @@ import (
 func nextAlignedTick(interval time.Duration) time.Duration {
 	now := time.Now().UTC()
 	next := now.Truncate(interval).Add(interval)
-	return next.Sub(time.Now())
+	return time.Until(next)
 }
 
 // StartWorker runs the lifecycle maintenance worker on a cron-aligned schedule
