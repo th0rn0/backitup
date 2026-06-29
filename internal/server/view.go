@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/model"
@@ -110,22 +111,34 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 	return v, nil
 }
 
-// cachedHotBytes returns the total size of the backup dir, recomputing at most
-// once per minute so the dashboard doesn't walk thousands of files on every load.
+// cachedHotBytes returns the true on-disk size of the backup dir, recomputing
+// at most once per minute. Hardlinked files (rsync snapshots share inodes) are
+// counted once regardless of how many snapshots reference them.
 func (s *Server) cachedHotBytes() int64 {
 	s.hotBytesMu.Lock()
 	defer s.hotBytesMu.Unlock()
 	if time.Now().Before(s.hotBytesExpiry) {
 		return s.hotBytesCache
 	}
+	type inodeKey struct{ dev, ino uint64 }
+	seen := make(map[inodeKey]struct{})
 	var total int64
 	_ = filepath.WalkDir(s.backupBaseDir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		if info, err := d.Info(); err == nil {
-			total += info.Size()
+		info, err := d.Info()
+		if err != nil {
+			return nil
 		}
+		if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+			key := inodeKey{sys.Dev, sys.Ino}
+			if _, dup := seen[key]; dup {
+				return nil
+			}
+			seen[key] = struct{}{}
+		}
+		total += info.Size()
 		return nil
 	})
 	s.hotBytesCache = total

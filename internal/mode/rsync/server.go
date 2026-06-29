@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/th0rn0/backitup/internal/archiveutil"
 	"github.com/th0rn0/backitup/internal/mode"
@@ -42,10 +43,18 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 		if err != nil {
 			return nil, err
 		}
+		// rsync -a preserves source mtime, so info.ModTime() reflects the
+		// source directory age, not when the snapshot was taken. Parse the
+		// timestamp from the snapshot ID instead; fall back to ModTime only
+		// for entries that don't match the expected format.
+		createdAt, err := time.Parse("20060102T150405Z", e.Name())
+		if err != nil {
+			createdAt = info.ModTime()
+		}
 		// Do not walk the snapshot directory to sum sizes — rsync snapshots use
 		// hardlinks and can be very large; a full WalkDir blocks the caller.
 		// Size is reported as 0 (displayed as "—" in the UI).
-		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: info.ModTime(), Bytes: 0})
+		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: createdAt, Bytes: 0})
 	}
 	return out, nil
 }
