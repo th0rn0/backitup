@@ -93,11 +93,11 @@ type Client struct {
 	// owns WHEN); this is only used to compute the "stale" dashboard state.
 	ExpectedIntervalSecs int
 
-	OffsiteRemote          string // rclone remote name selecting this client's cold target; "" = no offsite
-	OffsiteDir             string // subdirectory within the remote; "" = use the client's slug
-	OffsiteIntervalSecs    int    // min seconds between lifecycle passes; 0 = every pass
-	OffsiteUploadMode      string // "all" (default) or "latest" — which snapshots to push offsite
-	DisableOffsitePruning  bool   // skip lifecycle pruning; let the storage provider's lifecycle policy manage deletion
+	OffsiteRemote         string // rclone remote name selecting this client's cold target; "" = no offsite
+	OffsiteDir            string // subdirectory within the remote; "" = use the client's slug
+	OffsiteCron           string // standard 5-field cron expression for upload schedule; "" = every lifecycle pass
+	OffsiteUploadMode     string // "all" (default) or "latest" — which snapshots to push offsite
+	DisableOffsitePruning bool   // skip lifecycle pruning; let the storage provider's lifecycle policy manage deletion
 
 	// Auth. The private SSH key is shown once at creation and NOT retained (D4);
 	// only the public key and a hash of the token live here.

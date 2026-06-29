@@ -7,7 +7,7 @@
 //
 //   - Offsite worker (StartOffsiteWorker / RunOffsiteOnce): uploads new
 //     snapshots to cold storage per client based on each client's own
-//     OffsiteIntervalSecs.
+//     OffsiteCron schedule (standard 5-field cron expression).
 //
 // Both shell out to rclone via the Offsite interface, so neither holds a
 // SQLite write transaction across a long network operation.
@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"github.com/th0rn0/backitup/internal/alert"
 	"github.com/th0rn0/backitup/internal/archiveutil"
 	"github.com/th0rn0/backitup/internal/mode"
@@ -181,9 +182,9 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	return nil
 }
 
-// RunOffsiteOnce uploads new snapshots for all clients whose per-client
-// OffsiteIntervalSecs has elapsed since the last upload. A failure on one
-// client is logged and does not stop the others; the first error is returned.
+// RunOffsiteOnce uploads new snapshots for all clients whose OffsiteCron
+// schedule is due. A failure on one client is logged and does not stop the
+// others; the first error is returned.
 func RunOffsiteOnce(ctx context.Context, d Deps) error {
 	if d.Offsite == nil {
 		return nil
@@ -197,10 +198,10 @@ func RunOffsiteOnce(ctx context.Context, d Deps) error {
 		if !c.Enabled || c.OffsiteRemote == "" {
 			continue
 		}
-		if c.OffsiteIntervalSecs > 0 {
+		if c.OffsiteCron != "" {
 			due, err := offsiteDue(ctx, d, c)
 			if err != nil {
-				log.Printf("offsite worker: client %d (%s): interval check: %v", c.ID, c.Name, err)
+				log.Printf("offsite worker: client %d (%s): schedule check: %v", c.ID, c.Name, err)
 				continue
 			}
 			if !due {
@@ -526,10 +527,13 @@ func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client) {
 	}
 }
 
-// offsiteDue returns true when enough time has passed since the last upload to
-// satisfy the client's OffsiteIntervalSecs. Always returns true if no upload
-// has happened yet (first upload should always proceed).
+// offsiteDue returns true when the client's cron schedule has a tick between
+// the last upload and now. Always true if no upload has happened yet.
 func offsiteDue(ctx context.Context, d Deps, c model.Client) (bool, error) {
+	sched, err := cron.ParseStandard(c.OffsiteCron)
+	if err != nil {
+		return false, fmt.Errorf("parse cron %q: %w", c.OffsiteCron, err)
+	}
 	last, err := d.Store.LatestOffsite(ctx, c.ID)
 	if err != nil {
 		return false, err
@@ -537,7 +541,8 @@ func offsiteDue(ctx context.Context, d Deps, c model.Client) (bool, error) {
 	if last == nil {
 		return true, nil
 	}
-	return d.now().Sub(*last) >= time.Duration(c.OffsiteIntervalSecs)*time.Second, nil
+	// Next tick after the last upload; if it's in the past, we're due.
+	return !sched.Next(*last).After(d.now()), nil
 }
 
 // OffsiteClient runs an immediate offsite upload + prune pass for a single

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"github.com/th0rn0/backitup/internal/auth"
 	"github.com/th0rn0/backitup/internal/authkeys"
 	"github.com/th0rn0/backitup/internal/keys"
@@ -68,10 +69,10 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		RetentionDays:        atoiDefault(r.PostFormValue("retention_days"), 14),
 		OffsiteRetentionDays: atoiDefault(r.PostFormValue("offsite_retention_days"), 90),
 		ExpectedIntervalSecs: atoiDefault(r.PostFormValue("expected_interval_secs"), 0),
-		OffsiteRemote:        r.PostFormValue("offsite_remote"),
-		OffsiteDir:           strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/")),
-		OffsiteIntervalSecs:  atoiDefault(r.PostFormValue("offsite_interval_secs"), 0),
-		SkipSymlinks:         r.PostFormValue("skip_symlinks") == "1",
+		OffsiteRemote: r.PostFormValue("offsite_remote"),
+		OffsiteDir:    strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/")),
+		OffsiteCron:   strings.TrimSpace(r.PostFormValue("offsite_cron")),
+		SkipSymlinks:  r.PostFormValue("skip_symlinks") == "1",
 		SSHPubKey:            pubLine,
 		TokenHash:            tokenHash,
 		TokenPrefix:          tokenPrefix,
@@ -424,12 +425,19 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 
 	remote := r.PostFormValue("offsite_remote")
 	dir := strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/"))
-	intervalSecs := atoiDefault(r.PostFormValue("offsite_interval_secs"), 0)
+	cronExpr := strings.TrimSpace(r.PostFormValue("offsite_cron"))
 	uploadMode := r.PostFormValue("offsite_upload_mode")
 	if uploadMode != "latest" {
 		uploadMode = "all"
 	}
 	disablePruning := r.PostFormValue("disable_offsite_pruning") == "1"
+
+	if cronExpr != "" {
+		if _, err := cron.ParseStandard(cronExpr); err != nil {
+			http.Error(w, "invalid cron expression: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -453,7 +461,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, intervalSecs, uploadMode, disablePruning); err != nil {
+	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, cronExpr, uploadMode, disablePruning); err != nil {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
