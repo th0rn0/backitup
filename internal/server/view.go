@@ -131,14 +131,20 @@ func (s *Server) cachedHotBytes() int64 {
 		if err != nil {
 			return nil
 		}
-		if sys, ok := info.Sys().(*syscall.Stat_t); ok {
-			key := inodeKey{sys.Dev, sys.Ino}
-			if _, dup := seen[key]; dup {
-				return nil
-			}
-			seen[key] = struct{}{}
+		sys, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			total += info.Size()
+			return nil
 		}
-		total += info.Size()
+		key := inodeKey{sys.Dev, sys.Ino}
+		if _, dup := seen[key]; dup {
+			return nil
+		}
+		seen[key] = struct{}{}
+		// Use allocated blocks (512-byte units) to match what `du` reports:
+		// logical size overstates usage on compressed filesystems and for
+		// sparse files; st_blocks is what actually occupies disk space.
+		total += int64(sys.Blocks) * 512
 		return nil
 	})
 	s.hotBytesCache = total
