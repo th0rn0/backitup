@@ -47,8 +47,8 @@ func StartWorker(ctx context.Context, d Deps, interval time.Duration) (stop func
 
 // StartOffsiteWorker uploads new snapshots to cold storage on a cron-aligned
 // schedule, independent of the maintenance lifecycle. pollInterval is how
-// often all clients are checked; each client's OffsiteIntervalSecs controls
-// whether an upload is actually due for that client on any given poll.
+// often all clients are polled; each client's OffsiteCron controls whether
+// an upload is actually due for that client on any given poll.
 func StartOffsiteWorker(ctx context.Context, d Deps, pollInterval time.Duration) (stop func()) {
 	if pollInterval <= 0 {
 		pollInterval = 5 * time.Minute

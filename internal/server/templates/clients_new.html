@@ -63,16 +63,9 @@
         </div>
 
         <div id="offsite-interval-row" class="hidden">
-          <label for="offsite_interval_secs">Upload interval</label>
-          <select id="offsite_interval_secs" name="offsite_interval_secs">
-            <option value="0">Every lifecycle pass (default)</option>
-            <option value="3600">Every 1 hour</option>
-            <option value="21600">Every 6 hours</option>
-            <option value="43200">Every 12 hours</option>
-            <option value="86400">Every 24 hours</option>
-            <option value="604800">Every 7 days</option>
-          </select>
-          <div class="field-hint">How often the lifecycle worker uploads new snapshots for this client.</div>
+          <label for="offsite_cron">Upload schedule (cron)</label>
+          <input id="offsite_cron" name="offsite_cron" placeholder="e.g. 0 2 * * *" autocomplete="off">
+          <div class="field-hint">Standard 5-field cron expression (minute hour day month weekday) for when to upload. Leave blank to upload on every lifecycle pass. Examples: <code>0 2 * * *</code> = 2am daily · <code>0 2 * * 0</code> = 2am Sundays · <code>0 */6 * * *</code> = every 6 hours.</div>
         </div>
 
         <label class="checkbox-label mt-18">
