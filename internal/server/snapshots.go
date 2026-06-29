@@ -71,7 +71,7 @@ func (s *Server) getSnapshotDownload(w http.ResponseWriter, r *http.Request) {
 		filename := snap.ID + ".tar.gz"
 		w.Header().Set("Content-Type", "application/gzip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, filename))
-		if err := tarGzDirectory(w, filepath.Join(clientDir, snap.ID)); err != nil {
+		if err := tarGzDirectory(w, filepath.Join(clientDir, "snapshots", snap.ID)); err != nil {
 			log.Printf("snapshot download: tar client=%s snap=%s: %v", c.Name, snap.ID, err)
 		}
 	}
