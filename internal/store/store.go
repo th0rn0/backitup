@@ -270,6 +270,54 @@ func (s *Store) LatestRun(ctx context.Context, clientID int64) (*model.Run, erro
 	return &r, nil
 }
 
+// LatestRunAllClients returns the most recent run for every client in a single
+// query, keyed by client ID. Clients with no runs are absent from the map.
+func (s *Store) LatestRunAllClients(ctx context.Context) (map[int64]*model.Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.id, r.client_id, r.started_at, r.finished_at, r.status, r.bytes, r.files, r.snapshot_id, r.log_tail
+		FROM runs r
+		INNER JOIN (
+			SELECT client_id, MAX(started_at) AS started_at FROM runs GROUP BY client_id
+		) latest ON r.client_id = latest.client_id AND r.started_at = latest.started_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64]*model.Run)
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		rc := r
+		m[r.ClientID] = &rc
+	}
+	return m, rows.Err()
+}
+
+// LatestOffsiteAllClients returns the most recent offsite upload time for every
+// client in a single query, keyed by client ID.
+func (s *Store) LatestOffsiteAllClients(ctx context.Context) (map[int64]*time.Time, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT client_id, MAX(uploaded_at) FROM offsite_objects GROUP BY client_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64]*time.Time)
+	for rows.Next() {
+		var clientID int64
+		var uploaded string
+		if err := rows.Scan(&clientID, &uploaded); err != nil {
+			return nil, err
+		}
+		t, _ := time.Parse(rfc3339, uploaded)
+		tc := t
+		m[clientID] = &tc
+	}
+	return m, rows.Err()
+}
+
 // CreateUser adds a new user. Returns an error if the username is already taken.
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (int64, error) {
 	res, err := s.db.ExecContext(ctx,

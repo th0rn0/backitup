@@ -52,23 +52,24 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 	if err != nil {
 		return dashboardView{}, err
 	}
+	latestRuns, err := s.st.LatestRunAllClients(ctx)
+	if err != nil {
+		return dashboardView{}, err
+	}
+	latestOffsites, err := s.st.LatestOffsiteAllClients(ctx)
+	if err != nil {
+		return dashboardView{}, err
+	}
 	now := time.Now()
 	var v dashboardView
 	for _, c := range clients {
-		latest, err := s.st.LatestRun(ctx, c.ID)
-		if err != nil {
-			return dashboardView{}, err
-		}
+		latest := latestRuns[c.ID]
 		h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, now)
-		lastOffsite, err := s.st.LatestOffsite(ctx, c.ID)
-		if err != nil {
-			return dashboardView{}, err
-		}
 		row := clientRow{
 			ID: c.ID, Name: c.Name, Slug: c.Slug(), Mode: string(c.Mode),
 			Health: string(h), HealthLabel: healthLabel(h), Icon: healthIcon(h),
 			Retention:        fmt.Sprintf("%dd", c.RetentionDays),
-			Offsite:          offsiteLabel(c, lastOffsite),
+			Offsite:          offsiteLabel(c, latestOffsites[c.ID]),
 			OffsiteUploading: uploading[c.ID],
 		}
 		switch {
@@ -101,19 +102,35 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 		return healthRank(v.Clients[i].Health) < healthRank(v.Clients[j].Health)
 	})
 
-	// Storage totals: walk the backup dir for hot, query DB for cold.
+	// Storage totals: hot bytes are cached (60s TTL) to avoid walking the
+	// backup dir tree on every page load.
 	v.Storage.ColdBytes, _ = s.st.TotalOffsiteBytes(ctx)
+	v.Storage.HotBytes = s.cachedHotBytes()
+
+	return v, nil
+}
+
+// cachedHotBytes returns the total size of the backup dir, recomputing at most
+// once per minute so the dashboard doesn't walk thousands of files on every load.
+func (s *Server) cachedHotBytes() int64 {
+	s.hotBytesMu.Lock()
+	defer s.hotBytesMu.Unlock()
+	if time.Now().Before(s.hotBytesExpiry) {
+		return s.hotBytesCache
+	}
+	var total int64
 	_ = filepath.WalkDir(s.backupBaseDir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
 		if info, err := d.Info(); err == nil {
-			v.Storage.HotBytes += info.Size()
+			total += info.Size()
 		}
 		return nil
 	})
-
-	return v, nil
+	s.hotBytesCache = total
+	s.hotBytesExpiry = time.Now().Add(60 * time.Second)
+	return total
 }
 
 func healthRank(h string) int {

@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
@@ -53,6 +54,11 @@ type Server struct {
 	// loc is the timezone used when formatting timestamps in Discord notifications.
 	// Defaults to time.UTC.
 	loc *time.Location
+
+	// hotBytesMu guards hotBytesCache and hotBytesExpiry.
+	hotBytesMu    sync.Mutex
+	hotBytesCache int64
+	hotBytesExpiry time.Time
 
 	// offsiteTrigger runs an immediate offsite pass for a single client.
 	// Nil disables the "Backup now" button. Wired by ConfigureOffsiteTrigger.
