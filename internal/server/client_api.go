@@ -80,8 +80,15 @@ func (s *Server) clientByToken(ctx context.Context, token string) (*model.Client
 }
 
 // getConfig returns the calling client's behaviour (D1: server owns WHAT).
+// It also clears any run stuck in "running" for this client — a new getConfig
+// call means a new backup session is starting, so the previous session is gone.
 func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	cl := clientFrom(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := s.st.MarkClientRunningRunFailed(ctx, cl.ID); err != nil {
+		log.Printf("getConfig: clear stale run for client=%q: %v", cl.Name, err)
+	}
 	excludes := cl.Excludes
 	if excludes == nil {
 		excludes = []string{}

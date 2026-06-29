@@ -85,6 +85,7 @@ func main() {
 		Offsite:          lifecycle.NewRclone(getenv("BACKITUP_RCLONE_CONFIG", "/data/rclone.conf")),
 		BackupBaseDir:    backupDir,
 		LogRetentionDays: atoiEnv("BACKITUP_LOG_RETENTION_DAYS", 0),
+		StaleRunTimeout:  parseInterval(getenv("BACKITUP_STALE_RUN_TIMEOUT", "2h")),
 		DiscordWebhook:   os.Getenv("BACKITUP_DISCORD_WEBHOOK"),
 		Verbose:          verbose,
 	}

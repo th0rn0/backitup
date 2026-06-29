@@ -555,6 +555,32 @@ func (s *Store) FinishOffsiteRun(ctx context.Context, id int64, status string, s
 	return err
 }
 
+// MarkClientRunningRunFailed marks any run currently in "running" state for the
+// given client as failed. Call when the client starts a new backup (via getConfig)
+// so a prior run that never received a final status update is cleaned up.
+func (s *Store) MarkClientRunningRunFailed(ctx context.Context, clientID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE runs SET status='failed', finished_at=?, log_tail='interrupted: client started a new backup without completing the previous run'
+		 WHERE client_id=? AND status='running'`,
+		time.Now().UTC().Format(rfc3339), clientID)
+	return err
+}
+
+// MarkStaleRunsFailed marks any run still in "running" state with a started_at
+// older than olderThan as failed. Used by the lifecycle worker as a safety net
+// for clients that crash and never reconnect.
+func (s *Store) MarkStaleRunsFailed(ctx context.Context, olderThan time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE runs SET status='failed', finished_at=?, log_tail='interrupted: run exceeded maximum allowed duration'
+		 WHERE status='running' AND started_at < ?`,
+		time.Now().UTC().Format(rfc3339), olderThan.UTC().Format(rfc3339))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // MarkStaleOffsiteRunsFailed marks any rows still in "running" status as
 // failed. Call once at server startup to clean up rows left by a crash or
 // restart that interrupted an upload.

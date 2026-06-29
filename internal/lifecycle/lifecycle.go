@@ -52,6 +52,12 @@ type Offsite interface {
 	Lsf(ctx context.Context, remote, dir string) ([]string, error)
 }
 
+// DefaultStaleRunTimeout is the maximum duration a run can stay in "running"
+// state before the lifecycle worker marks it failed. getConfig handles the
+// common case (client reconnects); this is the safety net for clients that
+// never reconnect.
+const DefaultStaleRunTimeout = 2 * time.Hour
+
 // Deps are the worker's dependencies. Offsite nil disables cold tiering.
 type Deps struct {
 	Store            *store.Store
@@ -60,6 +66,7 @@ type Deps struct {
 	RunsKeepDays     int           // 0 -> DefaultRunsKeepDays
 	LogRetentionDays int           // 0 -> DefaultLogRetentionDays; how long log_tail is kept
 	PartOrphanAge    time.Duration // 0 -> DefaultPartOrphanAge; min age before a .part file is removed
+	StaleRunTimeout  time.Duration // 0 -> DefaultStaleRunTimeout; max age of a "running" run
 	Now              func() time.Time
 
 	DiscordWebhook string              // empty disables Discord alerts
@@ -92,6 +99,21 @@ func RunOnce(ctx context.Context, d Deps) error {
 				firstErr = err
 			}
 		}
+	}
+
+	// Mark runs stuck in "running" state as failed (safety net for clients
+	// that crash and never reconnect; getConfig handles the common case).
+	staleTimeout := d.StaleRunTimeout
+	if staleTimeout == 0 {
+		staleTimeout = DefaultStaleRunTimeout
+	}
+	if n, err := d.Store.MarkStaleRunsFailed(ctx, d.now().Add(-staleTimeout)); err != nil {
+		log.Printf("lifecycle: mark stale runs failed: %v", err)
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else if n > 0 {
+		log.Printf("lifecycle: marked %d stale run(s) as failed (exceeded %s)", n, staleTimeout)
 	}
 
 	// Prune run logs globally (not per-client) on each tick.
