@@ -50,6 +50,10 @@ type Server struct {
 	// verbose enables a log line for every client status change.
 	verbose bool
 
+	// loc is the timezone used when formatting timestamps in Discord notifications.
+	// Defaults to time.UTC.
+	loc *time.Location
+
 	// offsiteTrigger runs an immediate offsite pass for a single client.
 	// Nil disables the "Backup now" button. Wired by ConfigureOffsiteTrigger.
 	offsiteTrigger func(ctx context.Context, clientID int64) error
@@ -119,8 +123,9 @@ func New(st *store.Store, secure bool) *Server {
 		secure:        secure,
 		authKeysPath:  "/srv/authkeys/authorized_keys",
 		backupBaseDir: "/srv/backups",
-		publicHost:  "your-server:2222",
-		clientImage: "th0rn0/backitup-client:latest",
+		publicHost:    "your-server:2222",
+		clientImage:   "th0rn0/backitup-client:latest",
+		loc:           time.UTC,
 	}
 }
 
@@ -156,6 +161,14 @@ func (s *Server) ConfigureDiscord(webhookURL string) {
 // ConfigureVerbose enables per-status-change log lines.
 func (s *Server) ConfigureVerbose(v bool) {
 	s.verbose = v
+}
+
+// ConfigureTimezone sets the timezone used when formatting timestamps in Discord
+// notifications. Defaults to UTC if not called.
+func (s *Server) ConfigureTimezone(loc *time.Location) {
+	if loc != nil {
+		s.loc = loc
+	}
 }
 
 // ConfigureOffsiteTrigger wires the function called by the "Backup now" button

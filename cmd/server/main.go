@@ -58,6 +58,13 @@ func main() {
 		log.Printf("warn: regenerate rclone config: %v", err)
 	}
 	srv.ConfigureDiscord(os.Getenv("BACKITUP_DISCORD_WEBHOOK"))
+	tz := getenv("BACKITUP_TIMEZONE", "Europe/London")
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Fatalf("backitup server: invalid BACKITUP_TIMEZONE %q: %v", tz, err)
+	}
+	srv.ConfigureTimezone(loc)
+	log.Printf("backitup server: Discord timestamps will use timezone %s", tz)
 	verbose := os.Getenv("BACKITUP_VERBOSE") == "true" || os.Getenv("BACKITUP_VERBOSE") == "1"
 	srv.ConfigureVerbose(verbose)
 

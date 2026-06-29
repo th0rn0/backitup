@@ -178,24 +178,27 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 // fire; all other statuses only fire when verbose mode is enabled.
 // Call as a goroutine — never blocks the response path.
 func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes int64, ts time.Time) {
+	fmtTime := func(t time.Time) string {
+		return t.In(s.loc).Format("2006-01-02 15:04:05 MST")
+	}
 	switch st {
 	case model.StatusFailed:
 		alert.Discord(s.discordWebhook, fmt.Sprintf(
-			"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nAt: %s UTC",
-			cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"),
+			"⚠️ **backitup** — `%s` backup **FAILED**\nSource: %s\nAt: %s",
+			cl.Name, cl.SourceLabel, fmtTime(ts),
 		))
 	case model.StatusOK:
 		if s.verbose {
 			alert.Discord(s.discordWebhook, fmt.Sprintf(
-				"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s UTC | files=%d size=%s",
-				cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"), files, formatBytes(bytes),
+				"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s | files=%d size=%s",
+				cl.Name, cl.SourceLabel, fmtTime(ts), files, formatBytes(bytes),
 			))
 		}
 	case model.StatusRunning:
 		if s.verbose {
 			alert.Discord(s.discordWebhook, fmt.Sprintf(
-				"▶️ **backitup** — `%s` backup **STARTED**\nSource: %s\nStarted: %s UTC",
-				cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"),
+				"▶️ **backitup** — `%s` backup **STARTED**\nSource: %s\nStarted: %s",
+				cl.Name, cl.SourceLabel, fmtTime(ts),
 			))
 		}
 	case model.StatusOverlap:
