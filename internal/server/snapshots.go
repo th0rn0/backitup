@@ -215,7 +215,8 @@ func (s *Server) resolveClient(w http.ResponseWriter, r *http.Request, ctx conte
 	return c, true
 }
 
-// tarGzDirectory writes a gzip-compressed tar archive of dir to w.
+// tarGzDirectory writes a gzip-compressed tar archive of dir to w,
+// preserving permissions, ownership, and symlink targets.
 func tarGzDirectory(w io.Writer, dir string) error {
 	gw := gzip.NewWriter(w)
 	tw := tar.NewWriter(gw)
@@ -225,7 +226,13 @@ func tarGzDirectory(w io.Writer, dir string) error {
 			return err
 		}
 		rel, _ := filepath.Rel(dir, path)
-		hdr, err := tar.FileInfoHeader(fi, "")
+		var link string
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if link, err = os.Readlink(path); err != nil {
+				return err
+			}
+		}
+		hdr, err := tar.FileInfoHeader(fi, link)
 		if err != nil {
 			return err
 		}
@@ -236,7 +243,7 @@ func tarGzDirectory(w io.Writer, dir string) error {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		if fi.IsDir() || !fi.Mode().IsRegular() {
+		if !fi.Mode().IsRegular() {
 			return nil
 		}
 		f, err := os.Open(path)

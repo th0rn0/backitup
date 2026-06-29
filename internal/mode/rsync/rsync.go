@@ -52,7 +52,7 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	snap := start.Format("20060102T150405Z")
 	target := fmt.Sprintf("%s@%s:snapshots/%s/", o.SSHUser, host, snap)
 
-	args := []string{"-a", "--delete", "--stats"}
+	args := []string{"-a", "--numeric-ids", "--delete", "--stats"}
 	if o.HasPreviousSnapshot {
 		args = append(args, "--link-dest=/snapshots/latest")
 	}
