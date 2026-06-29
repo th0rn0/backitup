@@ -187,8 +187,8 @@ func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes
 	case model.StatusOK:
 		if s.verbose {
 			alert.Discord(s.discordWebhook, fmt.Sprintf(
-				"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s UTC | files=%d bytes=%d",
-				cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"), files, bytes,
+				"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s UTC | files=%d size=%s",
+				cl.Name, cl.SourceLabel, ts.Format("2006-01-02 15:04:05"), files, formatBytes(bytes),
 			))
 		}
 	case model.StatusRunning:
@@ -205,6 +205,21 @@ func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes
 				cl.Name, cl.SourceLabel,
 			))
 		}
+	}
+}
+
+func formatBytes(b int64) string {
+	const (
+		MB = 1 << 20
+		GB = 1 << 30
+	)
+	switch {
+	case b >= GB:
+		return fmt.Sprintf("%.2f GB", float64(b)/GB)
+	case b >= MB:
+		return fmt.Sprintf("%.2f MB", float64(b)/MB)
+	default:
+		return fmt.Sprintf("%d KB", b/1024)
 	}
 }
 
