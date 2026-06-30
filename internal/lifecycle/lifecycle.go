@@ -303,8 +303,8 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		}
 		if d.DiscordWebhook != "" {
 			go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
-				"☁️ **backitup** — `%s` offsite upload complete\nRemote: %s | snapshot: %s | bytes: %d",
-				c.Name, c.OffsiteRemote, s.ID, bytes,
+				"☁️ **backitup** — `%s` offsite upload complete\nRemote: %s | snapshot: %s | size: %s",
+				c.Name, c.OffsiteRemote, s.ID, alert.FormatBytes(bytes),
 			))
 		}
 		if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{

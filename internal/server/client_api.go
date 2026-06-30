@@ -198,7 +198,7 @@ func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes
 		if s.verbose {
 			alert.Discord(s.discordWebhook, fmt.Sprintf(
 				"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s | files=%d size=%s",
-				cl.Name, cl.SourceLabel, fmtTime(ts), files, formatBytes(bytes),
+				cl.Name, cl.SourceLabel, fmtTime(ts), files, alert.FormatBytes(bytes),
 			))
 		}
 	case model.StatusRunning:
@@ -218,20 +218,6 @@ func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes
 	}
 }
 
-func formatBytes(b int64) string {
-	const (
-		MB = 1 << 20
-		GB = 1 << 30
-	)
-	switch {
-	case b >= GB:
-		return fmt.Sprintf("%.2f GB", float64(b)/GB)
-	case b >= MB:
-		return fmt.Sprintf("%.2f MB", float64(b)/MB)
-	default:
-		return fmt.Sprintf("%d KB", b/1024)
-	}
-}
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
