@@ -140,7 +140,7 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
 	}
-	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
+	clientDir := filepath.Join(d.BackupBaseDir, c.Slug)
 
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
@@ -224,7 +224,7 @@ func uploadClient(ctx context.Context, d Deps, c model.Client) error {
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
 	}
-	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
+	clientDir := filepath.Join(d.BackupBaseDir, c.Slug)
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)
@@ -469,7 +469,7 @@ func offsiteDir(c model.Client) string {
 	if c.OffsiteDir != "" {
 		return c.OffsiteDir
 	}
-	return model.Slug(c.Name)
+	return c.Slug
 }
 
 // verifyOffsiteObjects calls rclone lsf for the client's remote directory and
@@ -557,7 +557,7 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
 	}
-	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
+	clientDir := filepath.Join(d.BackupBaseDir, c.Slug)
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)

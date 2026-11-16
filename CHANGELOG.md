@@ -3,6 +3,13 @@
 All notable changes to Back! It! Up! are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Security
+
+- **Client directories can no longer be shared.** A client's storage directory was derived on the fly from its name, so names differing only in punctuation, spacing or case (`dup a`, `dup-a`, `Dup_A`, `dup/a`) produced one directory and one identical SSH forced command — two clients in one read-write jail, each able to download the other's data. A name with no alphanumeric characters (`..`, `.`, `/`) slugged to `""`, which jailed the client at the backup base directory itself. The slug is now a persisted, UNIQUE column (`clients.slug`), computed once on create and used for every directory path (`authorized_keys`, snapshot listing/download/delete, offsite object prefix, lifecycle pruning). `POST /clients` rejects an empty slug and a slug already in use with a form error naming the conflict; `authkeys.Render` emits no line at all for a client whose slug is unusable. Existing databases are upgraded automatically: each row is backfilled from its name, the oldest client keeps the plain slug, later collisions get `-2`, `-3`, … and a slugless name falls back to `client-<id>`.
+- **Deleting a user now ends their sessions.** Admin sessions were keyed only by the username string and never re-checked, so a deleted account kept full admin access until the 12-hour session TTL expired — enough to mint new client keys. Sessions are now bound to the user id, `postDeleteUser` revokes every session of the deleted account, and `requireAdmin` treats a session whose user no longer exists as invalid.
+
 ## [0.1.0.0] - 2026-06-22
 
 ### Added

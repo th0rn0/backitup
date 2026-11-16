@@ -8,6 +8,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS clients (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
     name                    TEXT    NOT NULL UNIQUE,
+    slug                    TEXT    NOT NULL DEFAULT '',  -- unique storage id; see idx_clients_slug
     mode                    TEXT    NOT NULL CHECK (mode IN ('targz','rsync')),
     source_label            TEXT    NOT NULL DEFAULT '',
     excludes                TEXT    NOT NULL DEFAULT '[]',  -- JSON array of globs

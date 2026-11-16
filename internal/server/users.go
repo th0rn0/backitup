@@ -89,6 +89,10 @@ func (s *Server) postDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// M1: the database row is not the only place a user lives — end every
+	// session it still holds, or the deleted account keeps full admin access
+	// until the TTL expires. Deleting yourself lands here too, which is correct.
+	s.sessions.DeleteByUserID(id)
 	log.Printf("user deleted: id=%d by %q", id, usernameFromContext(r.Context()))
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
 }

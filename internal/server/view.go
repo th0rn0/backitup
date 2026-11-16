@@ -67,7 +67,7 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 		latest := latestRuns[c.ID]
 		h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, now)
 		row := clientRow{
-			ID: c.ID, Name: c.Name, Slug: c.Slug(), Mode: string(c.Mode),
+			ID: c.ID, Name: c.Name, Slug: c.Slug, Mode: string(c.Mode),
 			Health: string(h), HealthLabel: healthLabel(h), Icon: healthIcon(h),
 			Retention:        fmt.Sprintf("%dd", c.RetentionDays),
 			Offsite:          offsiteLabel(c, latestOffsites[c.ID]),

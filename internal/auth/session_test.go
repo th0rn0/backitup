@@ -7,7 +7,7 @@ import (
 
 func TestSessionLifecycle(t *testing.T) {
 	s := NewSessionStore(time.Hour)
-	tok, err := s.Create("alice")
+	tok, err := s.Create(1, "alice")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestSessionExpiry(t *testing.T) {
 	s := NewSessionStore(time.Hour)
 	now := time.Unix(1_000_000, 0)
 	s.nowFunc = func() time.Time { return now }
-	tok, _ := s.Create("bob")
+	tok, _ := s.Create(2, "bob")
 	if !s.Valid(tok) {
 		t.Fatal("should be valid before expiry")
 	}
@@ -48,8 +48,8 @@ func TestSessionExpiry(t *testing.T) {
 
 func TestSessionTokensUnique(t *testing.T) {
 	s := NewSessionStore(time.Hour)
-	a, _ := s.Create("u1")
-	b, _ := s.Create("u2")
+	a, _ := s.Create(1, "u1")
+	b, _ := s.Create(2, "u2")
 	if a == b {
 		t.Fatal("session tokens should be unique")
 	}

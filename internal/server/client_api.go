@@ -93,7 +93,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	if excludes == nil {
 		excludes = []string{}
 	}
-	latestPath := filepath.Join(s.backupBaseDir, model.Slug(cl.Name), "snapshots", "latest")
+	latestPath := filepath.Join(s.backupBaseDir, cl.Slug, "snapshots", "latest")
 	_, hasPrev := os.Lstat(latestPath)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mode":                  cl.Mode,

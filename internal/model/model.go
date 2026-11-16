@@ -15,6 +15,11 @@ import (
 // Slug converts a client name into a URL/filesystem-safe identifier:
 // lowercase, non-alphanumeric characters replaced with hyphens, consecutive
 // hyphens collapsed, leading/trailing hyphens trimmed.
+//
+// A name made entirely of stripped characters (".", "..", "/", "....") yields
+// "", which is NOT a usable directory component. Callers that turn a slug into a
+// path must reject "" rather than joining it onto a base directory (that yields
+// the base directory itself, shared by every other client).
 func Slug(name string) string {
 	var b strings.Builder
 	prevHyphen := true // suppress leading hyphens
@@ -45,9 +50,6 @@ const (
 
 func (m Mode) Valid() bool { return m == ModeTarGz || m == ModeRsync }
 
-// Slug returns the URL/filesystem-safe identifier for this client.
-func (c Client) Slug() string { return Slug(c.Name) }
-
 // RunStatus is the outcome of a single client backup run, as reported back over
 // the control channel. "overlap" means a prior run of the same client was still
 // going and this trigger did nothing (see client lockfile, design doc).
@@ -76,8 +78,15 @@ const (
 // Client is a single backup job: one source directory on one host, identified by
 // a server-issued SSH key (data channel) + bearer token (control channel).
 type Client struct {
-	ID          int64
-	Name        string // unique, human label, e.g. "laptop-docs"
+	ID   int64
+	Name string // unique, human label, e.g. "laptop-docs"
+
+	// Slug is the unique, server-derived storage identifier for this client and
+	// the ONLY source of its directory (backups/<Slug>) and of its default
+	// offsite prefix. It is computed once, on create, and persisted: deriving it
+	// from Name on demand let two clients ("dup a", "dup-a", "Dup_A") share one
+	// read-write SSH jail. Never recompute it from Name.
+	Slug        string
 	Mode        Mode
 	SourceLabel string // descriptive only; the real path lives in the host's docker run
 

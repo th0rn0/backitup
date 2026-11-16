@@ -79,8 +79,27 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		Enabled:              true,
 	})
 	if err != nil {
-		// Most likely a duplicate name (UNIQUE) — report it as a form error.
-		s.renderNewClientError(w, r,"Could not create client (is the name already taken?).")
+		// A name that maps onto an existing slug, or onto none at all, must be
+		// refused: the slug IS the client's read-write backup directory.
+		var conflict *store.SlugConflictError
+		switch {
+		case errors.As(err, &conflict):
+			if conflict.Existing == name {
+				s.renderNewClientError(w, r, fmt.Sprintf(
+					"A client named %q already exists — the name is already taken.", name))
+				return
+			}
+			s.renderNewClientError(w, r, fmt.Sprintf(
+				"Storage slug %q is already used by client %q. Two names that differ only in "+
+					"punctuation, spacing or case share one directory, so choose a name that "+
+					"produces a different slug.", conflict.Slug, conflict.Existing))
+		case errors.Is(err, store.ErrEmptySlug):
+			s.renderNewClientError(w, r, fmt.Sprintf(
+				"Client name %q must contain at least one letter or digit: it becomes the "+
+					"client's storage slug (directory name).", name))
+		default:
+			s.renderNewClientError(w, r, "Could not create client (is the name already taken?).")
+		}
 		return
 	}
 
@@ -136,7 +155,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	var localSnapshots []mode.Snapshot
 	var clientDir string
 	if sm, ok := mode.Server(c.Mode); ok {
-		clientDir = filepath.Join(s.backupBaseDir, model.Slug(c.Name))
+		clientDir = filepath.Join(s.backupBaseDir, c.Slug)
 		snaps, err := sm.List(ctx, clientDir)
 		if err == nil {
 			localSnapshots = snaps
@@ -410,10 +429,10 @@ func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request)
 	snapshotID := r.PathValue("snapshotID")
 	if err := s.st.ForgetOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote); err != nil {
 		log.Printf("forget offsite object: client=%s snap=%s: %v", c.Name, snapshotID, err)
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=forget+failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=forget+failed", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=entry+removed", http.StatusSeeOther)
+	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=entry+removed", http.StatusSeeOther)
 }
 
 // postUpdateClientOffsite changes the offsite_remote for an existing client.
@@ -654,7 +673,14 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 		if !c.Enabled {
 			continue
 		}
-		dir := filepath.Join(s.backupBaseDir, model.Slug(c.Name))
+		// No slug, no directory: MkdirAll on the base dir would silently invent
+		// a shared jail. authkeys.Render withholds this client's key for the
+		// same reason, so skipping the mkdir keeps the two consistent.
+		if c.Slug == "" {
+			log.Printf("authkeys: client %d (%q) has no slug; skipping directory setup", c.ID, c.Name)
+			continue
+		}
+		dir := filepath.Join(s.backupBaseDir, c.Slug)
 		if c.Mode == model.ModeRsync {
 			dir = filepath.Join(dir, "snapshots")
 		}
