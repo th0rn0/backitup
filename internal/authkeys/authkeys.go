@@ -65,7 +65,7 @@ func Render(clients []model.Client, baseDir string) (content string, skipped []S
 			skipped = append(skipped, Skipped{ClientID: c.ID, Reason: reason})
 			continue
 		}
-		if reason := invalidSlug(c.Slug); reason != "" {
+		if reason := InvalidSlug(c.Slug); reason != "" {
 			skipped = append(skipped, Skipped{ClientID: c.ID, Reason: reason})
 			continue
 		}
@@ -89,10 +89,16 @@ func Render(clients []model.Client, baseDir string) (content string, skipped []S
 // bad characters keep missing one; permitting only [a-z0-9-] cannot.
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-// invalidSlug returns a non-empty reason if slug cannot be used as a single
+// InvalidSlug returns a non-empty reason if slug cannot be used as a single
 // directory component. An empty slug is the dangerous case: filepath.Join(base,
 // "") is base itself, so every such client would share one read-write jail.
-func invalidSlug(slug string) string {
+//
+// Exported because it is the single definition of "a slug that may become a
+// path": authkeys uses it before writing a forced command, and the server and
+// lifecycle packages use it (via clientDir) before joining a base directory.
+// Anything building a per-client path must go through it rather than re-deriving
+// the rule.
+func InvalidSlug(slug string) string {
 	if slug == "" {
 		return "empty slug"
 	}

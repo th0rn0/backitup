@@ -93,14 +93,21 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	if excludes == nil {
 		excludes = []string{}
 	}
-	latestPath := filepath.Join(s.backupBaseDir, cl.Slug, "snapshots", "latest")
-	_, hasPrev := os.Lstat(latestPath)
+	// An unusable slug is not an error for the client: it has no directory of
+	// its own to have a previous snapshot in, so the answer is simply "no".
+	hasPrev := false
+	if dir, err := s.clientDir(*cl); err != nil {
+		log.Printf("getConfig: client=%q: %v", cl.Name, err)
+	} else {
+		_, statErr := os.Lstat(filepath.Join(dir, "snapshots", "latest"))
+		hasPrev = statErr == nil
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mode":                  cl.Mode,
 		"excludes":              excludes,
 		"retention_days":        cl.RetentionDays,
 		"skip_symlinks":         cl.SkipSymlinks,
-		"has_previous_snapshot": hasPrev == nil,
+		"has_previous_snapshot": hasPrev,
 	})
 }
 

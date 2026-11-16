@@ -162,14 +162,20 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	}
 	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
 
-	// Load local snapshots from the hot store (best-effort — directory may not exist yet).
+	// Load local snapshots from the hot store (best-effort — the directory may
+	// not exist yet, and a client without a usable slug has none to list).
 	var localSnapshots []mode.Snapshot
 	var clientDir string
 	if sm, ok := mode.Server(c.Mode); ok {
-		clientDir = filepath.Join(s.backupBaseDir, c.Slug)
-		snaps, err := sm.List(ctx, clientDir)
-		if err == nil {
-			localSnapshots = snaps
+		dir, dirErr := s.clientDir(*c)
+		if dirErr != nil {
+			log.Printf("getClient: %v; not listing local snapshots", dirErr)
+		} else {
+			clientDir = dir
+			snaps, err := sm.List(ctx, clientDir)
+			if err == nil {
+				localSnapshots = snaps
+			}
 		}
 	}
 
@@ -700,14 +706,14 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 		if !c.Enabled {
 			continue
 		}
-		// No slug, no directory: MkdirAll on the base dir would silently invent
-		// a shared jail. authkeys.Render withholds this client's key for the
-		// same reason, so skipping the mkdir keeps the two consistent.
-		if c.Slug == "" {
-			log.Printf("authkeys: client %d (%q) has no slug; skipping directory setup", c.ID, c.Name)
+		// No usable slug, no directory: MkdirAll on the base dir would silently
+		// invent a shared jail. authkeys.Render withholds this client's key for
+		// the same reason, so skipping the mkdir keeps the two consistent.
+		dir, err := s.clientDir(c)
+		if err != nil {
+			log.Printf("authkeys: %v; skipping directory setup", err)
 			continue
 		}
-		dir := filepath.Join(s.backupBaseDir, c.Slug)
 		if c.Mode == model.ModeRsync {
 			dir = filepath.Join(dir, "snapshots")
 		}

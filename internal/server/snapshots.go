@@ -198,7 +198,11 @@ func (s *Server) resolveClientAndMode(w http.ResponseWriter, r *http.Request, ct
 		http.Error(w, "unknown mode", http.StatusInternalServerError)
 		return nil, nil, "", false
 	}
-	clientDir := filepath.Join(s.backupBaseDir, c.Slug)
+	clientDir, err := s.clientDir(*c)
+	if err != nil {
+		http.Error(w, "client has no usable storage slug", http.StatusInternalServerError)
+		return nil, nil, "", false
+	}
 	return c, sm, clientDir, true
 }
 
