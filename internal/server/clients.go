@@ -750,8 +750,11 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 
 // apiBase returns the control-channel base URL for use in generated docker
 // commands. If BACKITUP_PUBLIC_API is set it is used as-is; otherwise the
-// scheme is derived from apiScheme ("http"/"https") and a placeholder host
-// reminds the admin to configure BACKITUP_PUBLIC_API.
+// scheme is derived from apiScheme ("http"/"https") and a placeholder host is
+// returned. The placeholder deliberately carries no comment: it is substituted
+// into a `-e BACKITUP_API=…` line that ends in a line-continuation backslash,
+// and an inline `#` there would comment the backslash out, breaking the
+// command at the next line. The hint lives in dockerCmds instead.
 func (s *Server) apiBase(apiScheme string) string {
 	if s.publicAPI != "" {
 		return s.publicAPI
@@ -759,7 +762,7 @@ func (s *Server) apiBase(apiScheme string) string {
 	if apiScheme != "https" {
 		apiScheme = "http"
 	}
-	return apiScheme + "://YOUR-SERVER:8080  # set BACKITUP_PUBLIC_API on the server"
+	return apiScheme + "://YOUR-SERVER:8080"
 }
 
 // dockerCmds returns two ready-to-run docker commands for a client:
@@ -785,10 +788,18 @@ func (s *Server) dockerCmds(token, apiBase, backupPath, secretsPath string) (kno
 		fmt.Sprintf("  -e BACKITUP_TOKEN=%s \\", token),
 		"  -e BACKITUP_SSH_KEY=/secrets/id \\",
 	}
+	// Hint on its own comment line, never appended to a value: the command is
+	// pasted into a shell verbatim, so the placeholder must stay a bare URL.
+	hint := ""
+	if s.publicAPI == "" {
+		hint = "# BACKITUP_PUBLIC_API is not set on this server, so the BACKITUP_API\n" +
+			"# value below is a placeholder - replace YOUR-SERVER with this server's\n" +
+			"# control-channel address (or set BACKITUP_PUBLIC_API and re-issue).\n"
+	}
 	join := func(extra ...string) string {
 		parts := append(append([]string{}, base...), extra...)
 		parts = append(parts, "  "+s.clientImage)
-		return strings.Join(parts, "\n")
+		return hint + strings.Join(parts, "\n")
 	}
 	known = join("  -e BACKITUP_KNOWN_HOSTS=/secrets/known_hosts \\")
 	insecure = join("  -e BACKITUP_INSECURE=1 \\")
