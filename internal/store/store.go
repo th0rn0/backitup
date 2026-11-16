@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,41 +177,71 @@ func (e *SlugConflictError) Error() string {
 	return fmt.Sprintf("slug %q is already taken by client %q", e.Slug, e.Existing)
 }
 
+// warnf is the logging sink for migration warnings. It is a variable so tests
+// can capture exactly what an operator sees on startup.
+var warnf = log.Printf
+
+// slugOwner identifies the client that already holds a storage slug.
+type slugOwner struct {
+	id   int64
+	name string
+}
+
+// slugWithSuffix returns base plus a "-<n>" disambiguator, keeping the whole
+// value within model.MaxSlugLen by trimming the stem (never the suffix) so the
+// result still satisfies the authkeys allowlist.
+func slugWithSuffix(base string, n int) string {
+	suffix := fmt.Sprintf("-%d", n)
+	stem := base
+	if max := model.MaxSlugLen - len(suffix); len(stem) > max {
+		stem = strings.TrimRight(stem[:max], "-")
+	}
+	return stem + suffix
+}
+
 // backfillClientSlugs fills in slug for clients created before the column
 // existed. Rows are visited oldest-first so the earliest client keeps the plain
 // slug and later collisions are disambiguated ("dup-a", "dup-a-2", ...); a name
 // with no slug at all falls back to "client-<id>". The result contains no empty
 // and no duplicate slugs, which is what lets the unique index be created.
+//
+// A collision is NOT repaired on disk, and must not be repaired silently.
+// Before this column existed the directory was derived from the name, so two
+// colliding clients genuinely shared one directory — and the snapshots in it
+// cannot be attributed to either of them (one ssh user, timestamp-only snapshot
+// ids, no owner recorded). Moving or deleting them automatically would guess.
+// Giving the loser a new slug therefore only separates future writes: the
+// winner keeps read-write access to the shared directory (and prunes it under
+// its own retention policy), while the loser's history there becomes
+// unreachable. Each such collision is reported to the operator so the shared
+// directory can be quarantined by hand.
 func backfillClientSlugs(db *sql.DB) error {
-	taken := map[string]bool{}
-	rows, err := db.Query(`SELECT slug FROM clients WHERE slug != ''`)
+	taken := map[string]slugOwner{}
+	rows, err := db.Query(`SELECT id, name, slug FROM clients WHERE slug != ''`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
+		var o slugOwner
+		var slug string
+		if err := rows.Scan(&o.id, &o.name, &slug); err != nil {
 			rows.Close()
 			return err
 		}
-		taken[s] = true
+		taken[slug] = o
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	type pending struct {
-		id   int64
-		name string
-	}
 	rows, err = db.Query(`SELECT id, name FROM clients WHERE slug = '' ORDER BY id`)
 	if err != nil {
 		return err
 	}
-	var todo []pending
+	var todo []slugOwner
 	for rows.Next() {
-		var p pending
+		var p slugOwner
 		if err := rows.Scan(&p.id, &p.name); err != nil {
 			rows.Close()
 			return err
@@ -228,15 +259,52 @@ func backfillClientSlugs(db *sql.DB) error {
 			base = fmt.Sprintf("client-%d", p.id)
 		}
 		slug := base
-		for n := 2; taken[slug]; n++ {
-			slug = fmt.Sprintf("%s-%d", base, n)
+		winner, collided := taken[base]
+		if collided {
+			for n := 2; ; n++ {
+				candidate := slugWithSuffix(base, n)
+				if _, exists := taken[candidate]; !exists {
+					slug = candidate
+					break
+				}
+			}
 		}
-		taken[slug] = true
+		taken[slug] = p
 		if _, err := db.Exec(`UPDATE clients SET slug=? WHERE id=?`, slug, p.id); err != nil {
 			return err
 		}
+		if collided {
+			warnLegacySlugCollision(winner, p, base, slug)
+		}
 	}
 	return nil
+}
+
+// warnLegacySlugCollision reports one legacy collision: both clients, the slug
+// they shared and therefore the directory they still share, and what an operator
+// has to do about it. It lives in one log line so it is greppable in startup
+// output ("WARNING: legacy client slug collision").
+func warnLegacySlugCollision(winner, loser slugOwner, sharedSlug, newSlug string) {
+	// The store does not know BACKITUP_BACKUP_DIR (it is a server setting), so
+	// the directory is named relative to it rather than guessed.
+	dir := "<backup dir>/" + sharedSlug
+	warnf("WARNING: legacy client slug collision: clients %d (%q) and %d (%q) both mapped to storage "+
+		"slug %q. Client %d (%q) was migrated to slug %q, but every snapshot either client recorded is "+
+		"still in %s (under BACKUP_BACKUP_DIR): one ssh user and timestamp-only snapshot ids, so the "+
+		"files cannot be attributed to a client and were left untouched. This migration is "+
+		"forward-only: client %d (%q) keeps read-write access to that directory and will prune it "+
+		"under its own retention policy, client %d (%q)'s history there can no longer be listed, "+
+		"pruned or uploaded, and its offsite prefix moved from %q to %q, so its existing remote "+
+		"objects will be reported remote_missing. Quarantine it by hand: rename %s aside (e.g. to "+
+		"%s.quarantine) so %q starts empty, then re-upload client %d (%q)'s data.",
+		winner.id, winner.name, loser.id, loser.name, sharedSlug,
+		loser.id, loser.name, newSlug,
+		dir,
+		winner.id, winner.name,
+		loser.id, loser.name,
+		sharedSlug, newSlug,
+		dir, sharedSlug, sharedSlug,
+		loser.id, loser.name)
 }
 
 // slugForNewClient computes the storage slug for a new client and refuses an

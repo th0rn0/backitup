@@ -51,7 +51,18 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	name := r.PostFormValue("name")
 	mode := model.Mode(r.PostFormValue("mode"))
 	if name == "" || !mode.Valid() {
-		s.renderNewClientError(w, r,"Name is required and mode must be targz or rsync.")
+		s.renderNewClientError(w, r, "Name is required and mode must be targz or rsync.")
+		return
+	}
+	// The name becomes the client's storage directory (via its slug) and part of
+	// its sshd forced command. A name longer than a filesystem component can
+	// never get a directory, and every authorized_keys rewrite would then fail —
+	// so it is refused here, at the edge, rather than breaking SSH for the fleet.
+	if len(name) > model.MaxSlugLen {
+		s.renderNewClientError(w, r, fmt.Sprintf(
+			"Client name must be at most %d characters (this one is %d). It becomes the client's "+
+				"storage directory and part of its SSH forced command, so it has to stay short.",
+			model.MaxSlugLen, len(name)))
 		return
 	}
 
@@ -602,6 +613,14 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 	defer akCancel()
 	if err := s.regenAuthorizedKeys(akCtx); err != nil {
 		log.Printf("authkeys regenerate failed after delete client %d: %v", c.ID, err)
+		// The row is gone but the file may not be: if the rewrite did not land,
+		// sshd still accepts the deleted client's key. That is a security
+		// failure, so it goes to the operator as an error page, not a log line
+		// followed by a "success" redirect.
+		http.Error(w, "The client was deleted, but the SSH authorized_keys file could not be "+
+			"regenerated: "+err.Error()+". Its SSH key may still be accepted until the file is "+
+			"rewritten — fix the reported problem and restart the server.", http.StatusInternalServerError)
+		return
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -654,6 +673,13 @@ func (s *Server) renderNewClientError(w http.ResponseWriter, r *http.Request, ms
 
 // regenAuthorizedKeys rewrites the sshd authorized_keys file from the current
 // client list, atomically (D4). A no-op if no path is configured.
+//
+// Directory setup and file rewriting are deliberately not all-or-nothing: a
+// client whose backup directory cannot be created (an over-long or otherwise
+// unusable slug from an older row) is reported, but the file is still rewritten
+// from the current rows. Aborting the rewrite on the first bad directory would
+// freeze authorization for the whole fleet — and would keep a just-deleted
+// client's key live, which is exactly the state deletion exists to end.
 func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 	if s.authKeysPath == "" {
 		return nil
@@ -669,6 +695,7 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 	// run: rrsync (rsync mode) locks its jail root on connect, and rsync won't
 	// create the missing snapshots/ parent. tar.gz's receiver mkdir's as needed,
 	// but pre-creating is harmless and keeps the layout predictable.
+	var dirErrs error
 	for _, c := range clients {
 		if !c.Enabled {
 			continue
@@ -685,14 +712,18 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 			dir = filepath.Join(dir, "snapshots")
 		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create client dir %s: %w", dir, err)
+			log.Printf("authkeys: client %d (%q): cannot create %s: %v", c.ID, c.Name, dir, err)
+			dirErrs = errors.Join(dirErrs, fmt.Errorf("create client dir %s: %w", dir, err))
 		}
 	}
 	content, skipped := authkeys.Render(clients, s.backupBaseDir)
 	for _, sk := range skipped {
 		log.Printf("authkeys: skipped client %d: %s", sk.ClientID, sk.Reason)
 	}
-	return authkeys.WriteAtomic(s.authKeysPath, content)
+	if err := authkeys.WriteAtomic(s.authKeysPath, content); err != nil {
+		return errors.Join(dirErrs, err)
+	}
+	return dirErrs
 }
 
 // apiBase returns the control-channel base URL for use in generated docker

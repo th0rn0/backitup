@@ -12,8 +12,9 @@
 // script's hardcoded directory), NOT from client-supplied input. The directory
 // comes from the client's persisted, UNIQUE slug column: it is computed once on
 // create, never recomputed from the name here, and never sent by the client. A
-// client whose slug is empty or not a plain directory component gets no line at
-// all — filepath.Join(baseDir, "") is baseDir, i.e. every client's directory.
+// client whose slug is empty or is not a plain [a-z0-9-] component gets no line
+// at all — filepath.Join(baseDir, "") is baseDir, i.e. every client's directory,
+// and anything else (quotes, commas, spaces) would append options to the line.
 //
 // Injection defense: a public key is only emitted if it parses as a single,
 // well-formed authorized_keys entry with no embedded newlines or quotes. A
@@ -25,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -79,6 +81,14 @@ func Render(clients []model.Client, baseDir string) (content string, skipped []S
 	return b.String(), skipped
 }
 
+// slugPattern is the ONLY shape a storage slug may take: a short, plain,
+// lowercase directory component. It is an allowlist on purpose — the slug is
+// persisted and embedded in an sshd authorized_keys forced command, so a value
+// carrying a quote, comma, space, "$(...)", non-ASCII byte or a second
+// "command=" would append options to that line. Filters that try to strip the
+// bad characters keep missing one; permitting only [a-z0-9-] cannot.
+var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
 // invalidSlug returns a non-empty reason if slug cannot be used as a single
 // directory component. An empty slug is the dangerous case: filepath.Join(base,
 // "") is base itself, so every such client would share one read-write jail.
@@ -86,11 +96,8 @@ func invalidSlug(slug string) string {
 	if slug == "" {
 		return "empty slug"
 	}
-	if slug == "." || slug == ".." {
-		return "unsafe slug " + slug
-	}
-	if strings.ContainsAny(slug, `/\`) || strings.ContainsRune(slug, 0) {
-		return "slug is not a single path element"
+	if !slugPattern.MatchString(slug) {
+		return fmt.Sprintf("unsafe slug %q: want ^[a-z0-9][a-z0-9-]{0,62}$", slug)
 	}
 	return ""
 }

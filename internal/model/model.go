@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+// MaxSlugLen is the longest storage slug the system will produce or accept. A
+// slug becomes a directory name and part of an sshd forced command, so it is
+// kept to a short, plain, lowercase component — the same ceiling the authkeys
+// allowlist enforces, and well inside every filesystem's NAME_MAX.
+const MaxSlugLen = 63
+
 // Slug converts a client name into a URL/filesystem-safe identifier:
 // lowercase, non-alphanumeric characters replaced with hyphens, consecutive
 // hyphens collapsed, leading/trailing hyphens trimmed.
@@ -20,6 +26,9 @@ import (
 // "", which is NOT a usable directory component. Callers that turn a slug into a
 // path must reject "" rather than joining it onto a base directory (that yields
 // the base directory itself, shared by every other client).
+//
+// The result is capped at MaxSlugLen characters and never starts or ends with a
+// hyphen, so it always satisfies the authkeys allowlist.
 func Slug(name string) string {
 	var b strings.Builder
 	prevHyphen := true // suppress leading hyphens
@@ -32,7 +41,13 @@ func Slug(name string) string {
 			prevHyphen = true
 		}
 	}
-	return strings.TrimRight(b.String(), "-")
+	slug := strings.TrimRight(b.String(), "-")
+	if len(slug) > MaxSlugLen {
+		// Cut, then drop the hyphen the cut may have exposed, so the value
+		// still satisfies ^[a-z0-9][a-z0-9-]{0,62}$.
+		slug = strings.TrimRight(slug[:MaxSlugLen], "-")
+	}
+	return slug
 }
 
 // Mode is how a client captures and ships a backup. The two modes are different

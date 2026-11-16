@@ -95,3 +95,58 @@ func TestRenderGivesEveryClientItsOwnJail(t *testing.T) {
 		t.Fatalf("two clients share one jail: %q", cmds[0])
 	}
 }
+
+// The slug is persisted and pasted into an authorized_keys forced command, so it
+// is validated against an allowlist rather than a denylist. These are the values
+// a denylist let through — `a",no-pty,command="sh` used to render a second
+// command= on the line, i.e. an sshd option injection from a database column.
+func TestRenderRejectsSlugsOutsideAllowlist(t *testing.T) {
+	hostile := []string{
+		`a",no-pty,command="sh`,
+		`a"`,
+		"a b",
+		"a	b",
+		"a;b",
+		"$(id)",
+		"ünïcode",
+		"A",
+		"-leading",
+		"a/b",
+		`a\b`,
+		"..",
+		".",
+		"a\x00b",
+		strings.Repeat("a", 64),
+	}
+	for _, slug := range hostile {
+		clients := []model.Client{
+			{ID: 1, Name: "evil", Slug: slug, Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: true},
+		}
+		content, skipped := Render(clients, "/srv/backups")
+		if content != Header {
+			t.Errorf("slug %q produced an authorized_keys line:\n%s", slug, content)
+		}
+		if len(skipped) != 1 {
+			t.Errorf("slug %q was not reported as skipped: %+v", slug, skipped)
+		} else if !strings.Contains(skipped[0].Reason, "slug") {
+			t.Errorf("slug %q was skipped for the wrong reason: %q", slug, skipped[0].Reason)
+		}
+	}
+
+	// Only the FIRST character must be alphanumeric, per the card's pattern, so a
+	// trailing hyphen is acceptable. model.Slug never emits one, but the column is
+	// a trust input and a hyphen cannot inject anything into the forced command.
+	good := []string{"a", "dup-a", "client-3", "a1-b2", "trailing-", strings.Repeat("a", 63)}
+	for _, slug := range good {
+		clients := []model.Client{
+			{ID: 1, Name: "ok", Slug: slug, Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: true},
+		}
+		content, skipped := Render(clients, "/srv/backups")
+		if len(skipped) != 0 {
+			t.Errorf("valid slug %q was skipped: %+v", slug, skipped)
+		}
+		if !strings.Contains(content, `command="rrsync /srv/backups/`+slug+`"`) {
+			t.Errorf("valid slug %q did not render its jail:\n%s", slug, content)
+		}
+	}
+}
