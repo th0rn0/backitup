@@ -40,12 +40,32 @@ func TestUnparseableOffsiteTimestampFailsClosed(t *testing.T) {
 		t.Fatalf("list = %+v, want only the readable row: the corrupt one must be skipped, never dated year 1", objs)
 	}
 
-	// With only a corrupt row left, LatestOffsite reports the error instead of a
-	// zero time that would look like "never uploaded" or "uploaded in year 1".
+	// LatestOffsite drives the per-client upload schedule, so a corrupt row must
+	// be skipped rather than turned into an error: an error there is logged by
+	// RunOffsiteOnce and the client's offsite uploads stop silently. The newest
+	// readable row is the answer.
+	last, err := st.LatestOffsite(ctx, id)
+	if err != nil {
+		t.Fatalf("LatestOffsite: %v (a corrupt row must be skipped, not reported as an error that stops that client's uploads)", err)
+	}
+	if last == nil {
+		t.Fatalf("LatestOffsite = nil, want the readable row %v", good)
+	}
+	if !last.Equal(good) {
+		t.Fatalf("LatestOffsite = %v, want %v (the corrupt row must be skipped, wherever it sorts)", last, good)
+	}
+
+	// With only a corrupt row left there is no readable time at all: (nil, nil)
+	// reads as "never offsited", i.e. due now — the safe direction, and the
+	// dedupe path makes the extra upload cheap.
 	if _, err := st.db.Exec(`DELETE FROM offsite_objects WHERE snapshot_id='good'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.LatestOffsite(ctx, id); err == nil {
-		t.Fatal("LatestOffsite swallowed an unparseable uploaded_at")
+	last, err = st.LatestOffsite(ctx, id)
+	if err != nil {
+		t.Fatalf("LatestOffsite with only a corrupt row: %v", err)
+	}
+	if last != nil {
+		t.Fatalf("LatestOffsite = %v, want nil (nothing readable reads as never offsited)", last)
 	}
 }

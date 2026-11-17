@@ -154,7 +154,18 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, _ := s.st.ListRuns(ctx, c.ID, 20)
 	offsiteRuns, _ := s.st.ListOffsiteRuns(ctx, c.ID, 20)
-	offsiteObjects, _ := s.st.ListOffsiteObjects(ctx, c.ID)
+	allObjects, _ := s.st.ListOffsiteObjects(ctx, c.ID)
+	// Dedup records are not offsite objects: they name no remote path of their
+	// own, are never verified, and Download/Delete would address a file that was
+	// never uploaded (rclone always errors). Keep them out of the table, the
+	// missing-local list and the object count/size.
+	offsiteObjects := make([]model.OffsiteObject, 0, len(allObjects))
+	for _, o := range allObjects {
+		if o.DedupOf != "" {
+			continue
+		}
+		offsiteObjects = append(offsiteObjects, o)
+	}
 	allRemotes, _ := s.st.ListRemotes(ctx)
 	var latest *model.Run
 	if len(runs) > 0 {
