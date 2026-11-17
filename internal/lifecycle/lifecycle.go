@@ -470,7 +470,13 @@ func checkStaleAlert(ctx context.Context, d Deps, c model.Client) {
 	if err != nil {
 		return
 	}
-	h := model.DeriveHealth(run, time.Duration(c.ExpectedIntervalSecs)*time.Second, d.now())
+	// Age the alert off the last SUCCESSFUL run, not the newest row: a client
+	// posting nothing but overlaps for a week is stale, not healthy (S8).
+	lastOK, err := d.Store.LastSuccessfulRun(ctx, c.ID)
+	if err != nil {
+		return
+	}
+	h := model.DeriveHealth(run, lastOK, time.Duration(c.ExpectedIntervalSecs)*time.Second, d.now())
 	if h != model.HealthStale && h != model.HealthNever {
 		delete(d.staleAlerted, c.ID) // recovered — reset so a future stale re-alerts
 		return

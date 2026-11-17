@@ -49,7 +49,7 @@ func TestClientAndRunRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("latest run (empty): %v", err)
 	}
-	if h := model.DeriveHealth(latest, time.Hour, time.Now()); h != model.HealthNever {
+	if h := model.DeriveHealth(latest, nil, time.Hour, time.Now()); h != model.HealthNever {
 		t.Fatalf("empty client health = %q, want never", h)
 	}
 
@@ -67,8 +67,58 @@ func TestClientAndRunRoundTrip(t *testing.T) {
 	if latest.Bytes != 4200 || latest.Status != model.StatusOK {
 		t.Fatalf("run round-trip mismatch: %+v", latest)
 	}
-	if h := model.DeriveHealth(latest, time.Hour, time.Now()); h != model.HealthOK {
+	if h := model.DeriveHealth(latest, latest, time.Hour, time.Now()); h != model.HealthOK {
 		t.Fatalf("fresh ok run health = %q, want ok", h)
+	}
+}
+
+// LastSuccessfulRun is what health ages from, so it must skip the rows that are
+// not backups: a newer overlap or failure cannot be the answer (S8).
+func TestLastSuccessfulRunIgnoresNonSuccessRows(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+
+	id, err := st.CreateClient(ctx, model.Client{Name: "overlapper", Mode: model.ModeRsync, Enabled: true})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if got, err := st.LastSuccessfulRun(ctx, id); err != nil || got != nil {
+		t.Fatalf("no runs: got %+v, %v; want nil, nil", got, err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	record := func(status model.RunStatus, ago time.Duration, snap string) {
+		t.Helper()
+		fin := now.Add(-ago)
+		if _, err := st.RecordRun(ctx, model.Run{
+			ClientID: id, StartedAt: fin.Add(-time.Minute), FinishedAt: fin,
+			Status: status, SnapshotID: snap,
+		}); err != nil {
+			t.Fatalf("record %s run: %v", status, err)
+		}
+	}
+	record(model.StatusOK, 5*time.Hour, "snap-old")
+	record(model.StatusOverlap, 2*time.Minute, "snap-overlap")
+	record(model.StatusFailed, time.Minute, "snap-failed")
+
+	got, err := st.LastSuccessfulRun(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("LastSuccessfulRun = %+v, %v; want the 5h-old ok run", got, err)
+	}
+	if got.SnapshotID != "snap-old" || got.Status != model.StatusOK {
+		t.Fatalf("LastSuccessfulRun = %+v; want the ok run snap-old", got)
+	}
+
+	all, err := st.LastSuccessfulRunAllClients(ctx)
+	if err != nil {
+		t.Fatalf("LastSuccessfulRunAllClients: %v", err)
+	}
+	if run := all[id]; run == nil || run.SnapshotID != "snap-old" {
+		t.Fatalf("LastSuccessfulRunAllClients[%d] = %+v; want snap-old", id, run)
 	}
 }
 
