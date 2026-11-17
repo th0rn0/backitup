@@ -57,6 +57,10 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 	if err != nil {
 		return dashboardView{}, err
 	}
+	lastOKRuns, err := s.st.LastSuccessfulRunAllClients(ctx)
+	if err != nil {
+		return dashboardView{}, err
+	}
 	latestOffsites, err := s.st.LatestOffsiteAllClients(ctx)
 	if err != nil {
 		return dashboardView{}, err
@@ -65,7 +69,7 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 	var v dashboardView
 	for _, c := range clients {
 		latest := latestRuns[c.ID]
-		h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, now)
+		h := model.DeriveHealth(latest, lastOKRuns[c.ID], time.Duration(c.ExpectedIntervalSecs)*time.Second, now)
 		row := clientRow{
 			ID: c.ID, Name: c.Name, Slug: c.Slug, Mode: string(c.Mode),
 			Health: string(h), HealthLabel: healthLabel(h), Icon: healthIcon(h),
@@ -80,6 +84,10 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 			row.LastBackup, row.Size = "in progress", "…"
 		case latest.Status == model.StatusFailed:
 			row.LastBackup, row.Size = "FAILED "+relTime(now.Sub(latest.FinishedAt)), "—"
+		case latest.Status == model.StatusOverlap:
+			// An overlap is not a backup: name it instead of presenting the
+			// newest trigger as if it had captured anything (S8).
+			row.LastBackup, row.Size = "overlap "+relTime(now.Sub(latest.FinishedAt)), "—"
 		default:
 			row.LastBackup, row.Size = relTime(now.Sub(latest.FinishedAt)), humanBytes(latest.Bytes)
 		}

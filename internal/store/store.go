@@ -505,6 +505,56 @@ func (s *Store) LatestRunAllClients(ctx context.Context) (map[int64]*model.Run, 
 	return m, rows.Err()
 }
 
+// LastSuccessfulRun returns the most recent run that actually SUCCEEDED for a
+// client, or (nil, nil) if none ever has.
+//
+// Distinct from LatestRun on purpose. An "overlap" row (cron fired while the
+// previous backup was still running) or a "failed" row is the newest row but not
+// a backup, so health is aged from this one instead (S8). Ordered by finished_at
+// because that is the timestamp staleness is measured against.
+func (s *Store) LastSuccessfulRun(ctx context.Context, clientID int64) (*model.Run, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, client_id, started_at, finished_at, status, bytes, files, snapshot_id, log_tail
+		FROM runs WHERE client_id = ? AND status = ?
+		ORDER BY finished_at DESC LIMIT 1`, clientID, string(model.StatusOK))
+	r, err := scanRun(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// LastSuccessfulRunAllClients returns each client's most recent successful run
+// in a single query, keyed by client ID. Clients with no successful run are
+// absent from the map.
+func (s *Store) LastSuccessfulRunAllClients(ctx context.Context) (map[int64]*model.Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.id, r.client_id, r.started_at, r.finished_at, r.status, r.bytes, r.files, r.snapshot_id, r.log_tail
+		FROM runs r
+		INNER JOIN (
+			SELECT client_id, MAX(finished_at) AS finished_at FROM runs
+			WHERE status = ? GROUP BY client_id
+		) ok ON r.client_id = ok.client_id AND r.finished_at = ok.finished_at`,
+		string(model.StatusOK))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64]*model.Run)
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		rc := r
+		m[r.ClientID] = &rc
+	}
+	return m, rows.Err()
+}
+
 // LatestOffsiteAllClients returns the most recent offsite upload time for every
 // client in a single query, keyed by client ID.
 func (s *Store) LatestOffsiteAllClients(ctx context.Context) (map[int64]*time.Time, error) {

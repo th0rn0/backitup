@@ -160,7 +160,12 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	if len(runs) > 0 {
 		latest = &runs[0]
 	}
-	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
+	// Health ages from the last SUCCESSFUL run, not the newest row (S8).
+	lastOK, err := s.st.LastSuccessfulRun(ctx, c.ID)
+	if err != nil {
+		log.Printf("getClient: last successful run for client=%q: %v", c.Name, err)
+	}
+	h := model.DeriveHealth(latest, lastOK, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
 
 	// Load local snapshots from the hot store (best-effort — the directory may
 	// not exist yet, and a client without a usable slug has none to list).
