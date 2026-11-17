@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -219,6 +220,148 @@ func warnOrphanedRows(ctx context.Context, q querier) error {
 		"as they were; delete or re-link them, because the dashboard and the pruners read every row.",
 		total, strings.Join(examples, "; "))
 	return nil
+}
+
+// ── debris from an interrupted migration ────────────────────────────────────
+//
+// Before migrations were transactional (see the history this file's steps
+// replace), the runs table was rebuilt by running CREATE runs_new / INSERT /
+// DROP TABLE runs / ALTER TABLE runs_new RENAME TO runs one statement at a time.
+// A process that died between the DROP and the RENAME left every run in
+// `runs_new` and none in `runs`. That build also kept no user_version, so nothing
+// records the interruption: the database opens cleanly, the dashboard shows an
+// empty history, and the rows sit in a table no query mentions. The same shape
+// can be left today by an interrupted swap under the name `<table>__canonical`,
+// although the steps being transactional makes that unreachable from this build.
+//
+// These tables are reported, never repaired. Which of two tables is current is a
+// judgement only the operator can make; copying rows across automatically would
+// fabricate history if it guessed wrong. The receipt for that decision is one
+// warning line at startup.
+
+// strayTable is a table an interrupted migration left behind: its name, and the
+// schema.sql table whose history it may be holding ("" when no table of that name
+// is defined, in which case only the stray itself is named).
+type strayTable struct {
+	name string
+	live string
+}
+
+// warnStrandedMigrationTables reports, one line per table, every table that
+// schema.sql does not define and that only a crashed migration could have
+// created, along with how many rows it still holds.
+//
+// It is called after migrate() has returned — outside every step transaction —
+// and is strictly read-only: one read of sqlite_master, then one COUNT(*) per
+// stray table. It cannot fail its caller: an error is logged and startup
+// continues, because refusing to start over a diagnostic would turn a stale table
+// into an outage. A database with no such table produces no output at all, so a
+// line in the log always means rows really are stranded.
+func warnStrandedMigrationTables(ctx context.Context, db *sql.DB) {
+	strays, err := strandedTables(ctx, db)
+	if err != nil {
+		log.Printf("store: could not check for tables left behind by an interrupted migration: %v", err)
+		return
+	}
+	for _, stray := range strays {
+		var rows int64
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+quoteIdent(stray.name)).Scan(&rows); err != nil {
+			log.Printf("store: table %q looks like debris from an interrupted migration but its rows "+
+				"could not be counted: %v", stray.name, err)
+			continue
+		}
+		warnStrandedTable(stray, rows)
+	}
+}
+
+// strandedTables returns the tables in the database that schema.sql does not
+// define and that only an interrupted migration could have created, oldest name
+// first so the log order is stable.
+func strandedTables(ctx context.Context, db *sql.DB) ([]strayTable, error) {
+	sch, err := parseSchema(schemaSQL)
+	if err != nil {
+		return nil, err
+	}
+	defined := make(map[string]struct{}, len(sch.tables))
+	for _, t := range sch.tables {
+		defined[t.name] = struct{}{}
+	}
+	rows, err := db.QueryContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("read sqlite_master: %w", err)
+	}
+	defer rows.Close()
+	var out []strayTable
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("read sqlite_master: %w", err)
+		}
+		if _, ok := defined[name]; ok {
+			continue // a table this backitup uses
+		}
+		live, ok := migrationDebrisOf(name)
+		if !ok {
+			continue // the operator's own table: not ours to comment on
+		}
+		if _, ok := defined[live]; !ok {
+			live = "" // nothing this schema knows: name only the stray
+		}
+		out = append(out, strayTable{name: name, live: live})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read sqlite_master: %w", err)
+	}
+	return out, nil
+}
+
+// migrationDebrisOf reports whether a table name is one an interrupted migration
+// can leave behind, and which table it was standing in for. Exactly two shapes
+// have ever existed: `runs_new`, the temporary name the pre-transactional swap
+// used, and `<table>__canonical`, the one the swap uses now. Nothing else
+// qualifies — warning about every table this schema does not know would fire on
+// tables an operator created on purpose, and a warning that is always there is a
+// warning nobody reads.
+func migrationDebrisOf(name string) (live string, ok bool) {
+	if name == "runs_new" {
+		return "runs", true
+	}
+	if base, found := strings.CutSuffix(name, "__canonical"); found && base != "" {
+		return base, true
+	}
+	return "", false
+}
+
+// warnStrandedTable reports one stranded table. It is one line so it is greppable
+// in startup output ("WARNING: table "runs_new" holds"), and it says plainly that
+// nothing was copied: the operator must not read a silent rescue into the fact
+// that the server came up.
+func warnStrandedTable(stray strayTable, rows int64) {
+	if stray.live == "" {
+		warnf("WARNING: table %q holds %d row(s) that backitup does not read: it was left behind by an "+
+			"older backitup that crashed in the middle of a schema migration (migrations were not "+
+			"transactional then), and no query in this build mentions it. Nothing was renamed, dropped "+
+			"or copied. Inspect it by hand and restore what it holds yourself — backitup will not, "+
+			"because it cannot tell which of two tables is current and a wrong guess would invent history.",
+			stray.name, rows)
+		return
+	}
+	warnf("WARNING: table %q holds %d row(s) that backitup does not read: it was left behind by an "+
+		"older backitup that crashed in the middle of a schema migration (migrations were not "+
+		"transactional then), and every query — the dashboard, the pruners, the API — reads %q "+
+		"instead, so this history is invisible while the server otherwise runs normally. Nothing was "+
+		"renamed, dropped or copied into %q: backitup cannot tell which of the two tables is current "+
+		"and a wrong guess would invent history. Inspect both by hand and, if %q is the current one, "+
+		"restore it yourself (e.g. copy its rows into %q); backitup will not.",
+		stray.name, rows, stray.live, stray.live, stray.name, stray.live)
+}
+
+// quoteIdent quotes a table or column name for interpolation into SQL. The names
+// come from sqlite_master, but a quoted identifier costs nothing and keeps a name
+// containing a quote from turning a diagnostic into a syntax error.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // canonicaliseTable rebuilds one table to the definition schema.sql gives it, or
