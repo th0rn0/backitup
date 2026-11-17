@@ -286,6 +286,78 @@ func TestPostStatusFailsRsyncOKWithoutSnapshotID(t *testing.T) {
 	}
 }
 
+// The bundled client's actual call shape: POST running, then POST the final
+// status with run_id, started_at, finished_at — and, for tar.gz, no
+// snapshot_id at all (backitup-recv named the archive). Both modes must be
+// recorded as ok when the data really is there; this is the shape that would
+// break first if the check were too strict.
+func TestPostStatusCorroboratesRealClientSequence(t *testing.T) {
+	cases := []struct {
+		name string
+		mode model.Mode
+		// prepare lays down what the backup run left on the hot store and returns
+		// the snapshot_id the client reports ("" for tar.gz).
+		prepare func(t *testing.T, srv *Server, cl model.Client) string
+	}{
+		{
+			name: "tar.gz reports no snapshot_id",
+			mode: model.ModeTarGz,
+			prepare: func(t *testing.T, srv *Server, cl model.Client) string {
+				tarGzPath(t, srv, cl, "backup-20260101T000000Z-000.tar.gz", "streamed payload")
+				return ""
+			},
+		},
+		{
+			name: "rsync reports the snapshot directory",
+			mode: model.ModeRsync,
+			prepare: func(t *testing.T, srv *Server, cl model.Client) string {
+				dir, err := srv.clientDir(cl)
+				if err != nil {
+					t.Fatalf("clientDir: %v", err)
+				}
+				id := "20260101T000000Z"
+				if err := os.MkdirAll(filepath.Join(dir, "snapshots", id), 0o755); err != nil {
+					t.Fatalf("mkdir snapshot: %v", err)
+				}
+				return id
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, srv, cl := statusStack(t, "real-"+string(tc.mode), tc.mode)
+			snapshotID := tc.prepare(t, srv, cl)
+
+			// 1. the client announces the run.
+			runID := postStatusFor(t, srv, cl, `{"status":"running"}`)
+			// 2. the client reports the outcome: same row, real timing, and (for
+			// tar.gz) no snapshot name.
+			startedAt := time.Now().UTC().Add(-3 * time.Minute).Format(time.RFC3339)
+			finishedAt := time.Now().UTC().Format(time.RFC3339)
+			body := `{"status":"ok","run_id":` + itoa(runID) + `,"bytes":4096,"files":3,` +
+				`"snapshot_id":"` + snapshotID + `",` +
+				`"started_at":"` + startedAt + `","finished_at":"` + finishedAt + `"}`
+			r := httptest.NewRequest("POST", "/api/v1/status", strings.NewReader(body))
+			r = r.WithContext(context.WithValue(r.Context(), clientCtxKey, &cl))
+			w := httptest.NewRecorder()
+			srv.postStatus(w, r)
+			if w.Code != 201 {
+				t.Fatalf("final postStatus = %d (%s), want 201", w.Code, w.Body.String())
+			}
+
+			run := storedRun(t, st, runID)
+			if run.Status != model.StatusOK {
+				t.Fatalf("status = %q for a real backup reported the way the client does, want %q (log_tail: %q)",
+					run.Status, model.StatusOK, run.LogTail)
+			}
+			if run.Bytes != 4096 || run.Files != 3 || run.SnapshotID != snapshotID {
+				t.Fatalf("run mangled: %+v", run)
+			}
+		})
+	}
+}
+
 func itoa(n int64) string {
 	if n == 0 {
 		return "0"
