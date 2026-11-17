@@ -94,10 +94,10 @@ func (s *Server) postSnapshotDelete(w http.ResponseWriter, r *http.Request) {
 
 	if err := sm.DeleteSnapshot(ctx, clientDir, snapshotID); err != nil {
 		log.Printf("snapshot delete: client=%s snap=%s: %v", c.Name, snapshotID, err)
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=delete+failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=delete+failed", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=snapshot+deleted", http.StatusSeeOther)
+	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=snapshot+deleted", http.StatusSeeOther)
 }
 
 // getOffsiteDownload streams an offsite object through the server via rclone cat.
@@ -121,7 +121,7 @@ func (s *Server) getOffsiteDownload(w http.ResponseWriter, r *http.Request) {
 
 	offsiteDir := c.OffsiteDir
 	if offsiteDir == "" {
-		offsiteDir = model.Slug(c.Name)
+		offsiteDir = c.Slug
 	}
 	var objectName, objectPath string
 	if c.Mode == model.ModeRsync {
@@ -155,7 +155,7 @@ func (s *Server) postOffsiteObjectDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if c.OffsiteRemote == "" {
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=offsite+not+configured", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=offsite+not+configured", http.StatusSeeOther)
 		return
 	}
 	snapshotID := r.PathValue("snapshotID")
@@ -166,7 +166,7 @@ func (s *Server) postOffsiteObjectDelete(w http.ResponseWriter, r *http.Request)
 
 	offsiteDir := c.OffsiteDir
 	if offsiteDir == "" {
-		offsiteDir = model.Slug(c.Name)
+		offsiteDir = c.Slug
 	}
 	var objectPath string
 	if c.Mode == model.ModeRsync {
@@ -178,13 +178,13 @@ func (s *Server) postOffsiteObjectDelete(w http.ResponseWriter, r *http.Request)
 	rclone := lifecycle.NewRclone(s.rcloneConfig)
 	if err := rclone.Delete(ctx, c.OffsiteRemote, objectPath); err != nil {
 		log.Printf("offsite object delete: client=%s snap=%s: %v", c.Name, snapshotID, err)
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=offsite+delete+failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=offsite+delete+failed", http.StatusSeeOther)
 		return
 	}
 	if err := s.st.DeleteOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote); err != nil {
 		log.Printf("offsite object delete: db record: %v", err)
 	}
-	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=offsite+object+deleted", http.StatusSeeOther)
+	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=offsite+object+deleted", http.StatusSeeOther)
 }
 
 // resolveClientAndMode loads the client and its ServerMode for snapshot operations.
@@ -198,7 +198,11 @@ func (s *Server) resolveClientAndMode(w http.ResponseWriter, r *http.Request, ct
 		http.Error(w, "unknown mode", http.StatusInternalServerError)
 		return nil, nil, "", false
 	}
-	clientDir := filepath.Join(s.backupBaseDir, model.Slug(c.Name))
+	clientDir, err := s.clientDir(*c)
+	if err != nil {
+		http.Error(w, "client has no usable storage slug", http.StatusInternalServerError)
+		return nil, nil, "", false
+	}
 	return c, sm, clientDir, true
 }
 
@@ -292,10 +296,10 @@ func (s *Server) postBulkDeleteSnapshots(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if len(errs) > 0 {
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=some+deletes+failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=some+deletes+failed", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=snapshots+deleted", http.StatusSeeOther)
+	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=snapshots+deleted", http.StatusSeeOther)
 }
 
 // postBulkDeleteOffsiteObjects deletes multiple offsite objects in one request.
@@ -317,12 +321,12 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if c.OffsiteRemote == "" {
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=offsite+not+configured", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=offsite+not+configured", http.StatusSeeOther)
 		return
 	}
 	offsiteDir := c.OffsiteDir
 	if offsiteDir == "" {
-		offsiteDir = model.Slug(c.Name)
+		offsiteDir = c.Slug
 	}
 	rclone := lifecycle.NewRclone(s.rcloneConfig)
 	var errs []string
@@ -345,10 +349,10 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 		}
 	}
 	if len(errs) > 0 {
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=some+offsite+deletes+failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=some+offsite+deletes+failed", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=offsite+objects+deleted", http.StatusSeeOther)
+	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=offsite+objects+deleted", http.StatusSeeOther)
 }
 
 // rcloneCatStream pipes a remote object to w using rclone cat.

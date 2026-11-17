@@ -23,8 +23,8 @@ func TestRenderPerModeCommands(t *testing.T) {
 	rsyncKey := freshKey(t)
 	targzKey := freshKey(t)
 	clients := []model.Client{
-		{ID: 1, Name: "rsync-client", Mode: model.ModeRsync, SSHPubKey: rsyncKey, Enabled: true},
-		{ID: 2, Name: "targz-client", Mode: model.ModeTarGz, SSHPubKey: targzKey, Enabled: true},
+		{ID: 1, Name: "rsync-client", Slug: "rsync-client", Mode: model.ModeRsync, SSHPubKey: rsyncKey, Enabled: true},
+		{ID: 2, Name: "targz-client", Slug: "targz-client", Mode: model.ModeTarGz, SSHPubKey: targzKey, Enabled: true},
 	}
 	content, skipped := Render(clients, "/srv/backups")
 	if len(skipped) != 0 {
@@ -43,9 +43,9 @@ func TestRenderPerModeCommands(t *testing.T) {
 
 func TestRenderSkipsDisabledAndEmpty(t *testing.T) {
 	clients := []model.Client{
-		{ID: 1, Name: "disabled-client", Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: false}, // disabled
-		{ID: 2, Name: "nokey-client", Mode: model.ModeTarGz, SSHPubKey: "", Enabled: true},              // no key
-		{ID: 3, Name: "kept-client", Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: true},      // kept
+		{ID: 1, Name: "disabled-client", Slug: "disabled-client", Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: false}, // disabled
+		{ID: 2, Name: "nokey-client", Slug: "nokey-client", Mode: model.ModeTarGz, SSHPubKey: "", Enabled: true},                 // no key
+		{ID: 3, Name: "kept-client", Slug: "kept-client", Mode: model.ModeRsync, SSHPubKey: freshKey(t), Enabled: true},          // kept
 	}
 	content, _ := Render(clients, "/srv/backups")
 	if strings.Contains(content, "/srv/backups/disabled-client") || strings.Contains(content, "/srv/backups/nokey-client") {
@@ -69,7 +69,7 @@ func TestRenderRejectsInjection(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			clients := []model.Client{{ID: 1, Name: "inject", Mode: model.ModeRsync, SSHPubKey: tc.key, Enabled: true}}
+			clients := []model.Client{{ID: 1, Name: "inject", Slug: "inject", Mode: model.ModeRsync, SSHPubKey: tc.key, Enabled: true}}
 			content, skipped := Render(clients, "/srv/backups")
 			if len(skipped) != 1 || skipped[0].ClientID != 1 {
 				t.Fatalf("expected client 1 skipped, got %+v", skipped)
@@ -88,8 +88,8 @@ func TestRenderRejectsInjection(t *testing.T) {
 func TestRenderResilientToOneBadRow(t *testing.T) {
 	// A poisoned row must not break auth for the good clients (outside-voice).
 	clients := []model.Client{
-		{ID: 1, Name: "bad-client", Mode: model.ModeRsync, SSHPubKey: "garbage", Enabled: true},
-		{ID: 2, Name: "good-client", Mode: model.ModeTarGz, SSHPubKey: freshKey(t), Enabled: true},
+		{ID: 1, Name: "bad-client", Slug: "bad-client", Mode: model.ModeRsync, SSHPubKey: "garbage", Enabled: true},
+		{ID: 2, Name: "good-client", Slug: "good-client", Mode: model.ModeTarGz, SSHPubKey: freshKey(t), Enabled: true},
 	}
 	content, skipped := Render(clients, "/srv/backups")
 	if len(skipped) != 1 {
@@ -101,7 +101,7 @@ func TestRenderResilientToOneBadRow(t *testing.T) {
 }
 
 func TestRenderSkipsUnknownMode(t *testing.T) {
-	clients := []model.Client{{ID: 1, Name: "weird-mode", Mode: "weird", SSHPubKey: freshKey(t), Enabled: true}}
+	clients := []model.Client{{ID: 1, Name: "weird-mode", Slug: "weird-mode", Mode: "weird", SSHPubKey: freshKey(t), Enabled: true}}
 	content, skipped := Render(clients, "/srv/backups")
 	if len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "unknown mode") {
 		t.Fatalf("expected unknown-mode skip, got %+v", skipped)

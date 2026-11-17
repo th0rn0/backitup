@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -292,8 +293,11 @@ func TestRotateClientUnknownSlug(t *testing.T) {
 	}
 }
 
-// TestRotateClientStoreError verifies that a DB failure after the client lookup
-// returns 500 rather than panicking.
+// TestRotateClientStoreError verifies that with an unusable database the request
+// is refused at the door rather than executed against a half-live server.
+// requireAdmin now re-checks the session's account on every request, so a dead
+// DB fails closed: the caller is bounced to /login instead of reaching the
+// handler (previously this reached the rotate path and returned 500).
 func TestRotateClientStoreError(t *testing.T) {
 	st, ts, _ := ingestStack(t)
 	ctx := context.Background()
@@ -304,9 +308,9 @@ func TestRotateClientStoreError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	c := loggedInClient(t, st, ts)
+	c := noRedirectClientWithSession(t, st, ts)
 
-	// Close the underlying store so the RotateClientCreds call fails.
+	// Close the underlying store so the session cannot be re-validated.
 	_ = st.Close()
 
 	resp, err := c.PostForm(ts.URL+"/clients/storedown/rotate", url.Values{"confirm": {"1"}})
@@ -314,9 +318,29 @@ func TestRotateClientStoreError(t *testing.T) {
 		t.Fatalf("post: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("store-down rotate = %d, want 500", resp.StatusCode)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
+		t.Fatalf("store-down rotate = %d -> %q, want 303 -> /login", resp.StatusCode, resp.Header.Get("Location"))
 	}
+}
+
+// noRedirectClientWithSession logs in as the test admin without following the
+// post-login redirect, so handler statuses stay observable after the store dies.
+func noRedirectClientWithSession(t *testing.T, st *store.Store, ts *httptest.Server) *http.Client {
+	t.Helper()
+	setAdmin(t, st, "admin", "pw")
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := c.PostForm(ts.URL+"/login", url.Values{"username": {"admin"}, "password": {"pw"}})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login status = %d, want 303", resp.StatusCode)
+	}
+	return c
 }
 
 // TestRotateClientInvalidatesOldToken verifies that a bearer token is rejected

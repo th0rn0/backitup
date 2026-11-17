@@ -28,6 +28,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/th0rn0/backitup/internal/alert"
 	"github.com/th0rn0/backitup/internal/archiveutil"
+	"github.com/th0rn0/backitup/internal/authkeys"
 	"github.com/th0rn0/backitup/internal/mode"
 	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/store"
@@ -135,12 +136,32 @@ func RunOnce(ctx context.Context, d Deps) error {
 	return firstErr
 }
 
+func (d Deps) clientDir(c model.Client) (string, error) {
+	return clientDirIn(d.BackupBaseDir, c)
+}
+
+// clientDirIn returns the storage directory for c: baseDir/<slug>.
+//
+// Every per-client path below goes through here, so the "a directory only ever
+// comes from a persisted, safe slug" rule is enforced once rather than trusted
+// at each site. filepath.Join(baseDir, "") is baseDir — shared by everyone — so
+// an unusable slug must fail instead of resolving to a path.
+func clientDirIn(baseDir string, c model.Client) (string, error) {
+	if reason := authkeys.InvalidSlug(c.Slug); reason != "" {
+		return "", fmt.Errorf("client %d (%q) has an unusable slug: %s", c.ID, c.Name, reason)
+	}
+	return filepath.Join(baseDir, c.Slug), nil
+}
+
 func processClient(ctx context.Context, d Deps, c model.Client) error {
 	sm, ok := mode.Server(c.Mode)
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
 	}
-	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
+	clientDir, err := d.clientDir(c)
+	if err != nil {
+		return err
+	}
 
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
@@ -224,7 +245,10 @@ func uploadClient(ctx context.Context, d Deps, c model.Client) error {
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
 	}
-	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
+	clientDir, err := d.clientDir(c)
+	if err != nil {
+		return err
+	}
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)
@@ -469,7 +493,7 @@ func offsiteDir(c model.Client) string {
 	if c.OffsiteDir != "" {
 		return c.OffsiteDir
 	}
-	return model.Slug(c.Name)
+	return c.Slug
 }
 
 // verifyOffsiteObjects calls rclone lsf for the client's remote directory and
@@ -557,7 +581,10 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
 	}
-	clientDir := filepath.Join(d.BackupBaseDir, model.Slug(c.Name))
+	clientDir, err := d.clientDir(c)
+	if err != nil {
+		return err
+	}
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)

@@ -51,7 +51,18 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	name := r.PostFormValue("name")
 	mode := model.Mode(r.PostFormValue("mode"))
 	if name == "" || !mode.Valid() {
-		s.renderNewClientError(w, r,"Name is required and mode must be targz or rsync.")
+		s.renderNewClientError(w, r, "Name is required and mode must be targz or rsync.")
+		return
+	}
+	// The name becomes the client's storage directory (via its slug) and part of
+	// its sshd forced command. A name longer than a filesystem component can
+	// never get a directory, and every authorized_keys rewrite would then fail —
+	// so it is refused here, at the edge, rather than breaking SSH for the fleet.
+	if len(name) > model.MaxSlugLen {
+		s.renderNewClientError(w, r, fmt.Sprintf(
+			"Client name must be at most %d characters (this one is %d). It becomes the client's "+
+				"storage directory and part of its SSH forced command, so it has to stay short.",
+			model.MaxSlugLen, len(name)))
 		return
 	}
 
@@ -79,8 +90,27 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		Enabled:              true,
 	})
 	if err != nil {
-		// Most likely a duplicate name (UNIQUE) — report it as a form error.
-		s.renderNewClientError(w, r,"Could not create client (is the name already taken?).")
+		// A name that maps onto an existing slug, or onto none at all, must be
+		// refused: the slug IS the client's read-write backup directory.
+		var conflict *store.SlugConflictError
+		switch {
+		case errors.As(err, &conflict):
+			if conflict.Existing == name {
+				s.renderNewClientError(w, r, fmt.Sprintf(
+					"A client named %q already exists — the name is already taken.", name))
+				return
+			}
+			s.renderNewClientError(w, r, fmt.Sprintf(
+				"Storage slug %q is already used by client %q. Two names that differ only in "+
+					"punctuation, spacing or case share one directory, so choose a name that "+
+					"produces a different slug.", conflict.Slug, conflict.Existing))
+		case errors.Is(err, store.ErrEmptySlug):
+			s.renderNewClientError(w, r, fmt.Sprintf(
+				"Client name %q must contain at least one letter or digit: it becomes the "+
+					"client's storage slug (directory name).", name))
+		default:
+			s.renderNewClientError(w, r, "Could not create client (is the name already taken?).")
+		}
 		return
 	}
 
@@ -132,14 +162,20 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	}
 	h := model.DeriveHealth(latest, time.Duration(c.ExpectedIntervalSecs)*time.Second, time.Now())
 
-	// Load local snapshots from the hot store (best-effort — directory may not exist yet).
+	// Load local snapshots from the hot store (best-effort — the directory may
+	// not exist yet, and a client without a usable slug has none to list).
 	var localSnapshots []mode.Snapshot
 	var clientDir string
 	if sm, ok := mode.Server(c.Mode); ok {
-		clientDir = filepath.Join(s.backupBaseDir, model.Slug(c.Name))
-		snaps, err := sm.List(ctx, clientDir)
-		if err == nil {
-			localSnapshots = snaps
+		dir, dirErr := s.clientDir(*c)
+		if dirErr != nil {
+			log.Printf("getClient: %v; not listing local snapshots", dirErr)
+		} else {
+			clientDir = dir
+			snaps, err := sm.List(ctx, clientDir)
+			if err == nil {
+				localSnapshots = snaps
+			}
 		}
 	}
 
@@ -410,10 +446,10 @@ func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request)
 	snapshotID := r.PathValue("snapshotID")
 	if err := s.st.ForgetOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote); err != nil {
 		log.Printf("forget offsite object: client=%s snap=%s: %v", c.Name, snapshotID, err)
-		http.Redirect(w, r, "/clients/"+c.Slug()+"?err=forget+failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/clients/"+c.Slug+"?err=forget+failed", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/clients/"+c.Slug()+"?msg=entry+removed", http.StatusSeeOther)
+	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=entry+removed", http.StatusSeeOther)
 }
 
 // postUpdateClientOffsite changes the offsite_remote for an existing client.
@@ -583,6 +619,14 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 	defer akCancel()
 	if err := s.regenAuthorizedKeys(akCtx); err != nil {
 		log.Printf("authkeys regenerate failed after delete client %d: %v", c.ID, err)
+		// The row is gone but the file may not be: if the rewrite did not land,
+		// sshd still accepts the deleted client's key. That is a security
+		// failure, so it goes to the operator as an error page, not a log line
+		// followed by a "success" redirect.
+		http.Error(w, "The client was deleted, but the SSH authorized_keys file could not be "+
+			"regenerated: "+err.Error()+". Its SSH key may still be accepted until the file is "+
+			"rewritten — fix the reported problem and restart the server.", http.StatusInternalServerError)
+		return
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -635,6 +679,13 @@ func (s *Server) renderNewClientError(w http.ResponseWriter, r *http.Request, ms
 
 // regenAuthorizedKeys rewrites the sshd authorized_keys file from the current
 // client list, atomically (D4). A no-op if no path is configured.
+//
+// Directory setup and file rewriting are deliberately not all-or-nothing: a
+// client whose backup directory cannot be created (an over-long or otherwise
+// unusable slug from an older row) is reported, but the file is still rewritten
+// from the current rows. Aborting the rewrite on the first bad directory would
+// freeze authorization for the whole fleet — and would keep a just-deleted
+// client's key live, which is exactly the state deletion exists to end.
 func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 	if s.authKeysPath == "" {
 		return nil
@@ -650,23 +701,35 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 	// run: rrsync (rsync mode) locks its jail root on connect, and rsync won't
 	// create the missing snapshots/ parent. tar.gz's receiver mkdir's as needed,
 	// but pre-creating is harmless and keeps the layout predictable.
+	var dirErrs error
 	for _, c := range clients {
 		if !c.Enabled {
 			continue
 		}
-		dir := filepath.Join(s.backupBaseDir, model.Slug(c.Name))
+		// No usable slug, no directory: MkdirAll on the base dir would silently
+		// invent a shared jail. authkeys.Render withholds this client's key for
+		// the same reason, so skipping the mkdir keeps the two consistent.
+		dir, err := s.clientDir(c)
+		if err != nil {
+			log.Printf("authkeys: %v; skipping directory setup", err)
+			continue
+		}
 		if c.Mode == model.ModeRsync {
 			dir = filepath.Join(dir, "snapshots")
 		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create client dir %s: %w", dir, err)
+			log.Printf("authkeys: client %d (%q): cannot create %s: %v", c.ID, c.Name, dir, err)
+			dirErrs = errors.Join(dirErrs, fmt.Errorf("create client dir %s: %w", dir, err))
 		}
 	}
 	content, skipped := authkeys.Render(clients, s.backupBaseDir)
 	for _, sk := range skipped {
 		log.Printf("authkeys: skipped client %d: %s", sk.ClientID, sk.Reason)
 	}
-	return authkeys.WriteAtomic(s.authKeysPath, content)
+	if err := authkeys.WriteAtomic(s.authKeysPath, content); err != nil {
+		return errors.Join(dirErrs, err)
+	}
+	return dirErrs
 }
 
 // apiBase returns the control-channel base URL for use in generated docker

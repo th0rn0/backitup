@@ -12,9 +12,23 @@ import (
 	"time"
 )
 
+// MaxSlugLen is the longest storage slug the system will produce or accept. A
+// slug becomes a directory name and part of an sshd forced command, so it is
+// kept to a short, plain, lowercase component — the same ceiling the authkeys
+// allowlist enforces, and well inside every filesystem's NAME_MAX.
+const MaxSlugLen = 63
+
 // Slug converts a client name into a URL/filesystem-safe identifier:
 // lowercase, non-alphanumeric characters replaced with hyphens, consecutive
 // hyphens collapsed, leading/trailing hyphens trimmed.
+//
+// A name made entirely of stripped characters (".", "..", "/", "....") yields
+// "", which is NOT a usable directory component. Callers that turn a slug into a
+// path must reject "" rather than joining it onto a base directory (that yields
+// the base directory itself, shared by every other client).
+//
+// The result is capped at MaxSlugLen characters and never starts or ends with a
+// hyphen, so it always satisfies the authkeys allowlist.
 func Slug(name string) string {
 	var b strings.Builder
 	prevHyphen := true // suppress leading hyphens
@@ -27,7 +41,13 @@ func Slug(name string) string {
 			prevHyphen = true
 		}
 	}
-	return strings.TrimRight(b.String(), "-")
+	slug := strings.TrimRight(b.String(), "-")
+	if len(slug) > MaxSlugLen {
+		// Cut, then drop the hyphen the cut may have exposed, so the value
+		// still satisfies ^[a-z0-9][a-z0-9-]{0,62}$.
+		slug = strings.TrimRight(slug[:MaxSlugLen], "-")
+	}
+	return slug
 }
 
 // Mode is how a client captures and ships a backup. The two modes are different
@@ -44,9 +64,6 @@ const (
 )
 
 func (m Mode) Valid() bool { return m == ModeTarGz || m == ModeRsync }
-
-// Slug returns the URL/filesystem-safe identifier for this client.
-func (c Client) Slug() string { return Slug(c.Name) }
 
 // RunStatus is the outcome of a single client backup run, as reported back over
 // the control channel. "overlap" means a prior run of the same client was still
@@ -76,8 +93,15 @@ const (
 // Client is a single backup job: one source directory on one host, identified by
 // a server-issued SSH key (data channel) + bearer token (control channel).
 type Client struct {
-	ID          int64
-	Name        string // unique, human label, e.g. "laptop-docs"
+	ID   int64
+	Name string // unique, human label, e.g. "laptop-docs"
+
+	// Slug is the unique, server-derived storage identifier for this client and
+	// the ONLY source of its directory (backups/<Slug>) and of its default
+	// offsite prefix. It is computed once, on create, and persisted: deriving it
+	// from Name on demand let two clients ("dup a", "dup-a", "Dup_A") share one
+	// read-write SSH jail. Never recompute it from Name.
+	Slug        string
 	Mode        Mode
 	SourceLabel string // descriptive only; the real path lives in the host's docker run
 

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,7 @@ func Open(dsn string) (*Store, error) {
 	// the "duplicate column name" error that fires when the column already exists.
 	for _, migration := range []string{
 		`ALTER TABLE clients ADD COLUMN version               INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE clients ADD COLUMN slug                  TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN skip_symlinks         INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE clients ADD COLUMN offsite_dir           TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN offsite_interval_secs INTEGER NOT NULL DEFAULT 0`,
@@ -66,6 +68,18 @@ func Open(dsn string) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
+	}
+	// slug migration: derive a unique storage id for rows that predate the
+	// column, then let the database enforce uniqueness from here on. The
+	// backfill must run BEFORE the index, because every existing row starts at
+	// the same '' default.
+	if err := backfillClientSlugs(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_slug ON clients (slug)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS users (
 		id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,7 +157,182 @@ func (s *Store) Close() error { return s.db.Close() }
 
 const rfc3339 = time.RFC3339Nano
 
-// CreateClient inserts a client and returns its assigned ID.
+// ErrEmptySlug is returned by CreateClient when the client name contains no
+// character that survives slugging ("..", ".", "/", "...."). Such a name has no
+// valid directory component of its own, and joining "" onto the backup base dir
+// would hand the client the directory every other client lives in.
+var ErrEmptySlug = errors.New(`client name contains no letters or digits, so it has no storage slug`)
+
+// SlugConflictError reports a create that would have reused another client's
+// slug — and therefore its read-write backup directory.
+type SlugConflictError struct {
+	Slug     string // the computed slug
+	Existing string // Name of the client that already owns it
+}
+
+func (e *SlugConflictError) Error() string {
+	if e.Existing == "" {
+		return fmt.Sprintf("slug %q is already taken by another client", e.Slug)
+	}
+	return fmt.Sprintf("slug %q is already taken by client %q", e.Slug, e.Existing)
+}
+
+// warnf is the logging sink for migration warnings. It is a variable so tests
+// can capture exactly what an operator sees on startup.
+var warnf = log.Printf
+
+// slugOwner identifies the client that already holds a storage slug.
+type slugOwner struct {
+	id   int64
+	name string
+}
+
+// slugWithSuffix returns base plus a "-<n>" disambiguator, keeping the whole
+// value within model.MaxSlugLen by trimming the stem (never the suffix) so the
+// result still satisfies the authkeys allowlist.
+func slugWithSuffix(base string, n int) string {
+	suffix := fmt.Sprintf("-%d", n)
+	stem := base
+	if max := model.MaxSlugLen - len(suffix); len(stem) > max {
+		stem = strings.TrimRight(stem[:max], "-")
+	}
+	return stem + suffix
+}
+
+// backfillClientSlugs fills in slug for clients created before the column
+// existed. Rows are visited oldest-first so the earliest client keeps the plain
+// slug and later collisions are disambiguated ("dup-a", "dup-a-2", ...); a name
+// with no slug at all falls back to "client-<id>". The result contains no empty
+// and no duplicate slugs, which is what lets the unique index be created.
+//
+// A collision is NOT repaired on disk, and must not be repaired silently.
+// Before this column existed the directory was derived from the name, so two
+// colliding clients genuinely shared one directory — and the snapshots in it
+// cannot be attributed to either of them (one ssh user, timestamp-only snapshot
+// ids, no owner recorded). Moving or deleting them automatically would guess.
+// Giving the loser a new slug therefore only separates future writes: the
+// winner keeps read-write access to the shared directory (and prunes it under
+// its own retention policy), while the loser's history there becomes
+// unreachable. Each such collision is reported to the operator so the shared
+// directory can be quarantined by hand.
+func backfillClientSlugs(db *sql.DB) error {
+	taken := map[string]slugOwner{}
+	rows, err := db.Query(`SELECT id, name, slug FROM clients WHERE slug != ''`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var o slugOwner
+		var slug string
+		if err := rows.Scan(&o.id, &o.name, &slug); err != nil {
+			rows.Close()
+			return err
+		}
+		taken[slug] = o
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	rows, err = db.Query(`SELECT id, name FROM clients WHERE slug = '' ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	var todo []slugOwner
+	for rows.Next() {
+		var p slugOwner
+		if err := rows.Scan(&p.id, &p.name); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, p := range todo {
+		base := model.Slug(p.name)
+		if base == "" {
+			base = fmt.Sprintf("client-%d", p.id)
+		}
+		slug := base
+		winner, collided := taken[base]
+		if collided {
+			for n := 2; ; n++ {
+				candidate := slugWithSuffix(base, n)
+				if _, exists := taken[candidate]; !exists {
+					slug = candidate
+					break
+				}
+			}
+		}
+		taken[slug] = p
+		if _, err := db.Exec(`UPDATE clients SET slug=? WHERE id=?`, slug, p.id); err != nil {
+			return err
+		}
+		if collided {
+			warnLegacySlugCollision(winner, p, base, slug)
+		}
+	}
+	return nil
+}
+
+// warnLegacySlugCollision reports one legacy collision: both clients, the slug
+// they shared and therefore the directory they still share, and what an operator
+// has to do about it. It lives in one log line so it is greppable in startup
+// output ("WARNING: legacy client slug collision").
+func warnLegacySlugCollision(winner, loser slugOwner, sharedSlug, newSlug string) {
+	// The store does not know BACKITUP_BACKUP_DIR (it is a server setting), so
+	// the directory is named relative to it rather than guessed.
+	dir := "<backup dir>/" + sharedSlug
+	warnf("WARNING: legacy client slug collision: clients %d (%q) and %d (%q) both mapped to storage "+
+		"slug %q. Client %d (%q) was migrated to slug %q, but every snapshot either client recorded is "+
+		"still in %s (under BACKUP_BACKUP_DIR): one ssh user and timestamp-only snapshot ids, so the "+
+		"files cannot be attributed to a client and were left untouched. This migration is "+
+		"forward-only: client %d (%q) keeps read-write access to that directory and will prune it "+
+		"under its own retention policy, client %d (%q)'s history there can no longer be listed, "+
+		"pruned or uploaded, and its offsite prefix moved from %q to %q, so its existing remote "+
+		"objects will be reported remote_missing. Quarantine it by hand: rename %s aside (e.g. to "+
+		"%s.quarantine) so %q starts empty, then re-upload client %d (%q)'s data.",
+		winner.id, winner.name, loser.id, loser.name, sharedSlug,
+		loser.id, loser.name, newSlug,
+		dir,
+		winner.id, winner.name,
+		loser.id, loser.name,
+		sharedSlug, newSlug,
+		dir, sharedSlug, sharedSlug,
+		loser.id, loser.name)
+}
+
+// slugForNewClient computes the storage slug for a new client and refuses an
+// empty or already-taken one. This is the single place a slug is ever derived
+// from a name: callers must use the persisted value, never model.Slug(name),
+// to build a directory path.
+func (s *Store) slugForNewClient(ctx context.Context, name string) (string, error) {
+	slug := model.Slug(name)
+	if slug == "" {
+		return "", ErrEmptySlug
+	}
+	// Pre-check so the normal path can name the client that owns the slug; the
+	// UNIQUE index is the race-safe backstop.
+	var existing string
+	err := s.db.QueryRowContext(ctx, `SELECT name FROM clients WHERE slug=?`, slug).Scan(&existing)
+	switch {
+	case err == nil:
+		return "", &SlugConflictError{Slug: slug, Existing: existing}
+	case errors.Is(err, sql.ErrNoRows):
+		return slug, nil
+	default:
+		return "", fmt.Errorf("check client slug: %w", err)
+	}
+}
+
+// CreateClient inserts a client and returns its assigned ID. The client's slug is
+// derived here, once, and persisted; ErrEmptySlug / *SlugConflictError are
+// returned when the name cannot serve as a unique storage directory.
 func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error) {
 	excludes, err := json.Marshal(c.Excludes)
 	if err != nil {
@@ -152,17 +341,29 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 	if c.OffsiteUploadMode == "" {
 		c.OffsiteUploadMode = "all"
 	}
+	slug, err := s.slugForNewClient(ctx, c.Name)
+	if err != nil {
+		return 0, err
+	}
+	c.Slug = slug
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO clients (name, mode, source_label, excludes, retention_days,
+		INSERT INTO clients (name, slug, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, skip_symlinks,
 			offsite_upload_mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		c.Name, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		c.Name, c.Slug, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
 		c.OffsiteRetentionDays, c.ExpectedIntervalSecs, c.OffsiteRemote, c.OffsiteDir,
 		c.OffsiteCron, c.SSHPubKey, c.TokenHash, c.TokenPrefix, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
 		b2i(c.SkipSymlinks), c.OffsiteUploadMode)
 	if err != nil {
+		// A concurrent create can slip past the pre-check; the unique index is
+		// what actually guarantees one client per slug.
+		if strings.Contains(err.Error(), "clients.slug") {
+			var existing string
+			_ = s.db.QueryRowContext(ctx, `SELECT name FROM clients WHERE slug=?`, c.Slug).Scan(&existing)
+			return 0, &SlugConflictError{Slug: c.Slug, Existing: existing}
+		}
 		return 0, fmt.Errorf("insert client: %w", err)
 	}
 	return res.LastInsertId()
@@ -171,7 +372,7 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 // ListClients returns all clients ordered by name.
 func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, mode, source_label, excludes, retention_days,
+		SELECT id, name, slug, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
 			offsite_upload_mode, disable_offsite_pruning
@@ -191,25 +392,33 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	return out, rows.Err()
 }
 
-// GetClientBySlug returns the client whose name's slug matches, or (nil, nil)
-// if none found. Fleet sizes are small so a linear scan over ListClients is fine.
+// GetClientBySlug returns the client whose stored slug matches, or (nil, nil) if
+// none. The slug is the persisted identity, not model.Slug(name): the two can
+// differ (disambiguated migration rows) and must never be conflated.
 func (s *Store) GetClientBySlug(ctx context.Context, slug string) (*model.Client, error) {
-	clients, err := s.ListClients(ctx)
+	if slug == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, slug, mode, source_label, excludes, retention_days,
+			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
+			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
+			offsite_upload_mode, disable_offsite_pruning
+		FROM clients WHERE slug = ?`, slug)
+	c, err := scanClient(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	for _, c := range clients {
-		if model.Slug(c.Name) == slug {
-			return &c, nil
-		}
-	}
-	return nil, nil
+	return &c, nil
 }
 
 // GetClient returns one client by ID, or (nil, nil) if not found.
 func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, mode, source_label, excludes, retention_days,
+		SELECT id, name, slug, mode, source_label, excludes, retention_days,
 			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
 			offsite_upload_mode, disable_offsite_pruning
@@ -380,7 +589,26 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*model.
 	}
 }
 
+// GetUserByID returns the user with the given ID, or (nil, nil) if not found.
+// requireAdmin uses it to re-validate a session against the live account table.
+func (s *Store) GetUserByID(ctx context.Context, id int64) (*model.User, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, username, password_hash, created_at FROM users WHERE id=?`, id)
+	var u model.User
+	var created string
+	switch err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &created); err {
+	case sql.ErrNoRows:
+		return nil, nil
+	case nil:
+		u.CreatedAt, _ = time.Parse(rfc3339, created)
+		return &u, nil
+	default:
+		return nil, err
+	}
+}
+
 // DeleteUser removes a user by ID. Returns an error if not found.
+// Callers must also invalidate that user's sessions (server.postDeleteUser).
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, id)
 	if err != nil {
@@ -896,7 +1124,7 @@ func scanClient(sc scanner) (model.Client, error) {
 	var c model.Client
 	var mode, excludes, createdAt string
 	var enabled, skipSymlinks, disableOffsitePruning int
-	if err := sc.Scan(&c.ID, &c.Name, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
+	if err := sc.Scan(&c.ID, &c.Name, &c.Slug, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.OffsiteRetentionDays, &c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
 		&c.OffsiteCron, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks,
 		&c.OffsiteUploadMode, &disableOffsitePruning); err != nil {

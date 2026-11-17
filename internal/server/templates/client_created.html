@@ -20,7 +20,7 @@
       </div>
       {{if .AuthKeysFailed}}
       <div class="alert alert-error" role="alert">
-        ⚠ Credentials rotated in the database but the SSH authorized_keys file could not be updated. SSH may fail until the server restarts.
+        ⚠ Credentials rotated in the database but the SSH authorized_keys file could not be updated: the <strong>old</strong> key may still be accepted by sshd, and the new one will not work until the file is rewritten. Fix the error in the server log and restart the server.
       </div>
       {{end}}
       {{else}}

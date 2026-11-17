@@ -29,19 +29,41 @@ func mustSub(f fs.FS) fs.FS {
 	return sub
 }
 
-// requireAdmin wraps a handler so it only runs for a valid session; otherwise
-// it redirects to /login. The current username is available via usernameFromContext.
+// requireAdmin wraps a handler so it only runs for a valid session belonging to
+// an account that still exists; otherwise it redirects to /login. The current
+// username is available via usernameFromContext.
+//
+// The existence check on every request is deliberate (M1): a session outlives
+// the user row it was issued for, so a deleted account would otherwise keep full
+// admin access until the 12-hour TTL expired.
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookie)
 		if err != nil || !s.sessions.Valid(c.Value) {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			s.redirectToLogin(w, r)
 			return
 		}
-		username := s.sessions.Username(c.Value)
-		ctx := context.WithValue(r.Context(), ctxUsername, username)
+		userCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		user, err := s.st.GetUserByID(userCtx, s.sessions.UserID(c.Value))
+		cancel()
+		if err != nil {
+			// Fail closed: an account we cannot verify is not an account.
+			s.redirectToLogin(w, r)
+			return
+		}
+		if user == nil {
+			// The account is gone; drop the orphaned token as well.
+			s.sessions.Delete(c.Value)
+			s.redirectToLogin(w, r)
+			return
+		}
+		ctx := context.WithValue(r.Context(), ctxUsername, user.Username)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) getLogin(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +105,7 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := s.sessions.Create(username)
+	tok, err := s.sessions.Create(user.ID, user.Username)
 	if err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)
 		return

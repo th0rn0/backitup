@@ -366,6 +366,7 @@
               </div>
               <div>
                 <p class="section-hint">Permanently removes this client, its run history, and its SSH access. The host will need a new client added if you want to resume backups.</p>
+                <p class="mode-warn-hint">⚠ The backup directory and its snapshots are kept on disk: this deletes the client, not its data. Creating a client with the same name later re-uses that directory and inherits those snapshots.</p>
                 <form method="POST" action="/clients/{{.Client.Slug}}/delete">
                   <label class="checkbox-label">
                     <input type="checkbox" name="confirm" value="1" required>
