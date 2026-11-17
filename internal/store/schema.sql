@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS offsite_objects (
     remote       TEXT    NOT NULL,
     bytes        INTEGER NOT NULL DEFAULT 0,
     uploaded_at  TEXT    NOT NULL,
+    -- '' = this row owns a real remote object; otherwise the snapshot id whose
+    -- remote object holds this snapshot's content (a deduplicated upload).
+    dedup_of     TEXT    NOT NULL DEFAULT '',
     UNIQUE (client_id, snapshot_id, remote)
 );
 

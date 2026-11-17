@@ -186,7 +186,10 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 			return err
 		}
 	}
-	pruneHot(ctx, d, c, sm, clientDir, snaps, offsiteOn, offsited)
+	deleted, failed, pruneErr := pruneHot(ctx, d, c, sm, clientDir, snaps, offsiteOn, offsited)
+	if deleted > 0 || failed > 0 {
+		log.Printf("lifecycle: client %d (%s): hot prune: deleted=%d failed=%d", c.ID, c.Name, deleted, failed)
+	}
 	if offsiteOn {
 		verifyOffsiteObjects(ctx, d, c)
 	}
@@ -200,7 +203,9 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	if _, err := d.Store.PruneRuns(ctx, c.ID, keep); err != nil {
 		return fmt.Errorf("prune runs: %w", err)
 	}
-	return nil
+	// Last, so a failed prune still lets verification and the alerting pass run;
+	// the caller turns this into a non-clean lifecycle pass.
+	return pruneErr
 }
 
 // RunOffsiteOnce uploads new snapshots for all clients whose OffsiteCron
@@ -268,14 +273,36 @@ func uploadClient(ctx context.Context, d Deps, c model.Client) error {
 	return uploadErr
 }
 
+// offsitedSet returns the snapshot ids whose content is believed to be in cold
+// storage, so the hot pruner may delete them (offsite-first, D8).
+//
+// "Believed" is doing the work: a record only counts while the object it names
+// is thought to exist. A row the verification pass has reported missing protects
+// nothing (its content is not on the remote), and a dedup row counts only while
+// the object it points at is itself intact — otherwise "offsited" would mean "was
+// offsited once", and the hot copy would be pruned with no copy left anywhere.
 func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool, error) {
 	objs, err := d.Store.ListOffsiteObjects(ctx, clientID)
 	if err != nil {
 		return nil, err
 	}
+	present := make(map[string]bool, len(objs))
+	for _, o := range objs {
+		if o.DedupOf == "" && !o.RemoteMissing {
+			present[o.SnapshotID] = true
+		}
+	}
 	set := make(map[string]bool, len(objs))
 	for _, o := range objs {
-		set[o.SnapshotID] = true
+		if o.DedupOf == "" {
+			if !o.RemoteMissing {
+				set[o.SnapshotID] = true
+			}
+			continue
+		}
+		if present[o.DedupOf] {
+			set[o.SnapshotID] = true
+		}
 	}
 	return set, nil
 }
@@ -283,7 +310,8 @@ func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool,
 // offsiteNewSnapshots uploads snapshots not yet in cold storage.
 // When c.OffsiteUploadMode is "latest", only the newest un-offsited snapshot
 // is uploaded (snaps must be sorted newest-first). Otherwise all are uploaded.
-// Returns the number of snapshots uploaded and total bytes transferred.
+// Returns the number of snapshots uploaded and total bytes transferred;
+// deduplicated snapshots are recorded but not counted as uploads.
 func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsited map[string]bool) (int, int64, error) {
 	var totalSnaps int
 	var totalBytes int64
@@ -295,52 +323,80 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		if latestOnly && totalSnaps > 0 {
 			break
 		}
-		obj, err := sm.PrepareOffsite(ctx, clientDir, s)
+		bytes, uploaded, err := offsiteSnapshot(ctx, d, c, sm, clientDir, s, offsited)
 		if err != nil {
-			return totalSnaps, totalBytes, fmt.Errorf("prepare offsite %s: %w", s.ID, err)
+			return totalSnaps, totalBytes, err
 		}
-		// rsync builds a temp archive; remove it after upload (tar.gz returns the
-		// archive in place, which must NOT be removed).
-		if c.Mode == model.ModeRsync {
-			defer os.Remove(obj)
+		if uploaded {
+			totalSnaps++
+			totalBytes += bytes
 		}
-
-		checksum, err := fileChecksum(obj)
-		if err != nil {
-			return totalSnaps, totalBytes, fmt.Errorf("checksum %s: %w", s.ID, err)
-		}
-		dup, err := d.Store.OffsiteChecksumExists(ctx, c.ID, c.OffsiteRemote, checksum)
-		if err != nil {
-			return totalSnaps, totalBytes, fmt.Errorf("checksum lookup %s: %w", s.ID, err)
-		}
-		if dup {
-			log.Printf("offsite: client=%q snap=%s: identical content already on remote (sha256=%s…), skipping upload", c.Name, s.ID, checksum[:12])
-			continue
-		}
-
-		bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, s.ID))
-		if err != nil {
-			return totalSnaps, totalBytes, fmt.Errorf("offsite upload %s: %w", s.ID, err)
-		}
-		if d.Verbose {
-			log.Printf("offsite: client=%q remote=%s snapshot=%s uploaded bytes=%d sha256=%s…", c.Name, c.OffsiteRemote, s.ID, bytes, checksum[:12])
-		}
-		if d.DiscordWebhook != "" {
-			go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
-				"☁️ **backitup** — `%s` offsite upload complete\nRemote: %s | snapshot: %s | size: %s",
-				c.Name, c.OffsiteRemote, s.ID, alert.FormatBytes(bytes),
-			))
-		}
-		if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{
-			ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Bytes: bytes, Checksum: checksum,
-		}); err != nil {
-			return totalSnaps, totalBytes, fmt.Errorf("record offsite %s: %w", s.ID, err)
-		}
-		offsited[s.ID] = true
-		totalSnaps++
-		totalBytes += bytes
 	}
 	return totalSnaps, totalBytes, nil
+}
+
+// offsiteSnapshot gets one snapshot into cold storage — by uploading it, or by
+// recording that identical content is already there. The staging archive lives
+// exactly as long as this call: a deferred remove in the caller's loop kept one
+// copy of every snapshot on disk until the whole pass ended (N × snapshot size
+// of scratch, on the system temp dir rather than the backup volume).
+func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, s mode.Snapshot, offsited map[string]bool) (int64, bool, error) {
+	obj, err := sm.PrepareOffsite(ctx, clientDir, s)
+	if err != nil {
+		return 0, false, fmt.Errorf("prepare offsite %s: %w", s.ID, err)
+	}
+	// rsync builds a temp archive; remove it as soon as this snapshot is done
+	// (tar.gz returns the archive in place, which must NOT be removed).
+	if c.Mode == model.ModeRsync {
+		defer func() { _ = os.Remove(obj) }()
+	}
+
+	checksum, err := fileChecksum(obj)
+	if err != nil {
+		return 0, false, fmt.Errorf("checksum %s: %w", s.ID, err)
+	}
+	owner, dup, err := d.Store.OffsiteChecksumOwner(ctx, c.ID, c.OffsiteRemote, checksum)
+	if err != nil {
+		return 0, false, fmt.Errorf("checksum lookup %s: %w", s.ID, err)
+	}
+	if dup {
+		// The content is already in cold storage — but the snapshot still has to
+		// be recorded. Without a record it never becomes "offsited", so the hot
+		// pruner protects it forever and an unchanged tree grows the hot store by
+		// one snapshot per run. The row names the owner's remote object instead of
+		// a path of its own, so pruning can never delete a file that was never
+		// uploaded, and verification checks the owner's object, not a phantom.
+		log.Printf("offsite: client=%q snap=%s: identical content already on remote (sha256=%s…, owner=%s), recorded as dedup",
+			c.Name, s.ID, checksum[:12], owner)
+		if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{
+			ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Checksum: checksum, DedupOf: owner,
+		}); err != nil {
+			return 0, false, fmt.Errorf("record offsite %s: %w", s.ID, err)
+		}
+		offsited[s.ID] = true
+		return 0, false, nil
+	}
+
+	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, s.ID))
+	if err != nil {
+		return 0, false, fmt.Errorf("offsite upload %s: %w", s.ID, err)
+	}
+	if d.Verbose {
+		log.Printf("offsite: client=%q remote=%s snapshot=%s uploaded bytes=%d sha256=%s…", c.Name, c.OffsiteRemote, s.ID, bytes, checksum[:12])
+	}
+	if d.DiscordWebhook != "" {
+		go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
+			"☁️ **backitup** — `%s` offsite upload complete\nRemote: %s | snapshot: %s | size: %s",
+			c.Name, c.OffsiteRemote, s.ID, alert.FormatBytes(bytes),
+		))
+	}
+	if err := d.Store.RecordOffsiteObject(ctx, model.OffsiteObject{
+		ClientID: c.ID, SnapshotID: s.ID, Remote: c.OffsiteRemote, Bytes: bytes, Checksum: checksum,
+	}); err != nil {
+		return 0, false, fmt.Errorf("record offsite %s: %w", s.ID, err)
+	}
+	offsited[s.ID] = true
+	return bytes, true, nil
 }
 
 // pruneOffsite enforces the INDEPENDENT offsite retention horizon (D8), keeping
@@ -355,8 +411,18 @@ func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
 	if err != nil {
 		return err
 	}
+	// Dedup rows name an object owned by another snapshot: there is nothing of
+	// their own to delete, and letting one count as the "newest" object would
+	// un-protect the real object of that content and delete a path that was never
+	// uploaded.
+	real := make([]model.OffsiteObject, 0, len(objs))
+	for _, o := range objs {
+		if o.DedupOf == "" {
+			real = append(real, o)
+		}
+	}
 	cutoff := d.now().Add(-time.Duration(c.OffsiteRetentionDays) * 24 * time.Hour)
-	for i, o := range objs {
+	for i, o := range real {
 		if i == 0 || !o.UploadedAt.Before(cutoff) {
 			continue // protect newest; keep anything within the horizon
 		}
@@ -373,6 +439,12 @@ func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
 			))
 		}
 		if err := d.Store.DeleteOffsiteObject(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
+			return err
+		}
+		// The dedup rows pointing at this object claimed the content was still
+		// retrievable; with the object gone they would be lying, and the snapshots
+		// they name become upload candidates again.
+		if err := d.Store.DeleteDedupRecords(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
 			return err
 		}
 	}
@@ -418,9 +490,14 @@ func prunePartOrphans(d Deps, clientDir, clientName string) {
 
 // pruneHot deletes hot snapshots older than retention, never the newest, and —
 // when offsite is enabled — only those already offsited (offsite-first, D8).
-func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsiteOn bool, offsited map[string]bool) {
+//
+// It reports what happened: how many snapshots it deleted, how many deletions
+// failed, and the first failure. Returning nothing made a pass that deleted
+// nothing at all indistinguishable from a pass with nothing to do — which is how
+// a permanently failing prune stayed invisible while the hot store filled up.
+func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsiteOn bool, offsited map[string]bool) (deleted, failed int, err error) {
 	if c.RetentionDays <= 0 || len(snaps) <= 1 {
-		return
+		return 0, 0, nil
 	}
 	cutoff := d.now().Add(-time.Duration(c.RetentionDays) * 24 * time.Hour)
 	for i, s := range snaps {
@@ -431,10 +508,17 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 			log.Printf("lifecycle: client %d: keeping un-offsited snapshot %s (offsite-first)", c.ID, s.ID)
 			continue
 		}
-		if err := sm.DeleteSnapshot(ctx, clientDir, s.ID); err != nil {
-			log.Printf("lifecycle: client %d: prune %s: %v", c.ID, s.ID, err)
+		if delErr := sm.DeleteSnapshot(ctx, clientDir, s.ID); delErr != nil {
+			failed++
+			log.Printf("lifecycle: client %d: prune %s: %v", c.ID, s.ID, delErr)
+			if err == nil {
+				err = fmt.Errorf("prune hot snapshot %s: %w", s.ID, delErr)
+			}
+			continue
 		}
+		deleted++
 	}
+	return deleted, failed, err
 }
 
 // verifyLatest integrity-checks the most recent snapshot (D9): tar.gz archives
@@ -507,8 +591,20 @@ func offsiteDir(c model.Client) string {
 // row. Throttled to once per hour per client: if the oldest verified_at is
 // within the last hour, the check is skipped.
 func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client) {
-	objects, err := d.Store.ListOffsiteObjects(ctx, c.ID)
-	if err != nil || len(objects) == 0 {
+	all, err := d.Store.ListOffsiteObjects(ctx, c.ID)
+	if err != nil {
+		return
+	}
+	// Deduplicated snapshots share an object owned by another snapshot: verifying
+	// the owner covers them, and counting them here would also keep the hourly
+	// throttle below permanently tripped (a dedup row is never verified itself).
+	objects := make([]model.OffsiteObject, 0, len(all))
+	for _, o := range all {
+		if o.DedupOf == "" {
+			objects = append(objects, o)
+		}
+	}
+	if len(objects) == 0 {
 		return
 	}
 
