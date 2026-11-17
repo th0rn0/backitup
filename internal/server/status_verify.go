@@ -25,6 +25,15 @@ const unverifiedMarker = "unverified by server"
 // without turning an archive from last week into evidence for this run.
 const uploadSkewAllowance = 15 * time.Minute
 
+// uploadMaxLag is the other end of the same window, and it is measured on the
+// SERVER's clock. started_at - skew alone is not a bound: started_at comes from
+// the untrusted host, so a backdated start reaches back to any archive the
+// client's store already holds, which is the claim this check exists to refuse.
+// The archive's mtime is written when backitup-recv finishes — at the END of the
+// run — so a slow backup is not penalised by a tight window: the cutoff is at
+// least maxLag before the report arrives.
+const uploadMaxLag = 2 * time.Hour
+
 // corroborateSuccess checks a client's claim that a backup succeeded against what
 // the server can see for itself. The bearer token proves WHICH client is talking;
 // it proves nothing about whether a backup ran. The host is untrusted by design,
@@ -35,8 +44,10 @@ const uploadSkewAllowance = 15 * time.Minute
 //	tar.gz     a reported archive is listed AND is a non-empty regular file
 //	tar.gz (no snapshot_id reported, which is what the bundled client does —
 //	           backitup-recv names the archive server-side) a non-empty archive
-//	           exists that was written at or after the run started, which is the
-//	           upload this run claims to have made
+//	           exists that was written during this run, where the window is
+//	           bounded at BOTH ends: no earlier than the client's reported start
+//	           (minus a skew allowance) and no earlier than maxLag before the
+//	           report, so a backdated start cannot reach back to an old archive
 //
 // Returns ("", nil) when the claim checks out, (reason, nil) when it does not,
 // and a non-nil error when the check itself could not be performed. Callers treat
@@ -47,6 +58,14 @@ const uploadSkewAllowance = 15 * time.Minute
 // that is busy taking the next backup. Listing plus size is the cheap check;
 // corruption of an archive that does exist is caught by the lifecycle's offsite
 // pass, which has to read it anyway.
+//
+// Known limits, accepted rather than fixed here. (1) A client that names one of
+// its OWN existing snapshots and inflates bytes still reads ok: this checks that
+// something real stands behind the claim, not that it is fresh — tightening the
+// id path to a freshness window would need proof that every real rsync/tar.gz
+// shape still lands inside it. (2) finished_at is still client-supplied and is
+// the timestamp health ages from, so a future-dated finished_at holds a client
+// at "ok"; that predates this check and is tracked separately.
 func (s *Server) corroborateSuccess(ctx context.Context, cl *model.Client, snapshotID string, startedAt time.Time) (string, error) {
 	sm, ok := mode.Server(cl.Mode)
 	if !ok {
@@ -107,7 +126,15 @@ func (s *Server) corroborateSuccess(ctx context.Context, cl *model.Client, snaps
 		// client's clock placed in the future: judge the upload by "now".
 		ref = time.Now().UTC()
 	}
+	// The client's clock may only NARROW this window, never widen it past what
+	// the server itself observed: without the floor below, started_at
+	// "2020-01-01" makes every archive already on disk look like this run's
+	// upload, which is the fabrication this check exists to catch.
+	now := time.Now().UTC()
 	cutoff := ref.Add(-uploadSkewAllowance)
+	if floor := now.Add(-uploadMaxLag); cutoff.Before(floor) {
+		cutoff = floor
+	}
 	for _, snap := range snaps {
 		if snap.Bytes == 0 || snap.CreatedAt.IsZero() {
 			continue // empty archives and undated entries are not evidence

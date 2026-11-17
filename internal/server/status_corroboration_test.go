@@ -268,6 +268,53 @@ func TestPostStatusFailsTarGzOKWithOnlyAStaleArchive(t *testing.T) {
 	}
 }
 
+// The no-snapshot_id window must be bounded on the SERVER's clock as well as the
+// client's. started_at is the client's own word and the host is untrusted, so
+// "an archive written at/after the run start" reaches back to any archive the
+// store already holds once the start is backdated — the exact claim this check
+// exists to refuse (M3), in the same tar.gz mode.
+func TestPostStatusFailsTarGzBackdatedStartWithOnlyAnOldArchive(t *testing.T) {
+	st, srv, cl := statusStack(t, "targz-backdated", model.ModeTarGz)
+	p := tarGzPath(t, srv, cl, "backup-20201001T000000Z-000.tar.gz", "last month's backup")
+	old := time.Now().UTC().Add(-21 * 24 * time.Hour)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	id := postStatusFor(t, srv, cl, `{"status":"ok","bytes":1000000000,"files":4242,"started_at":"2020-01-01T00:00:00Z"}`)
+
+	run := storedRun(t, st, id)
+	if run.Status != model.StatusFailed {
+		t.Fatalf("stored status = %q for a 21-day-old archive reported with a backdated start, want %q (log_tail: %q)",
+			run.Status, model.StatusFailed, run.LogTail)
+	}
+	if !strings.Contains(run.LogTail, "unverified by server") {
+		t.Fatalf("log_tail = %q, want it flagged %q", run.LogTail, "unverified by server")
+	}
+}
+
+// ...and the server-side floor must not be so tight that it rejects a genuine
+// slow upload: the archive's mtime is stamped when backitup-recv finishes, at the
+// END of the run, so an hour-old upload reported with a matching start is still
+// this run's evidence.
+func TestPostStatusAcceptsSlowTarGzUpload(t *testing.T) {
+	st, srv, cl := statusStack(t, "targz-slow", model.ModeTarGz)
+	p := tarGzPath(t, srv, cl, "backup-20260101T000000Z-000.tar.gz", "streamed payload")
+	written := time.Now().UTC().Add(-45 * time.Minute)
+	if err := os.Chtimes(p, written, written); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	startedAt := time.Now().UTC().Add(-50 * time.Minute).Format(time.RFC3339)
+	id := postStatusFor(t, srv, cl, `{"status":"ok","bytes":4096,"files":9,"started_at":"`+startedAt+`"}`)
+
+	run := storedRun(t, st, id)
+	if run.Status != model.StatusOK {
+		t.Fatalf("stored status = %q for an upload written 45m ago and reported with its own start, want %q (log_tail: %q)",
+			run.Status, model.StatusOK, run.LogTail)
+	}
+}
+
 // rsync has no excuse for omitting the snapshot name: fail closed.
 func TestPostStatusFailsRsyncOKWithoutSnapshotID(t *testing.T) {
 	st, srv, cl := statusStack(t, "rsync-no-id", model.ModeRsync)
