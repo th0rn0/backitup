@@ -28,8 +28,9 @@ var schemaSQL string
 // Store wraps the database handle.
 type Store struct{ db *sql.DB }
 
-// Open opens (or creates) the SQLite database at dsn and applies the schema.
-// dsn is a file path; busy_timeout keeps brief writer contention from erroring.
+// Open opens (or creates) the SQLite database at dsn and brings it to the
+// canonical schema. dsn is a file path; busy_timeout keeps brief writer
+// contention from erroring.
 func Open(dsn string) (*Store, error) {
 	if dir := filepath.Dir(dsn); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -42,114 +43,15 @@ func Open(dsn string) (*Store, error) {
 	}
 	// Single-writer model; serialise to avoid SQLITE_BUSY under the lifecycle timer.
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schemaSQL); err != nil {
+	// WAL is a property of the database file, and it cannot be switched on from
+	// inside a transaction, so it is set here rather than in schema.sql.
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable WAL: %w", err)
+	}
+	if err := migrate(context.Background(), db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	// Additive migration: add version column to existing databases.
-	// CREATE TABLE IF NOT EXISTS already adds it for new databases; this handles
-	// upgrades. SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS, so we ignore
-	// the "duplicate column name" error that fires when the column already exists.
-	for _, migration := range []string{
-		`ALTER TABLE clients ADD COLUMN version               INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE clients ADD COLUMN slug                  TEXT    NOT NULL DEFAULT ''`,
-		`ALTER TABLE clients ADD COLUMN skip_symlinks         INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE clients ADD COLUMN offsite_dir           TEXT    NOT NULL DEFAULT ''`,
-		`ALTER TABLE clients ADD COLUMN offsite_interval_secs INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE clients ADD COLUMN token_prefix          TEXT    NOT NULL DEFAULT ''`,
-		`ALTER TABLE clients ADD COLUMN offsite_upload_mode   TEXT    NOT NULL DEFAULT 'all'`,
-		`ALTER TABLE offsite_objects ADD COLUMN remote_missing         INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE offsite_objects ADD COLUMN remote_verified_at    TEXT    NOT NULL DEFAULT ''`,
-		`ALTER TABLE offsite_objects ADD COLUMN checksum              TEXT    NOT NULL DEFAULT ''`,
-		`ALTER TABLE offsite_objects ADD COLUMN dedup_of             TEXT    NOT NULL DEFAULT ''`,
-		`ALTER TABLE clients ADD COLUMN disable_offsite_pruning       INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE clients ADD COLUMN offsite_cron                  TEXT    NOT NULL DEFAULT ''`,
-	} {
-		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			db.Close()
-			return nil, fmt.Errorf("migrate: %w", err)
-		}
-	}
-	// slug migration: derive a unique storage id for rows that predate the
-	// column, then let the database enforce uniqueness from here on. The
-	// backfill must run BEFORE the index, because every existing row starts at
-	// the same '' default.
-	if err := backfillClientSlugs(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_slug ON clients (slug)`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS users (
-		id            INTEGER PRIMARY KEY AUTOINCREMENT,
-		username      TEXT NOT NULL UNIQUE,
-		password_hash TEXT NOT NULL,
-		created_at    TEXT NOT NULL
-	)`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate users: %w", err)
-	}
-	// Migrate runs.status CHECK to include 'running'. SQLite has no ALTER
-	// CONSTRAINT; we recreate the table using the recommended swap pattern.
-	// Check sqlite_master to detect whether the migration is still needed.
-	var runsDDL string
-	_ = db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='runs'`).Scan(&runsDDL)
-	if !strings.Contains(runsDDL, "'running'") {
-		for _, stmt := range []string{
-			`PRAGMA foreign_keys=OFF`,
-			`CREATE TABLE runs_new (
-				id           INTEGER PRIMARY KEY AUTOINCREMENT,
-				client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-				started_at   TEXT    NOT NULL,
-				finished_at  TEXT    NOT NULL,
-				status       TEXT    NOT NULL CHECK (status IN ('ok','failed','overlap','running')),
-				bytes        INTEGER NOT NULL DEFAULT 0,
-				files        INTEGER NOT NULL DEFAULT 0,
-				snapshot_id  TEXT    NOT NULL DEFAULT '',
-				log_tail     TEXT    NOT NULL DEFAULT ''
-			)`,
-			`INSERT INTO runs_new SELECT * FROM runs`,
-			`DROP TABLE runs`,
-			`ALTER TABLE runs_new RENAME TO runs`,
-			`CREATE INDEX IF NOT EXISTS idx_runs_client_started ON runs (client_id, started_at DESC)`,
-			`PRAGMA foreign_keys=ON`,
-		} {
-			if _, err := db.Exec(stmt); err != nil {
-				db.Close()
-				return nil, fmt.Errorf("migrate runs status: %w", err)
-			}
-		}
-	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS remotes (
-		id         INTEGER PRIMARY KEY AUTOINCREMENT,
-		name       TEXT NOT NULL UNIQUE,
-		backend    TEXT NOT NULL,
-		config     TEXT NOT NULL DEFAULT '{}',
-		created_at TEXT NOT NULL
-	)`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate remotes: %w", err)
-	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS offsite_runs (
-		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-		client_id           INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-		triggered_by        TEXT    NOT NULL DEFAULT 'scheduled',
-		started_at          TEXT    NOT NULL,
-		finished_at         TEXT    NOT NULL DEFAULT '',
-		status              TEXT    NOT NULL DEFAULT 'running',
-		snapshots_uploaded  INTEGER NOT NULL DEFAULT 0,
-		bytes_uploaded      INTEGER NOT NULL DEFAULT 0,
-		error_text          TEXT    NOT NULL DEFAULT ''
-	)`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate offsite_runs: %w", err)
-	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_offsite_runs_client
-		ON offsite_runs (client_id, started_at DESC)`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate offsite_runs index: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -234,10 +136,13 @@ func slugWithSuffix(base string, n int) string {
 }
 
 // backfillClientSlugs fills in slug for clients created before the column
-// existed. Rows are visited oldest-first so the earliest client keeps the plain
-// slug and later collisions are disambiguated ("dup-a", "dup-a-2", ...); a name
-// with no slug at all falls back to "client-<id>". The result contains no empty
-// and no duplicate slugs, which is what lets the unique index be created.
+// existed. It runs inside the migration transaction (so the derived slugs and the
+// unique index that then enforces them commit together).
+//
+// Rows are visited oldest-first so the earliest client keeps the plain slug and
+// later collisions are disambiguated ("dup-a", "dup-a-2", ...); a name with no
+// slug at all falls back to "client-<id>". The result contains no empty and no
+// duplicate slugs, which is what lets the unique index be created.
 //
 // A collision is NOT repaired on disk, and must not be repaired silently.
 // Before this column existed the directory was derived from the name, so two
@@ -249,9 +154,9 @@ func slugWithSuffix(base string, n int) string {
 // its own retention policy), while the loser's history there becomes
 // unreachable. Each such collision is reported to the operator so the shared
 // directory can be quarantined by hand.
-func backfillClientSlugs(db *sql.DB) error {
+func backfillClientSlugs(ctx context.Context, db querier) error {
 	taken := map[string]slugOwner{}
-	rows, err := db.Query(`SELECT id, name, slug FROM clients WHERE slug != ''`)
+	rows, err := db.QueryContext(ctx, `SELECT id, name, slug FROM clients WHERE slug != ''`)
 	if err != nil {
 		return err
 	}
@@ -269,7 +174,7 @@ func backfillClientSlugs(db *sql.DB) error {
 		return err
 	}
 
-	rows, err = db.Query(`SELECT id, name FROM clients WHERE slug = '' ORDER BY id`)
+	rows, err = db.QueryContext(ctx, `SELECT id, name FROM clients WHERE slug = '' ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -304,7 +209,7 @@ func backfillClientSlugs(db *sql.DB) error {
 			}
 		}
 		taken[slug] = p
-		if _, err := db.Exec(`UPDATE clients SET slug=? WHERE id=?`, slug, p.id); err != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE clients SET slug=? WHERE id=?`, slug, p.id); err != nil {
 			return err
 		}
 		if collided {
