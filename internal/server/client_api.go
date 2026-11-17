@@ -143,6 +143,20 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	// The run's start is also the lower bound for "did an upload land for this
+	// run?" when a tar.gz client reports no snapshot name.
+	started := req.StartedAt.UTC()
+	if req.StartedAt.IsZero() {
+		started = time.Now().UTC()
+	}
+
+	// A reported "ok" is a claim, not evidence: the bearer token says which host
+	// is talking, not that a backup happened. Corroborate it against the store
+	// before it can become the dashboard's idea of health — an unverifiable
+	// claim is recorded as a failure and explained in log_tail (the wire protocol
+	// is unchanged: the client still gets its 201 and run_id).
+	st, req.LogTail = s.corroboratedStatus(ctx, cl, st, req.SnapshotID, started, req.LogTail)
+
 	// Update path: client is finalising a run it previously started.
 	if req.RunID > 0 && st != model.StatusRunning {
 		finished := req.FinishedAt
@@ -168,10 +182,6 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	finished := req.FinishedAt
 	if finished.IsZero() && st != model.StatusRunning {
 		finished = time.Now().UTC()
-	}
-	started := req.StartedAt
-	if started.IsZero() {
-		started = time.Now().UTC()
 	}
 	id, err := s.st.RecordRun(ctx, model.Run{
 		ClientID: cl.ID, StartedAt: started, FinishedAt: finished, Status: st,
@@ -224,7 +234,6 @@ func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes
 		}
 	}
 }
-
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
