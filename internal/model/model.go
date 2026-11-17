@@ -163,6 +163,13 @@ type OffsiteObject struct {
 	RemoteVerifiedAt time.Time // zero = never verified
 
 	Checksum string // SHA-256 hex of the plaintext archive; empty for legacy records
+
+	// DedupOf is the snapshot id whose remote object holds this snapshot's
+	// content, set when an upload was skipped because an identical archive was
+	// already on the remote. Empty means this row owns a real remote object.
+	// A dedup row is never uploaded, never verified on its own and never
+	// deleted on its own: the object it names belongs to DedupOf.
+	DedupOf string
 }
 
 // OffsiteRun records one upload session (scheduled or adhoc). Mirrors the runs

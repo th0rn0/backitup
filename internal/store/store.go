@@ -61,6 +61,7 @@ func Open(dsn string) (*Store, error) {
 		`ALTER TABLE offsite_objects ADD COLUMN remote_missing         INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE offsite_objects ADD COLUMN remote_verified_at    TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE offsite_objects ADD COLUMN checksum              TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE offsite_objects ADD COLUMN dedup_of             TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN disable_offsite_pruning       INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE clients ADD COLUMN offsite_cron                  TEXT    NOT NULL DEFAULT ''`,
 	} {
@@ -156,6 +157,39 @@ func Open(dsn string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 const rfc3339 = time.RFC3339Nano
+
+// parseStoredTime parses one of our timestamp columns. An empty value means
+// "never" (e.g. remote_verified_at) and is not an error. A malformed value IS
+// an error: these columns are written only by this package, in rfc3339, so
+// anything else is corruption.
+//
+// Callers must not paper over the error with a zero time on a path that makes a
+// destructive decision. time.Time{} is year 1, which is "older than every
+// retention horizon", so a corrupt timestamp used to make a recent remote object
+// look ancient and eligible for deletion. Where a zero time is harmless
+// (display, age labels) use displayTime instead, which logs and degrades.
+func parseStoredTime(field, value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(rfc3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("corrupt %s %q: %w", field, value, err)
+	}
+	return t, nil
+}
+
+// displayTime is parseStoredTime for columns that only feed a label or a sort
+// hint. A corrupt value degrades that one row's timestamp to zero and is logged
+// loudly; it drives no deletion, so failing closed would only cost the operator
+// the page.
+func displayTime(field, value string) time.Time {
+	t, err := parseStoredTime(field, value)
+	if err != nil {
+		log.Printf("store: %v — showing the zero time", err)
+	}
+	return t
+}
 
 // ErrEmptySlug is returned by CreateClient when the client name contains no
 // character that survives slugging ("..", ".", "/", "...."). Such a name has no
@@ -571,7 +605,7 @@ func (s *Store) LatestOffsiteAllClients(ctx context.Context) (map[int64]*time.Ti
 		if err := rows.Scan(&clientID, &uploaded); err != nil {
 			return nil, err
 		}
-		t, _ := time.Parse(rfc3339, uploaded)
+		t := displayTime("offsite_objects.uploaded_at", uploaded)
 		tc := t
 		m[clientID] = &tc
 	}
@@ -616,7 +650,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
 		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &created); err != nil {
 			return nil, err
 		}
-		u.CreatedAt, _ = time.Parse(rfc3339, created)
+		u.CreatedAt = displayTime("users.created_at", created)
 		out = append(out, u)
 	}
 	return out, rows.Err()
@@ -632,7 +666,7 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*model.
 	case sql.ErrNoRows:
 		return nil, nil
 	case nil:
-		u.CreatedAt, _ = time.Parse(rfc3339, created)
+		u.CreatedAt = displayTime("users.created_at", created)
 		return &u, nil
 	default:
 		return nil, err
@@ -650,7 +684,7 @@ func (s *Store) GetUserByID(ctx context.Context, id int64) (*model.User, error) 
 	case sql.ErrNoRows:
 		return nil, nil
 	case nil:
-		u.CreatedAt, _ = time.Parse(rfc3339, created)
+		u.CreatedAt = displayTime("users.created_at", created)
 		return &u, nil
 	default:
 		return nil, err
@@ -700,7 +734,7 @@ func (s *Store) GetAdmin(ctx context.Context) (*model.Admin, error) {
 	case sql.ErrNoRows:
 		return nil, nil
 	case nil:
-		a.CreatedAt, _ = time.Parse(rfc3339, created)
+		a.CreatedAt = displayTime("admin.created_at", created)
 		return &a, nil
 	default:
 		return nil, err
@@ -708,17 +742,19 @@ func (s *Store) GetAdmin(ctx context.Context) (*model.Admin, error) {
 }
 
 // RecordOffsiteObject records that a snapshot was uploaded offsite (idempotent
-// on client+snapshot+remote).
+// on client+snapshot+remote). A deduplicated upload sets DedupOf to the snapshot
+// id that owns the remote object; such a row carries Bytes=0 because nothing was
+// transferred and the content is already counted against the owner.
 func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) error {
 	uploaded := o.UploadedAt
 	if uploaded.IsZero() {
 		uploaded = time.Now().UTC()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at, checksum)
-		VALUES (?,?,?,?,?,?)
-		ON CONFLICT(client_id, snapshot_id, remote) DO UPDATE SET bytes=excluded.bytes, uploaded_at=excluded.uploaded_at, checksum=excluded.checksum`,
-		o.ClientID, o.SnapshotID, o.Remote, o.Bytes, uploaded.UTC().Format(rfc3339), o.Checksum)
+		INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at, checksum, dedup_of)
+		VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(client_id, snapshot_id, remote) DO UPDATE SET bytes=excluded.bytes, uploaded_at=excluded.uploaded_at, checksum=excluded.checksum, dedup_of=excluded.dedup_of`,
+		o.ClientID, o.SnapshotID, o.Remote, o.Bytes, uploaded.UTC().Format(rfc3339), o.Checksum, o.DedupOf)
 	if err != nil {
 		return fmt.Errorf("record offsite object: %w", err)
 	}
@@ -726,9 +762,15 @@ func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) 
 }
 
 // ListOffsiteObjects returns the offsite objects for a client, newest first.
+//
+// A row whose uploaded_at cannot be parsed is skipped with a loud log rather
+// than returned with a zero time: offsite pruning deletes anything older than
+// the horizon, and year 1 would make a recent object look ancient. Skipping can
+// only ever protect data — the row cannot be deleted, and the snapshot it names
+// stays un-offsited, so the hot copy is kept too.
 func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model.OffsiteObject, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, client_id, snapshot_id, remote, bytes, uploaded_at, remote_missing, remote_verified_at, checksum
+		SELECT id, client_id, snapshot_id, remote, bytes, uploaded_at, remote_missing, remote_verified_at, checksum, dedup_of
 		FROM offsite_objects WHERE client_id = ? ORDER BY uploaded_at DESC`, clientID)
 	if err != nil {
 		return nil, err
@@ -739,34 +781,54 @@ func (s *Store) ListOffsiteObjects(ctx context.Context, clientID int64) ([]model
 		var o model.OffsiteObject
 		var uploaded, verifiedAt string
 		var remoteMissing int
-		if err := rows.Scan(&o.ID, &o.ClientID, &o.SnapshotID, &o.Remote, &o.Bytes, &uploaded, &remoteMissing, &verifiedAt, &o.Checksum); err != nil {
+		if err := rows.Scan(&o.ID, &o.ClientID, &o.SnapshotID, &o.Remote, &o.Bytes, &uploaded, &remoteMissing, &verifiedAt, &o.Checksum, &o.DedupOf); err != nil {
 			return nil, err
 		}
-		o.UploadedAt, _ = time.Parse(rfc3339, uploaded)
+		uploadedAt, err := parseStoredTime("offsite_objects.uploaded_at", uploaded)
+		if err != nil {
+			log.Printf("store: client %d: offsite object %s (%s) is unreadable, keeping it and leaving it un-prunable: %v",
+				clientID, o.SnapshotID, o.Remote, err)
+			continue
+		}
+		o.UploadedAt = uploadedAt
 		o.RemoteMissing = remoteMissing != 0
-		o.RemoteVerifiedAt, _ = time.Parse(rfc3339, verifiedAt)
+		// Only feeds the hourly verification throttle: a zero value there forces
+		// a re-check, which is the safe direction.
+		o.RemoteVerifiedAt = displayTime("offsite_objects.remote_verified_at", verifiedAt)
 		out = append(out, o)
 	}
 	return out, rows.Err()
 }
 
-// OffsiteChecksumExists returns true if any offsite object for this client and
-// remote already carries the given checksum, indicating identical content has
-// already been uploaded and a new upload can be skipped.
-func (s *Store) OffsiteChecksumExists(ctx context.Context, clientID int64, remote, checksum string) (bool, error) {
+// OffsiteChecksumOwner returns the snapshot id whose real remote object already
+// holds content with this checksum, if any. Dedup rows are ignored: they point
+// at an object owned by another snapshot, so chaining a second dedup onto them
+// would record an owner that owns nothing. An object the lifecycle has reported
+// missing is not an owner either — the content is not there, so the new snapshot
+// must be uploaded rather than deduplicated into a hole.
+func (s *Store) OffsiteChecksumOwner(ctx context.Context, clientID int64, remote, checksum string) (string, bool, error) {
 	if checksum == "" {
-		return false, nil
+		return "", false, nil
 	}
-	var n int
+	var owner string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM offsite_objects WHERE client_id=? AND remote=? AND checksum=?`,
-		clientID, remote, checksum).Scan(&n)
-	return n > 0, err
+		`SELECT snapshot_id FROM offsite_objects
+		 WHERE client_id=? AND remote=? AND checksum=? AND dedup_of='' AND remote_missing=0
+		 ORDER BY uploaded_at DESC LIMIT 1`,
+		clientID, remote, checksum).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return owner, true, nil
 }
 
 // TotalOffsiteBytes returns the sum of all recorded offsite object sizes across
-// all clients and remotes. Dedup records (uploaded=false) are included since
-// their bytes field reflects the content already held by the original upload.
+// all clients and remotes. Dedup rows store 0 bytes — their content is already
+// counted against the object they point at — so they neither double-count nor
+// hide the real total.
 func (s *Store) TotalOffsiteBytes(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes), 0) FROM offsite_objects`).Scan(&n)
@@ -793,8 +855,19 @@ func (s *Store) DeleteOffsiteObject(ctx context.Context, clientID int64, snapsho
 	return err
 }
 
+// DeleteDedupRecords removes the dedup records whose content lived in the given
+// owner's remote object. They must go when that object does: left behind they
+// would claim a remote copy of content that no longer exists anywhere.
+func (s *Store) DeleteDedupRecords(ctx context.Context, clientID int64, ownerSnapshotID, remote string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM offsite_objects WHERE client_id=? AND remote=? AND dedup_of=?`,
+		clientID, remote, ownerSnapshotID)
+	return err
+}
+
 // LatestOffsite returns the most recent offsite upload time for a client, or
-// (nil, nil) if it has never been offsited. Drives the dashboard offsite state.
+// (nil, nil) if it has never been offsited. Drives the dashboard offsite state
+// and the per-client upload schedule.
 func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT uploaded_at FROM offsite_objects WHERE client_id=? ORDER BY uploaded_at DESC LIMIT 1`, clientID)
@@ -803,7 +876,10 @@ func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, 
 	case sql.ErrNoRows:
 		return nil, nil
 	case nil:
-		t, _ := time.Parse(rfc3339, uploaded)
+		t, err := parseStoredTime("offsite_objects.uploaded_at", uploaded)
+		if err != nil {
+			return nil, err
+		}
 		return &t, nil
 	default:
 		return nil, err
@@ -923,8 +999,8 @@ func (s *Store) ListOffsiteRuns(ctx context.Context, clientID int64, limit int) 
 			&r.SnapshotsUploaded, &r.BytesUploaded, &r.ErrorText); err != nil {
 			return nil, err
 		}
-		r.StartedAt, _ = time.Parse(rfc3339, startedStr)
-		r.FinishedAt, _ = time.Parse(rfc3339, finishedStr)
+		r.StartedAt = displayTime("offsite_runs.started_at", startedStr)
+		r.FinishedAt = displayTime("offsite_runs.finished_at", finishedStr)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -960,7 +1036,7 @@ func (s *Store) ListRemotes(ctx context.Context) ([]model.Remote, error) {
 			return nil, err
 		}
 		r.Backend = model.RemoteBackend(backend)
-		r.CreatedAt, _ = time.Parse(rfc3339, createdStr)
+		r.CreatedAt = displayTime("remotes.created_at", createdStr)
 		if err := json.Unmarshal([]byte(cfgJSON), &r.Config); err != nil {
 			r.Config = map[string]string{}
 		}
@@ -983,7 +1059,7 @@ func (s *Store) GetRemoteByName(ctx context.Context, name string) (*model.Remote
 		return nil, err
 	}
 	r.Backend = model.RemoteBackend(backend)
-	r.CreatedAt, _ = time.Parse(rfc3339, createdStr)
+	r.CreatedAt = displayTime("remotes.created_at", createdStr)
 	if err := json.Unmarshal([]byte(cfgJSON), &r.Config); err != nil {
 		r.Config = map[string]string{}
 	}
@@ -1187,7 +1263,7 @@ func scanClient(sc scanner) (model.Client, error) {
 	if excludes != "" {
 		_ = json.Unmarshal([]byte(excludes), &c.Excludes)
 	}
-	c.CreatedAt, _ = time.Parse(rfc3339, createdAt)
+	c.CreatedAt = displayTime("clients.created_at", createdAt)
 	return c, nil
 }
 
@@ -1199,7 +1275,7 @@ func scanRun(sc scanner) (model.Run, error) {
 		return r, err
 	}
 	r.Status = model.RunStatus(status)
-	r.StartedAt, _ = time.Parse(rfc3339, started)
-	r.FinishedAt, _ = time.Parse(rfc3339, finished)
+	r.StartedAt = displayTime("runs.started_at", started)
+	r.FinishedAt = displayTime("runs.finished_at", finished)
 	return r, nil
 }

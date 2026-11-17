@@ -59,11 +59,35 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 	return out, nil
 }
 
+// StagingDirEnv names the directory PrepareOffsite builds its temporary
+// archives in. Unset means <backup base dir>/staging — a sibling of the client
+// directories, on the volume the operator sized for backups. The default used to
+// be os.CreateTemp(""), i.e. the system temp dir: a copy of every snapshot on a
+// tmpfs that was never sized for it (and, for a big client, a full disk that
+// fails the backup rather than the staging step).
+const StagingDirEnv = "BACKITUP_STAGING_DIR"
+
+// stagingDirFor resolves (and creates) the directory to stage an archive in.
+func stagingDirFor(clientDir string) (string, error) {
+	dir := os.Getenv(StagingDirEnv)
+	if dir == "" {
+		dir = filepath.Join(filepath.Dir(clientDir), "staging")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create offsite staging dir: %w", err)
+	}
+	return dir, nil
+}
+
 // PrepareOffsite tars the snapshot directory into a temp .tar.gz (hardlinks
-// resolved into normal files). The caller uploads it then removes the temp file.
+// resolved into normal files). The caller uploads it then removes it.
 func (Server) PrepareOffsite(ctx context.Context, clientDir string, snap mode.Snapshot) (string, error) {
 	snapPath := filepath.Join(snapshotsDir(clientDir), snap.ID)
-	tmp, err := os.CreateTemp("", "backitup-offsite-*.tar.gz")
+	stage, err := stagingDirFor(clientDir)
+	if err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(stage, "backitup-offsite-*.tar.gz")
 	if err != nil {
 		return "", err
 	}
