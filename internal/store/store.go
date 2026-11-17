@@ -868,22 +868,38 @@ func (s *Store) DeleteDedupRecords(ctx context.Context, clientID int64, ownerSna
 // LatestOffsite returns the most recent offsite upload time for a client, or
 // (nil, nil) if it has never been offsited. Drives the dashboard offsite state
 // and the per-client upload schedule.
+//
+// A row whose uploaded_at cannot be parsed is logged and skipped, and the
+// newest readable row is returned instead — the same policy as
+// ListOffsiteObjects. Returning the error here would be fail-open in the wrong
+// direction: it reaches offsiteDue, which RunOffsiteOnce logs and skips, so one
+// undateable row would stop that client's offsite uploads *silently*. Skipping
+// moves the last-upload time backwards at worst, which can only make the client
+// due sooner; the dedupe path makes the extra upload cheap.
 func (s *Store) LatestOffsite(ctx context.Context, clientID int64) (*time.Time, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT uploaded_at FROM offsite_objects WHERE client_id=? ORDER BY uploaded_at DESC LIMIT 1`, clientID)
-	var uploaded string
-	switch err := row.Scan(&uploaded); err {
-	case sql.ErrNoRows:
-		return nil, nil
-	case nil:
-		t, err := parseStoredTime("offsite_objects.uploaded_at", uploaded)
-		if err != nil {
-			return nil, err
-		}
-		return &t, nil
-	default:
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT uploaded_at FROM offsite_objects WHERE client_id=? ORDER BY uploaded_at DESC`, clientID)
+	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
+	for rows.Next() {
+		var uploaded string
+		if err := rows.Scan(&uploaded); err != nil {
+			return nil, err
+		}
+		t, err := parseStoredTime("offsite_objects.uploaded_at", uploaded)
+		if err != nil {
+			log.Printf("store: client %d: %v — ignoring that row when deciding whether an upload is due", clientID, err)
+			continue
+		}
+		return &t, nil
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Nothing readable: treat as never offsited, which is "due now".
+	return nil, nil
 }
 
 // StartOffsiteRun inserts an offsite_runs row with status="running" so the

@@ -195,6 +195,66 @@ func TestPruneOffsiteKeepsObjectWithMalformedTimestamp(t *testing.T) {
 	}
 }
 
+// Item 3, the other half (round 2): LatestOffsite feeds the upload *schedule*,
+// not a deletion. Returning its parse error there reaches offsiteDue, which
+// RunOffsiteOnce logs as "schedule check: …" and skips — so a single undateable
+// row would silently stop that client's offsite copies from ever being made
+// again while the pass still reported clean. The safe direction is to skip the
+// row and stay due.
+func TestScheduledOffsiteUploadSurvivesCorruptTimestampRow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	id, base, dir := newClient(t, st, model.Client{
+		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
+		OffsiteCron: "*/5 * * * *", RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
+	})
+	ctx := context.Background()
+
+	// A readable upload two hours ago: the next cron tick is in the past, so the
+	// client is due.
+	if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
+		ClientID: id, SnapshotID: "prior.tar.gz", Remote: "local", UploadedAt: now.Add(-2 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A newer row whose timestamp cannot be read. Its text sorts after every
+	// RFC 3339 value, so ORDER BY uploaded_at DESC meets it first.
+	raw, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.ExecContext(ctx,
+		`INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at) VALUES (?,?,?,0,?)`,
+		id, "corrupt.tar.gz", "local", "99/06/2026 11:30"); err != nil {
+		t.Fatalf("insert corrupt row: %v", err)
+	}
+	// One snapshot on disk that has never been offsited: the work the schedule
+	// exists to trigger.
+	mkArchiveContent(t, filepath.Join(dir, "new.tar.gz"), now.Add(-30*time.Minute), "fresh-content")
+
+	off := &fakeOffsite{}
+	deps := Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}
+	if err := RunOffsiteOnce(ctx, deps); err != nil {
+		t.Fatalf("RunOffsiteOnce: %v", err)
+	}
+	if len(off.up) != 1 {
+		t.Fatalf("uploads = %d (%v), want 1: an unreadable uploaded_at must not stop the client's scheduled "+
+			"offsite uploads — that is the silent retention stall this pass exists to remove", len(off.up), off.up)
+	}
+	for obj := range off.up {
+		if !strings.HasSuffix(obj, "/new.tar.gz") {
+			t.Errorf("uploaded %q, want the never-offsited snapshot new.tar.gz", obj)
+		}
+	}
+}
+
 // stagingProbe is a cold-storage stub that records, at the moment of each
 // upload, how many archives are staged — that is what the caller is about to
 // hand it — and where they live.
