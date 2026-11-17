@@ -3,10 +3,21 @@ type: docker
 name: ci
 
 trigger:
-  event:
-    - push
-    - pull_request
-    - tag
+  # One build per change. Drone fires a separate build per event, so an unfiltered
+  # trigger built every feature branch twice — once for the branch push (a duplicate
+  # of the PR build) and once for the pull request — and both reported statuses
+  # against the same SHA, which is why a PR page could show drone/push failing while
+  # drone/pr passed on an identical tree.
+  #
+  # Filtered by `ref`, not `branch`: Drone evaluates the TARGET branch for a pull
+  # request and cannot apply branch triggers to tag events at all, so
+  # `branch: [main]` would silently stop every v* release build
+  # (build-linux-binary -> release -> release-server-binary).
+  ref:
+    include:
+      - refs/heads/main   # push builds: main only, where docker publish + smoke test run
+      - refs/pull/**      # every pull request, whatever the source branch
+      - refs/tags/**      # releases keep working
 
 steps:
 
