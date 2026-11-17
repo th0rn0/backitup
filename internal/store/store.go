@@ -53,6 +53,11 @@ func Open(dsn string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	// The migration committed, so the database is usable. Report any table an
+	// interrupted migration left behind (rows the application never reads) before
+	// handing the handle out. This runs outside every step transaction, reads only,
+	// and cannot fail the open: see warnStrandedMigrationTables.
+	warnStrandedMigrationTables(context.Background(), db)
 	return &Store{db: db}, nil
 }
 
