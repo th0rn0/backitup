@@ -5,11 +5,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/th0rn0/backitup/internal/atomicfile"
 	"github.com/th0rn0/backitup/internal/model"
 )
 
@@ -28,7 +28,7 @@ func (s *Server) writeRcloneConfig(ctx context.Context) error {
 		sb.WriteString(r.RcloneSection())
 		sb.WriteString("\n")
 	}
-	return os.WriteFile(s.rcloneConfig, []byte(sb.String()), 0600)
+	return atomicfile.Write(s.rcloneConfig, []byte(sb.String()), 0o600)
 }
 
 // RegenerateRcloneConfig is the exported entry point called from main after

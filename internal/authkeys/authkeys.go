@@ -20,13 +20,13 @@ package authkeys
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/th0rn0/backitup/internal/atomicfile"
 	"github.com/th0rn0/backitup/internal/model"
 )
 
@@ -106,29 +106,8 @@ func invalidPubKey(key string) string {
 }
 
 // WriteAtomic writes content to path via a temp file in the same directory and
-// a rename, so sshd never reads a half-written authorized_keys file (D4).
+// a rename, so sshd never reads a half-written authorized_keys file (D4). The
+// mechanics live in internal/atomicfile, shared with rclone.conf.
 func WriteAtomic(path, content string) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".authorized_keys-*")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op if the rename succeeded
-
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
+	return atomicfile.Write(path, []byte(content), 0o600)
 }
