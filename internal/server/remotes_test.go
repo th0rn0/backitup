@@ -6,6 +6,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -471,5 +472,91 @@ func TestDeleteRemoteSuccess(t *testing.T) {
 	body := readBody(t, resp)
 	if !strings.Contains(body, "deleted") {
 		t.Errorf("success flash missing 'deleted'; got:\n%s", body[:min(len(body), 500)])
+	}
+}
+
+// ── rclone.conf durability ────────────────────────────────────────────────────
+
+// TestRcloneConfigWriteFailureKeepsOldFile: rclone.conf is read by every offsite
+// upload, prune and remote test, so a regeneration that fails (full disk,
+// read-only data volume, crash) must leave the previous file intact instead of
+// truncating it. Before the atomic writer this was an os.WriteFile truncate-then-
+// write, and a mid-write failure left an empty or partial config behind.
+func TestRcloneConfigWriteFailureKeepsOldFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permissions do not block writes")
+	}
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "rclone.conf")
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	srv := New(st, false)
+	srv.ConfigureRclone(confPath)
+
+	if err := st.CreateRemote(t.Context(), model.Remote{
+		Name: "old-s3", Backend: model.BackendS3,
+		Config:    map[string]string{"access_key_id": "key", "secret_access_key": "sec", "region": "us-east-1"},
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+	if err := srv.RegenerateRcloneConfig(t.Context()); err != nil {
+		t.Fatalf("regenerate: %v", err)
+	}
+	before, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read seeded config: %v", err)
+	}
+	if !strings.Contains(string(before), "[old-s3]") {
+		t.Fatalf("seeded config missing old-s3 section: %q", before)
+	}
+
+	// A second remote makes the regenerated content different from the file on
+	// disk, so a truncating write would be visible.
+	if err := st.CreateRemote(t.Context(), model.Remote{
+		Name: "new-b2", Backend: model.BackendB2,
+		Config:    map[string]string{"account": "acct", "key": "k"},
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("create second remote: %v", err)
+	}
+
+	// Make the write fail the way a full or read-only data volume does.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	if err := srv.RegenerateRcloneConfig(t.Context()); err == nil {
+		t.Fatal("regenerate into a read-only directory succeeded; expected an error")
+	}
+
+	after, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("old rclone.conf unreadable after the failed write: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("failed write changed rclone.conf:\n got: %q\nwant: %q", after, before)
+	}
+	if !strings.Contains(string(after), "[old-s3]") || !strings.Contains(string(after), "type = s3") {
+		t.Fatalf("rclone.conf is not the complete old config: %q", after)
+	}
+	if strings.Contains(string(after), "new-b2") {
+		t.Fatalf("failed write leaked new content into rclone.conf: %q", after)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "rclone.conf" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("directory holds %v, want only rclone.conf (temp file leaked)", names)
 	}
 }

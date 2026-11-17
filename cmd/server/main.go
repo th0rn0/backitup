@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 	"time"
@@ -111,12 +110,20 @@ func main() {
 		}
 		return fmt.Errorf("client %d not found", clientID)
 	})
+	// Explicit timeouts (see http.go): the zero-value server has no deadlines at
+	// all, which leaves half-open header streams accepted indefinitely.
+	hs := newHTTPServer(addr, srv.Handler())
+	mode := "PLAINTEXT — set BACKITUP_TLS_CERT/KEY for production"
 	if secure {
-		log.Printf("backitup server: listening on %s (TLS)", addr)
-		err = http.ListenAndServeTLS(addr, tlsCert, tlsKey, srv.Handler())
+		mode = "TLS"
+	}
+	log.Printf("backitup server: listening on %s (%s)", addr, mode)
+	log.Printf("backitup server: timeouts read-header=%s read=%s idle=%s write=%s (write unbounded: streaming downloads)",
+		readHeaderTimeout, readTimeout, idleTimeout, "none")
+	if secure {
+		err = hs.ListenAndServeTLS(tlsCert, tlsKey)
 	} else {
-		log.Printf("backitup server: listening on %s (PLAINTEXT — set BACKITUP_TLS_CERT/KEY for production)", addr)
-		err = http.ListenAndServe(addr, srv.Handler())
+		err = hs.ListenAndServe()
 	}
 	if err != nil {
 		log.Fatalf("serve: %v", err)
