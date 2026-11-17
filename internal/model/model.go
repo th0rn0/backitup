@@ -144,7 +144,7 @@ type Run struct {
 	Bytes      int64
 	Files      int64
 	SnapshotID string // tar.gz: archive filename; rsync: timestamp+seq dir name
-	LogTail    string // capped at 4 KB before write
+	LogTail    string // capped at MaxLogTail (64 KB) before write
 }
 
 // OffsiteObject tracks what has been pushed to cold storage, so the lifecycle

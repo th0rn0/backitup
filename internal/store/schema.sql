@@ -1,9 +1,19 @@
--- backitup schema (Lane 0). SQLite, single-writer (design doc D1: one app process).
--- The lifecycle worker writes only short status rows and never holds a write txn
--- across a long rclone/tar subprocess (eng review SQLite discipline).
-
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+-- backitup schema — the ONE canonical shape of the database.
+--
+-- Open() applies this file in two ordered phases (see migrate.go). Phase one
+-- creates whatever tables are missing; phase two rebuilds any existing table
+-- whose stored definition is not this one, and only then creates the indexes.
+-- Each phase is a single transaction, gated by PRAGMA user_version, so a
+-- database already at this version is not touched at all.
+--
+-- Column order is part of the schema. Migrations do not append columns to an old
+-- table — they rebuild it to the order below — so a freshly created database and
+-- an upgraded one have byte-identical column order. That is what makes a row
+-- copy between an old and a new table (INSERT ... SELECT) safe: add new columns
+-- at the END of their table, and never rely on SELECT *.
+--
+-- Connection pragmas (journal_mode=WAL, foreign_keys=ON, busy_timeout) are set
+-- by Open(), not here: they cannot be changed inside the migration transaction.
 
 CREATE TABLE IF NOT EXISTS clients (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,13 +27,17 @@ CREATE TABLE IF NOT EXISTS clients (
     expected_interval_secs  INTEGER NOT NULL DEFAULT 0,     -- advisory only (staleness; D1)
     offsite_remote          TEXT    NOT NULL DEFAULT '',    -- rclone remote; '' = no offsite
     offsite_dir             TEXT    NOT NULL DEFAULT '',    -- subdir within remote; '' = client slug
-    offsite_interval_secs   INTEGER NOT NULL DEFAULT 0,    -- min secs between passes; 0 = every pass
+    offsite_interval_secs   INTEGER NOT NULL DEFAULT 0,     -- min secs between passes; 0 = every pass
+    offsite_cron            TEXT    NOT NULL DEFAULT '',    -- upload schedule; '' = use the interval
     ssh_pubkey              TEXT    NOT NULL DEFAULT '',
     token_hash              TEXT    NOT NULL DEFAULT '',     -- argon2id of bearer token (D4)
+    token_prefix            TEXT    NOT NULL DEFAULT '',     -- shown to the operator to tell tokens apart
     enabled                 INTEGER NOT NULL DEFAULT 1,
     created_at              TEXT    NOT NULL,
     version                 INTEGER NOT NULL DEFAULT 1,  -- CAS guard for credential rotation
-    skip_symlinks           INTEGER NOT NULL DEFAULT 0   -- omit symlinks from backup
+    skip_symlinks           INTEGER NOT NULL DEFAULT 0,  -- omit symlinks from backup
+    offsite_upload_mode     TEXT    NOT NULL DEFAULT 'all',  -- 'all' or 'latest': which snapshots to push
+    disable_offsite_pruning INTEGER NOT NULL DEFAULT 0   -- keep the operator's remote objects in place
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -35,28 +49,24 @@ CREATE TABLE IF NOT EXISTS runs (
     bytes        INTEGER NOT NULL DEFAULT 0,
     files        INTEGER NOT NULL DEFAULT 0,
     snapshot_id  TEXT    NOT NULL DEFAULT '',
-    log_tail     TEXT    NOT NULL DEFAULT ''   -- capped at 4 KB before insert
+    log_tail     TEXT    NOT NULL DEFAULT ''   -- capped at model.MaxLogTail (64 KB) before insert
 );
-
--- Dashboard reads "latest run per client" off this index (eng review: no N+1).
-CREATE INDEX IF NOT EXISTS idx_runs_client_started
-    ON runs (client_id, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS offsite_objects (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-    snapshot_id  TEXT    NOT NULL,
-    remote       TEXT    NOT NULL,
-    bytes        INTEGER NOT NULL DEFAULT 0,
-    uploaded_at  TEXT    NOT NULL,
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id          INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    snapshot_id        TEXT    NOT NULL,
+    remote             TEXT    NOT NULL,
+    bytes              INTEGER NOT NULL DEFAULT 0,
+    uploaded_at        TEXT    NOT NULL,
+    checksum           TEXT    NOT NULL DEFAULT '',  -- SHA-256 of the archive; '' for legacy rows
     -- '' = this row owns a real remote object; otherwise the snapshot id whose
     -- remote object holds this snapshot's content (a deduplicated upload).
-    dedup_of     TEXT    NOT NULL DEFAULT '',
+    dedup_of           TEXT    NOT NULL DEFAULT '',
+    remote_missing     INTEGER NOT NULL DEFAULT 0,   -- last rclone check confirmed the object is gone
+    remote_verified_at TEXT    NOT NULL DEFAULT '',  -- '' = never verified
     UNIQUE (client_id, snapshot_id, remote)
 );
-
-CREATE INDEX IF NOT EXISTS idx_offsite_client
-    ON offsite_objects (client_id, uploaded_at DESC);
 
 CREATE TABLE IF NOT EXISTS remotes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,8 +88,14 @@ CREATE TABLE IF NOT EXISTS offsite_runs (
     error_text          TEXT    NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS idx_offsite_runs_client
-    ON offsite_runs (client_id, started_at DESC);
+-- Web UI accounts (D3: built-in login, argon2id). admin (below) is the legacy
+-- single-account row; new code uses this table.
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
 
 -- Single admin account (D3: built-in login, argon2id).
 CREATE TABLE IF NOT EXISTS admin (
@@ -88,3 +104,21 @@ CREATE TABLE IF NOT EXISTS admin (
     password_hash TEXT NOT NULL,
     created_at    TEXT NOT NULL
 );
+
+-- Indexes come last: a rebuild drops the old table together with its indexes,
+-- and idx_clients_slug can only be created once every client has a unique slug.
+
+-- Dashboard reads "latest run per client" off this index (eng review: no N+1).
+CREATE INDEX IF NOT EXISTS idx_runs_client_started
+    ON runs (client_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_offsite_client
+    ON offsite_objects (client_id, uploaded_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_offsite_runs_client
+    ON offsite_runs (client_id, started_at DESC);
+
+-- The database, not the application, guarantees one client per storage
+-- directory. See backfillClientSlugs for how pre-column rows get their value.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_slug
+    ON clients (slug);
