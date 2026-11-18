@@ -26,6 +26,9 @@ services:
       BACKITUP_BACKUP_DIR: /srv/backups
       # Shown in the generated client cron line.
       BACKITUP_PUBLIC_HOST: ${BACKITUP_PUBLIC_HOST:-your-server:2222}
+      # Control-channel URL shown as BACKITUP_API in the generated docker run
+      # command. Unset -> a paste-safe YOUR-SERVER placeholder is rendered.
+      BACKITUP_PUBLIC_API: ${BACKITUP_PUBLIC_API:-}
       BACKITUP_CLIENT_IMAGE: ${BACKITUP_CLIENT_IMAGE:-th0rn0/backitup-client:dev}
       # Lifecycle worker (offsite + retention + integrity). rclone.conf defines
       # the encrypted crypt remote(s) a client's OffsiteRemote points at.
