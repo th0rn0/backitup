@@ -3,10 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
-	"io/fs"
-	"path/filepath"
 	"sort"
-	"syscall"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/model"
@@ -21,24 +18,25 @@ type dashboardView struct {
 }
 
 type storageStats struct {
-	HotBytes  int64
-	ColdBytes int64
+	HotBytes    int64
+	HotMeasured bool // false until the background meter has completed one walk
+	ColdBytes   int64
 }
 
 type summaryCounts struct{ OK, Stale, Failed, Never, Running int }
 
 type clientRow struct {
-	ID              int64
-	Name            string
-	Slug            string // URL/filesystem-safe identifier derived from Name
-	Mode            string
-	Health          string // css class: ok/stale/failed/never
-	HealthLabel     string // "OK" / "Stale" / "Failed" / "Never"
-	Icon            string // ● / ▲ / ✖ / ○  (icon+colour+text; never colour alone, DD2)
-	LastBackup      string
-	Size            string
-	Retention       string
-	Offsite         string
+	ID               int64
+	Name             string
+	Slug             string // URL/filesystem-safe identifier derived from Name
+	Mode             string
+	Health           string // css class: ok/stale/failed/never
+	HealthLabel      string // "OK" / "Stale" / "Failed" / "Never"
+	Icon             string // ● / ▲ / ✖ / ○  (icon+colour+text; never colour alone, DD2)
+	LastBackup       string
+	Size             string
+	Retention        string
+	Offsite          string
 	OffsiteUploading bool // true while an adhoc offsite run is in progress
 }
 
@@ -111,53 +109,13 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 		return healthRank(v.Clients[i].Health) < healthRank(v.Clients[j].Health)
 	})
 
-	// Storage totals: hot bytes are cached (60s TTL) to avoid walking the
-	// backup dir tree on every page load.
+	// Storage totals. Hot bytes come from the background meter — this handler
+	// must never walk the backup tree (see storage.go); cold bytes are a single
+	// indexed query.
 	v.Storage.ColdBytes, _ = s.st.TotalOffsiteBytes(ctx)
-	v.Storage.HotBytes = s.cachedHotBytes()
+	v.Storage.HotBytes, v.Storage.HotMeasured = s.hotBytes()
 
 	return v, nil
-}
-
-// cachedHotBytes returns the true on-disk size of the backup dir, recomputing
-// at most once per minute. Hardlinked files (rsync snapshots share inodes) are
-// counted once regardless of how many snapshots reference them.
-func (s *Server) cachedHotBytes() int64 {
-	s.hotBytesMu.Lock()
-	defer s.hotBytesMu.Unlock()
-	if time.Now().Before(s.hotBytesExpiry) {
-		return s.hotBytesCache
-	}
-	type inodeKey struct{ dev, ino uint64 }
-	seen := make(map[inodeKey]struct{})
-	var total int64
-	_ = filepath.WalkDir(s.backupBaseDir, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		sys, ok := info.Sys().(*syscall.Stat_t)
-		if !ok {
-			total += info.Size()
-			return nil
-		}
-		key := inodeKey{sys.Dev, sys.Ino}
-		if _, dup := seen[key]; dup {
-			return nil
-		}
-		seen[key] = struct{}{}
-		// Use allocated blocks (512-byte units) to match what `du` reports:
-		// logical size overstates usage on compressed filesystems and for
-		// sparse files; st_blocks is what actually occupies disk space.
-		total += int64(sys.Blocks) * 512
-		return nil
-	})
-	s.hotBytesCache = total
-	s.hotBytesExpiry = time.Now().Add(60 * time.Second)
-	return total
 }
 
 func healthRank(h string) int {

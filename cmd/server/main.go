@@ -96,6 +96,13 @@ func main() {
 	stopOffsite := lifecycle.StartOffsiteWorker(context.Background(), lcDeps, parseInterval(getenv("BACKITUP_OFFSITE_POLL_INTERVAL", "5m")))
 	defer stopOffsite()
 
+	// Storage meter: the dashboard's hot-bytes figure is measured in the
+	// background. Walking the backup tree in a request handler made the page
+	// unavailable exactly when there was a lot to measure.
+	stopMeter := srv.StartStorageMeter(context.Background(),
+		parseInterval(getenv("BACKITUP_STORAGE_REFRESH", "60s")))
+	defer stopMeter()
+
 	// Wire the "Backup now" button: resolves client by ID then runs an immediate
 	// offsite pass using the same deps as the background worker.
 	srv.ConfigureOffsiteTrigger(func(ctx context.Context, clientID int64) error {

@@ -10,7 +10,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
@@ -55,10 +54,15 @@ type Server struct {
 	// Defaults to time.UTC.
 	loc *time.Location
 
-	// hotBytesMu guards hotBytesCache and hotBytesExpiry.
-	hotBytesMu    sync.Mutex
-	hotBytesCache int64
-	hotBytesExpiry time.Time
+	// storage holds the last measured size of the backup tree. It is refreshed
+	// by a background goroutine and read atomically: the walk is O(files) over
+	// the whole backup volume, so doing it in a handler made the dashboard
+	// unavailable exactly when there was a lot to measure (see storage.go).
+	storage storageMeter
+
+	// measureStorage performs the walk; nil means measureHotBytes. Tests replace
+	// it to prove the request path never triggers a walk.
+	measureStorage func(ctx context.Context, baseDir string) (int64, error)
 
 	// offsiteTrigger runs an immediate offsite pass for a single client.
 	// Nil disables the "Backup now" button. Wired by ConfigureOffsiteTrigger.

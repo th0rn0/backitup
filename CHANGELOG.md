@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The dashboard no longer stalls when there is a lot of stored backup data.** The "On disk" figure walked the entire backup tree inside the request handler, holding a mutex for the whole walk and recomputing at most once a minute — so the cost of opening the dashboard grew with the size of the fleet it was reporting on. Measured on a fast local disk with 200,000 files: **every cold dashboard load took 1.11 s**, and ten concurrent loads each waited the full walk because the walk held the lock. On a real backup volume on slower storage, while the lifecycle is reading the same disk, that is minutes of an unreachable dashboard — and the page that tells you backup health is the one that stops loading.
+  The walk now runs in a background meter (`BACKITUP_STORAGE_REFRESH`, default `60s`) and handlers read an atomic, so a page load never touches the filesystem: the same ten concurrent loads took **20 ms wall**. Until the first measurement completes the row reads "measuring…" instead of a confident `0 B`.
+
+
 ### Security
 
 - **Client directories can no longer be shared.** A client's storage directory was derived on the fly from its name, so names differing only in punctuation, spacing or case (`dup a`, `dup-a`, `Dup_A`, `dup/a`) produced one directory and one identical SSH forced command — two clients in one read-write jail, each able to download the other's data. A name with no alphanumeric characters (`..`, `.`, `/`) slugged to `""`, which jailed the client at the backup base directory itself. The slug is now a persisted, UNIQUE column (`clients.slug`), computed once on create and used for every directory path (`authorized_keys`, snapshot listing/download/delete, offsite object prefix, lifecycle pruning). `POST /clients` rejects an empty slug, a slug already in use, and a name longer than 63 characters (the name becomes the directory component and part of the sshd forced command) with a form error naming the conflict; `authkeys.Render` emits no line at all for a client whose slug is unusable, and the slug is validated against an allowlist (`^[a-z0-9][a-z0-9-]{0,62}$`) because it is embedded in `authorized_keys`. Existing databases are upgraded automatically: each row is backfilled from its name, the oldest client keeps the plain slug, later collisions get `-2`, `-3`, … and a slugless name falls back to `client-<id>`. **This separates future writes only — see the upgrade note below for clients that already shared a directory.**
