@@ -40,9 +40,9 @@ func (s *Server) storeCtx(r *http.Request) (context.Context, context.CancelFunc)
 type storeTimeoutKind int
 
 const (
-	storeOK        storeTimeoutKind = iota // not an availability failure
-	storeDeadline                          // s.dbTimeout elapsed, or the request was cancelled
-	storeLocked                            // SQLite reported the database as locked
+	storeOK       storeTimeoutKind = iota // not an availability failure
+	storeDeadline                         // s.dbTimeout elapsed, or the request was cancelled
+	storeLocked                           // SQLite reported the database as locked
 )
 
 // classifyStoreFailure reports whether err means "the store could not answer
@@ -112,7 +112,7 @@ func (s *Server) storeFailure(w http.ResponseWriter, ctx context.Context, op str
 // deadlineReason describes which clock ran out, for the log line.
 func (s *Server) deadlineReason(ctx context.Context) string {
 	if errors.Is(ctx.Err(), context.Canceled) {
-		return "request cancelled on a deadline of " + s.dbTimeout.String()
+		return "request cancelled before the store answered"
 	}
 	return "deadline of " + s.dbTimeout.String() + " expired"
 }

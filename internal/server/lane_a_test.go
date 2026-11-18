@@ -28,6 +28,7 @@ func ingestStack(t *testing.T) (*store.Store, *httptest.Server, string) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	srv := New(st, false)
+	srv.dbTimeout = testDBTimeout // assert behaviour, not the machine's speed
 	tmp := t.TempDir()
 	authKeys := filepath.Join(tmp, "authkeys", "authorized_keys")
 	srv.authKeysPath = authKeys

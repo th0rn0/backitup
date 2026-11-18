@@ -57,6 +57,21 @@ func storeTimeoutStack(t *testing.T, d time.Duration) (*store.Store, *Server) {
 	return st, srv
 }
 
+// testDBTimeout is the store deadline the shared fixtures give their server.
+//
+// The production default (5s) is a bound on a store that has stopped answering,
+// and on an idle box a query takes about a millisecond. On a loaded CI runner a
+// stalled disk can eat five seconds of wall clock, which made two builds red on
+// a tree that was green (163, 165) — the assertion "create returns 200" was
+// silently also an assertion "this runner never stalls for five seconds". A test
+// that asserts handler behaviour should not be an assertion about the machine,
+// so the fixtures use a bound long enough that only a genuine hang trips it.
+//
+// The timeout path itself is not skipped, it is tested on purpose: the tests
+// below drive it with a deadline that has already expired, which is the same
+// state the CI runner reached, reached deliberately.
+const testDBTimeout = 30 * time.Second
+
 // expiredDeadline is a deadline that is already in the past. It matters that it
 // is negative rather than "very small": context.WithDeadline cancels
 // synchronously when the deadline has passed, but a 1ns deadline depends on a
