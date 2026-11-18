@@ -27,7 +27,7 @@
       <div class="storage-stats">
         <div class="stat-chip">
           <span class="stat-label">On disk</span>
-          <span class="stat-value">{{humanBytes .Storage.HotBytes}}</span>
+          <span class="stat-value">{{if .Storage.HotMeasured}}{{humanBytes .Storage.HotBytes}}{{else}}measuring…{{end}}</span>
         </div>
         <div class="stat-chip">
           <span class="stat-label">On remote</span>
