@@ -33,6 +33,10 @@ type Server struct {
 	limiter  *loginLimiter
 	secure   bool // set cookies Secure (true when served over TLS)
 
+	// dbTimeout bounds the store work one request may do (defaultDBTimeout).
+	// See storeCtx and storeFailure in store_timeout.go.
+	dbTimeout time.Duration
+
 	// Ingest config (Lane A): where to write authorized_keys, the per-client
 	// backup base dir, and what to show in the generated docker run command.
 	authKeysPath   string
@@ -127,6 +131,7 @@ func New(st *store.Store, secure bool) *Server {
 		tmpl:          template.Must(template.New("").Funcs(funcs).ParseFS(templateFS, "templates/*.html")),
 		limiter:       newLoginLimiter(),
 		secure:        secure,
+		dbTimeout:     defaultDBTimeout,
 		authKeysPath:  "/srv/authkeys/authorized_keys",
 		backupBaseDir: "/srv/backups",
 		publicHost:    "your-server:2222",

@@ -1,20 +1,22 @@
 package server
 
 import (
-	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
 )
 
 func (s *Server) getUsers(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	users, err := s.st.ListUsers(ctx)
 	if err != nil {
+		if s.storeFailure(w, ctx, "users: list", err) {
+			return
+		}
 		http.Error(w, "failed to load users", http.StatusInternalServerError)
 		return
 	}
@@ -46,9 +48,14 @@ func (s *Server) postCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "hash error", http.StatusInternalServerError)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	if _, err := s.st.CreateUser(ctx, username, hash); err != nil {
+		// Same shape as postClients: a store that did not answer is not a taken
+		// username, and it must not be reported as one.
+		if s.storeFailure(w, ctx, fmt.Sprintf("create user %q", username), err) {
+			return
+		}
 		s.renderUsersError(w, r, "Could not create user (is the username already taken?).")
 		return
 	}
@@ -71,7 +78,7 @@ func (s *Server) postDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 
 	// Guard: cannot delete the last user (would lock everyone out).
@@ -98,7 +105,7 @@ func (s *Server) postDeleteUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderUsersError(w http.ResponseWriter, r *http.Request, msg string) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	users, _ := s.st.ListUsers(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
