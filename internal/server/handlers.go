@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
-	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
 )
@@ -43,11 +43,17 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			s.redirectToLogin(w, r)
 			return
 		}
-		userCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		userCtx, cancel := s.storeCtx(r)
+		defer cancel()
 		user, err := s.st.GetUserByID(userCtx, s.sessions.UserID(c.Value))
-		cancel()
 		if err != nil {
-			// Fail closed: an account we cannot verify is not an account.
+			// Fail closed: an account we cannot verify is not an account. But a
+			// store that did not answer is a different fault from an invalid
+			// session, and bouncing the admin to /login hides it behind a page
+			// that needs the same store to work. Name it instead.
+			if s.storeFailure(w, userCtx, "requireAdmin: verify session user", err) {
+				return
+			}
 			s.redirectToLogin(w, r)
 			return
 		}
@@ -88,12 +94,23 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 	username := r.PostFormValue("username")
 	password := r.PostFormValue("password")
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	user, err := s.st.GetUserByUsername(ctx, username)
 	// Generic message on every failure path — no user enumeration (design doc).
 	const invalid = "Invalid username or password."
-	if err != nil || user == nil {
+	if err != nil {
+		// A store that did not answer is not a wrong password, and it must not be
+		// counted as a failed attempt: ten of those lock the operator out of
+		// their own server for a fault that has nothing to do with them.
+		if s.storeFailure(w, ctx, fmt.Sprintf("login: load user %q", username), err) {
+			return
+		}
+		s.limiter.record(r)
+		s.renderLogin(w, http.StatusUnauthorized, invalid)
+		return
+	}
+	if user == nil {
 		s.limiter.record(r)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
@@ -153,10 +170,13 @@ type fleetClientStatus struct {
 }
 
 func (s *Server) getFleetStatus(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	view, err := s.buildDashboard(ctx)
 	if err != nil {
+		if s.storeFailure(w, ctx, "fleet status: build dashboard", err) {
+			return
+		}
 		http.Error(w, "failed to load fleet", http.StatusInternalServerError)
 		return
 	}
@@ -178,10 +198,13 @@ func (s *Server) getFleetStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	username := usernameFromContext(r.Context())
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	view, err := s.buildDashboard(ctx)
 	if err != nil {
+		if s.storeFailure(w, ctx, "dashboard: build view", err) {
+			return
+		}
 		http.Error(w, "failed to load fleet", http.StatusInternalServerError)
 		return
 	}

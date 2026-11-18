@@ -25,7 +25,9 @@ func testStack(t *testing.T) (*store.Store, *httptest.Server) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	ts := httptest.NewServer(New(st, false).Handler())
+	srv := New(st, false)
+	srv.dbTimeout = testDBTimeout // assert behaviour, not the machine's speed
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return st, ts
 }

@@ -45,6 +45,10 @@ func (s *Server) getNewClient(w http.ResponseWriter, r *http.Request) {
 // the private key + token + cron line ONCE (D4, DD5).
 func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
+		// A form that will not parse is worth a log line of its own: it is the
+		// one path here that really is about the request, so when an operator
+		// reports "invalid form" the log must be able to confirm it.
+		log.Printf("create client: parse form: %v", err)
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
@@ -71,7 +75,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	_, err := s.st.CreateClient(ctx, model.Client{
 		Name:                 name,
@@ -104,18 +108,33 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 				"Storage slug %q is already used by client %q. Two names that differ only in "+
 					"punctuation, spacing or case share one directory, so choose a name that "+
 					"produces a different slug.", conflict.Slug, conflict.Existing))
+			return
 		case errors.Is(err, store.ErrEmptySlug):
 			s.renderNewClientError(w, r, fmt.Sprintf(
 				"Client name %q must contain at least one letter or digit: it becomes the "+
 					"client's storage slug (directory name).", name))
-		default:
-			s.renderNewClientError(w, r, "Could not create client (is the name already taken?).")
+			return
 		}
+		// Nothing about the name: either the store did not answer (503, and the
+		// error is in the log) or it failed for a reason this handler cannot
+		// attribute to the input. Before storeFailure existed every one of these
+		// fell into the message below, so a spent deadline told the operator
+		// their client name was probably taken — the 400 in build 165.
+		if s.storeFailure(w, ctx, fmt.Sprintf("create client %q", name), err) {
+			return
+		}
+		s.renderNewClientError(w, r, "Could not create client (is the name already taken?).")
 		return
 	}
 
-	if err := s.regenAuthorizedKeys(ctx); err != nil {
-		log.Printf("authkeys regenerate failed: %v", err)
+	// Fresh context for the authorized_keys rewrite: the store write above may
+	// have spent most of dbTimeout, and authorized_keys is what makes the client
+	// we just created able to connect at all. Bounded by the same deadline so a
+	// wedged filesystem cannot hang the request either.
+	akCtx, akCancel := context.WithTimeout(context.Background(), s.dbTimeout)
+	defer akCancel()
+	if err := s.regenAuthorizedKeys(akCtx); err != nil {
+		log.Printf("authkeys regenerate failed: %v — the new client's key is NOT in authorized_keys, so it cannot connect yet", err)
 		// The client exists; surface the issue but still show the secrets.
 	}
 
@@ -141,10 +160,13 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 
 // getClient renders the client detail page with run history.
 func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("client detail: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
 	}
@@ -313,15 +335,27 @@ func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
-	if err != nil || c == nil {
+	if err != nil {
+		// A store that did not answer is not a missing run page: 404 would tell
+		// the operator the run does not exist.
+		if s.storeFailure(w, ctx, fmt.Sprintf("run log: load client %q", r.PathValue("name")), err) {
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+	if c == nil {
 		http.NotFound(w, r)
 		return
 	}
 	run, err := s.st.GetRun(ctx, runID)
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("run log: load run %d", runID), err) {
+			return
+		}
 		http.Error(w, "failed to load run", http.StatusInternalServerError)
 		return
 	}
@@ -351,11 +385,14 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("rotate: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
 	}
@@ -374,6 +411,11 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "concurrent rotation detected — reload the page and try again", http.StatusConflict)
 			return
 		}
+		if s.storeFailure(w, ctx, fmt.Sprintf("rotate client %d (%q)", c.ID, c.Name), err) {
+			// A store that did not answer is not a rotation that failed: build
+			// 163 saw this path answer 500 and leave no log line at all.
+			return
+		}
 		http.Error(w, "rotate failed", http.StatusInternalServerError)
 		return
 	}
@@ -381,7 +423,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	// Use a fresh context for the authkeys write: it is a local filesystem
 	// operation that must not be bounded by the already-partially-spent HTTP
 	// request context (the DB write above may have consumed most of the 5s).
-	akCtx, akCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	akCtx, akCancel := context.WithTimeout(context.Background(), s.dbTimeout)
 	defer akCancel()
 	authKeysFailed := false
 	if err := s.regenAuthorizedKeys(akCtx); err != nil {
@@ -427,10 +469,13 @@ func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Reques
 		expectedInterval = 0
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("retention: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
 	}
@@ -439,6 +484,9 @@ func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.st.UpdateClientRetention(ctx, c.ID, hotDays, offsiteDays, expectedInterval); err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("retention: update client %d (%q)", c.ID, c.Name), err) {
+			return
+		}
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
@@ -448,10 +496,13 @@ func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Reques
 // postForgetOffsiteObject removes the offsite tracking record without deleting
 // the remote file. Used for "missing on disk" entries the operator wants to clear.
 func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("forget offsite: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
@@ -461,7 +512,9 @@ func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request)
 	}
 	snapshotID := r.PathValue("snapshotID")
 	if err := s.st.ForgetOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote); err != nil {
-		log.Printf("forget offsite object: client=%s snap=%s: %v", c.Name, snapshotID, err)
+		if s.storeFailure(w, ctx, fmt.Sprintf("forget offsite: client=%q snap=%q", c.Name, snapshotID), err) {
+			return
+		}
 		http.Redirect(w, r, "/clients/"+c.Slug+"?err=forget+failed", http.StatusSeeOther)
 		return
 	}
@@ -491,13 +544,22 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 
 	// Validate that the remote exists in the DB (empty = disable offsite).
 	if remote != "" {
 		known, err := s.st.GetRemoteByName(ctx, remote)
-		if err != nil || known == nil {
+		if err != nil {
+			// A store blip is not an invalid remote name; do not tell the
+			// operator to go and look at their remote list.
+			if s.storeFailure(w, ctx, fmt.Sprintf("offsite: look up remote %q", remote), err) {
+				return
+			}
+			http.Error(w, "invalid offsite_remote value", http.StatusBadRequest)
+			return
+		}
+		if known == nil {
 			http.Error(w, "invalid offsite_remote value", http.StatusBadRequest)
 			return
 		}
@@ -505,6 +567,9 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("offsite: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
 	}
@@ -514,6 +579,9 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, cronExpr, uploadMode, disablePruning); err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("offsite: update client %d (%q)", c.ID, c.Name), err) {
+			return
+		}
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return
 	}
@@ -534,6 +602,9 @@ func (s *Server) postTestClientOffsite(w http.ResponseWriter, r *http.Request) {
 
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("offsite test: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
 	}
@@ -569,11 +640,14 @@ func (s *Server) postOffsiteRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("offsite run: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
 	}
@@ -593,7 +667,6 @@ func (s *Server) postOffsiteRun(w http.ResponseWriter, r *http.Request) {
 			log.Printf("offsite run: client=%q: %v", clientName, err)
 		}
 	}()
-
 	http.Redirect(w, r, "/clients/"+r.PathValue("name")+"?msg=Offsite+backup+started+in+the+background", http.StatusSeeOther)
 }
 
@@ -609,11 +682,14 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 
 	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
 	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("delete client: load client %q", r.PathValue("name")), err) {
+			return
+		}
 		http.Error(w, "failed to load client", http.StatusInternalServerError)
 		return
 	}
@@ -623,6 +699,9 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.st.DeleteClient(ctx, c.ID); err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("delete client %d (%q)", c.ID, c.Name), err) {
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			http.NotFound(w, r)
 			return
@@ -631,7 +710,7 @@ func (s *Server) postDeleteClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	akCtx, akCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	akCtx, akCancel := context.WithTimeout(context.Background(), s.dbTimeout)
 	defer akCancel()
 	if err := s.regenAuthorizedKeys(akCtx); err != nil {
 		log.Printf("authkeys regenerate failed after delete client %d: %v", c.ID, err)
@@ -677,7 +756,7 @@ func generateClientCreds(w http.ResponseWriter, name string) (privPEM, pubLine, 
 }
 
 func (s *Server) renderNewClientError(w http.ResponseWriter, r *http.Request, msg string) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	remotes, _ := s.st.ListRemotes(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

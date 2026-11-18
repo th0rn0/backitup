@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,10 +30,20 @@ func (s *Server) requireClient(next http.HandlerFunc) http.HandlerFunc {
 			unauthorized(w)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		ctx, cancel := s.storeCtx(r)
 		defer cancel()
 		cl, err := s.clientByToken(ctx, tok)
-		if err != nil || cl == nil {
+		if err != nil {
+			// A store that did not answer says nothing about the token. 503 is
+			// actionable ("retry"); 401 would send the client to re-enrol for a
+			// server-side hiccup.
+			if s.storeFailure(w, ctx, "client API: look up bearer token", err) {
+				return
+			}
+			unauthorized(w)
+			return
+		}
+		if cl == nil {
 			unauthorized(w)
 			return
 		}
@@ -84,7 +95,7 @@ func (s *Server) clientByToken(ctx context.Context, token string) (*model.Client
 // call means a new backup session is starting, so the previous session is gone.
 func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	cl := clientFrom(r.Context())
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 	if err := s.st.MarkClientRunningRunFailed(ctx, cl.ID); err != nil {
 		log.Printf("getConfig: clear stale run for client=%q: %v", cl.Name, err)
@@ -140,7 +151,7 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid status", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 
 	// The run's start is also the lower bound for "did an upload land for this
@@ -167,6 +178,9 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 			FinishedAt: finished, Status: st,
 			Bytes: req.Bytes, Files: req.Files, SnapshotID: req.SnapshotID, LogTail: req.LogTail,
 		}); err != nil {
+			if s.storeFailure(w, ctx, "status: update run "+strconv.FormatInt(req.RunID, 10), err) {
+				return
+			}
 			http.Error(w, "failed to update run", http.StatusInternalServerError)
 			return
 		}
@@ -188,6 +202,9 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 		Bytes: req.Bytes, Files: req.Files, SnapshotID: req.SnapshotID, LogTail: req.LogTail,
 	})
 	if err != nil {
+		if s.storeFailure(w, ctx, "status: record run", err) {
+			return
+		}
 		http.Error(w, "failed to record status", http.StatusInternalServerError)
 		return
 	}
