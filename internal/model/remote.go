@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -19,6 +20,7 @@ const (
 	BackendWebDAV   RemoteBackend = "webdav"     // WebDAV
 	BackendAzure    RemoteBackend = "azureblob"  // Azure Blob Storage
 	BackendFTP      RemoteBackend = "ftp"        // FTP
+	BackendCrypt    RemoteBackend = "crypt"      // rclone crypt (encrypts another remote)
 )
 
 type RemoteFieldType string
@@ -47,6 +49,22 @@ type RemoteField struct {
 	Obscure bool
 }
 
+// AllowsValue reports whether v is acceptable for this field. Select fields
+// carry a fixed vocabulary (rclone rejects a config line whose value is not one
+// of its known options), so the handler checks the submitted value against it
+// rather than trusting the form.
+func (f RemoteField) AllowsValue(v string) bool {
+	if f.Type != FieldSelect || len(f.Options) == 0 {
+		return true
+	}
+	for _, o := range f.Options {
+		if o.Value == v {
+			return true
+		}
+	}
+	return false
+}
+
 // BackendDef describes a supported rclone backend and all its config fields.
 type BackendDef struct {
 	ID       RemoteBackend
@@ -60,6 +78,46 @@ type BackendDef struct {
 
 // Backends is the ordered list of all supported rclone backends.
 var Backends = []BackendDef{
+	{
+		// crypt encrypts another remote's contents on the way out, so it is
+		// listed first: "the provider only ever sees ciphertext" is the
+		// posture the README promises, and this is the backend that delivers
+		// it. It needs a plaintext remote to wrap, created first.
+		ID: BackendCrypt, Label: "Encrypted (rclone crypt) — recommended",
+		PathHint:  "Path inside the encrypted remote — e.g. clients. Directory and file names are encrypted too.",
+		PathLabel: "Encrypted path",
+		Fields: []RemoteField{
+			{
+				Key: "remote", Label: "Plaintext remote", Type: FieldText, Required: true,
+				Hint: "Name of an existing remote that this one wraps — create the plaintext remote first. Everything written through this remote is encrypted before it reaches that one.",
+			},
+			{
+				Key: "filename_encryption", Label: "Filename encryption", Type: FieldSelect, Default: "standard",
+				Hint: "Standard encrypts file names, obscure also pads them to hide their length, off leaves them readable (contents are still encrypted). Leaving this unset keeps rclone's default, which is standard.",
+				Options: []SelectOpt{
+					{Value: "standard", Label: "Standard — encrypt file names"},
+					{Value: "obscure", Label: "Obscure — also pad names to hide their length"},
+					{Value: "off", Label: "Off — keep file names readable (contents are still encrypted)"},
+				},
+			},
+			{
+				Key: "directory_name_encryption", Label: "Directory name encryption", Type: FieldSelect, Default: "true",
+				Hint: "Encrypt directory names on the provider as well as file names. Turning this off leaves folder names readable — only do that when another tool has to read the folder layout.",
+				Options: []SelectOpt{
+					{Value: "true", Label: "On — encrypt directory names (rclone's default)"},
+					{Value: "false", Label: "Off — leave directory names readable"},
+				},
+			},
+			{
+				Key: "password", Label: "Encryption password", Type: FieldPassword, Required: true, Obscure: true,
+				Hint: "Never displayed again after saving. Losing it makes the offsite copies unreadable — store it in your password manager.",
+			},
+			{
+				Key: "password2", Label: "Encryption salt (password 2)", Type: FieldPassword, Required: true, Obscure: true,
+				Hint: "Second part of the key (rclone's password2). Use a different value from the password. Also never displayed again.",
+			},
+		},
+	},
 	{
 		ID: BackendS3, Label: "Amazon S3",
 		PathHint:  "Bucket and optional prefix — e.g. my-bucket or my-bucket/clients",
@@ -186,6 +244,23 @@ func (r Remote) BackendLabel() string {
 	return string(r.Backend)
 }
 
+// IsCrypt reports whether this remote encrypts another remote's contents on the
+// way out (rclone's crypt backend).
+func (r Remote) IsCrypt() bool {
+	return r.Backend == BackendCrypt
+}
+
+// CryptParent returns the name of the plaintext remote a crypt remote wraps —
+// the remote rclone actually talks to, which therefore only ever receives
+// ciphertext — or "" for any other backend. The trailing colon rclone.conf
+// requires is not part of the name.
+func (r Remote) CryptParent() string {
+	if !r.IsCrypt() {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSpace(r.Config["remote"]), ":")
+}
+
 // RcloneSection returns the [name]\ntype=...\n… block for rclone.conf.
 func (r Remote) RcloneSection() string {
 	var sb strings.Builder
@@ -209,11 +284,26 @@ func (r Remote) RcloneSection() string {
 	case BackendGDrive:
 		sb.WriteString("type = drive\n")
 		sb.WriteString("scope = drive\n")
+	case BackendCrypt:
+		// crypt does not talk to a provider itself: `remote` names the
+		// plaintext remote whose contents it encrypts, so that remote — and
+		// whatever sits behind it — only ever sees ciphertext.
+		sb.WriteString("type = crypt\n")
 	default:
 		fmt.Fprintf(&sb, "type = %s\n", string(r.Backend))
 	}
 
-	for k, v := range r.Config {
+	// Keys are written in a fixed order: this file is now preserved around
+	// rather than rewritten wholesale, so a needlessly reshuffled section would
+	// show up as a spurious change to whoever reads the diff of their config.
+	keys := make([]string, 0, len(r.Config))
+	for k := range r.Config {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		v := r.Config[k]
 		if v == "" {
 			continue
 		}
@@ -225,6 +315,10 @@ func (r Remote) RcloneSection() string {
 					v = string(compact)
 				}
 			}
+		}
+		if r.Backend == BackendCrypt && k == "remote" {
+			// rclone wants the parent as `<name>:` (optionally with a path).
+			v = strings.TrimSuffix(strings.TrimSpace(v), ":") + ":"
 		}
 		fmt.Fprintf(&sb, "%s = %s\n", k, strings.ReplaceAll(v, "\n", " "))
 	}
