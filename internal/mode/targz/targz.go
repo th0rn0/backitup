@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -67,11 +68,8 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	_ = stdin.Close()
 	waitErr := sess.Wait()
 
-	if archiveErr != nil {
-		return mode.BackupResult{}, archiveErr
-	}
-	if waitErr != nil {
-		return mode.BackupResult{}, fmt.Errorf("remote upload failed: %w: %s", waitErr, remoteErr.String())
+	if err := uploadError(archiveErr, waitErr, remoteErr.String()); err != nil {
+		return mode.BackupResult{}, err
 	}
 	logger.Printf("archived %d files, %s", files, mode.HumanBytes(written))
 	return mode.BackupResult{
@@ -80,6 +78,25 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 		StartedAt:  start,
 		FinishedAt: time.Now().UTC(),
 	}, nil
+}
+
+// uploadError explains a streamed upload that did not finish. The remote's
+// stderr is included whenever it has anything to say, because the local error
+// caused by a refused upload is only ever a failed write to a closed channel
+// ("broken pipe") — which tells the operator nothing. backitup-recv names the
+// ingest limit it hit, or the free-space floor it refused on, and that message
+// is what belongs in the run's log tail.
+func uploadError(archiveErr, waitErr error, remote string) error {
+	remote = strings.TrimSpace(remote)
+	switch {
+	case archiveErr != nil && remote != "":
+		return fmt.Errorf("%w (server said: %s)", archiveErr, remote)
+	case archiveErr != nil:
+		return archiveErr
+	case waitErr != nil:
+		return fmt.Errorf("remote upload failed: %w: %s", waitErr, remote)
+	}
+	return nil
 }
 
 func dial(o mode.BackupOpts) (*ssh.Client, error) {

@@ -6,6 +6,10 @@
 # negotiation with Alpine 3.20's rsync 3.4.3. trixie ships rsync 3.4.1
 # which is protocol-compatible with the client.
 #
+# mawk is named explicitly because backitup-recv parses `df` with awk to read
+# the backup volume's free space; --no-install-recommends means nothing pulls
+# it in for us.
+#
 # A single 'backitup' user (uid 10001, matching the app image so shared-volume
 # ownership lines up). Per-client confinement is via forced commands in
 # authorized_keys (rrsync <dir> / backitup-recv <dir>), not per-user accounts.
@@ -13,7 +17,7 @@ FROM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        openssh-server rsync python3-minimal ca-certificates \
+        openssh-server rsync python3-minimal ca-certificates mawk \
     && rm -rf /var/lib/apt/lists/* \
     # -p '*' = no password login, but NOT "locked" (a locked '!' account makes
     # sshd refuse even pubkey auth: "account is locked").
@@ -26,8 +30,9 @@ RUN apt-get update \
 
 COPY docker/sshd/sshd_config /etc/ssh/sshd_config
 COPY docker/sshd/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/sshd/recv-limits.sh /usr/local/bin/recv-limits.sh
 COPY docker/sshd/backitup-recv /usr/local/bin/backitup-recv
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/backitup-recv
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/recv-limits.sh /usr/local/bin/backitup-recv
 
 EXPOSE 2222
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
