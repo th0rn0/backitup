@@ -82,9 +82,16 @@ func (s *Server) renderLogin(w http.ResponseWriter, code int, errMsg string) {
 	_ = s.tmpl.ExecuteTemplate(w, "login.html", map[string]any{"Error": errMsg})
 }
 
+// tooManyLoginsBody is the answer once a login budget is spent. It names the
+// window so an operator knows to wait rather than to keep retrying.
+const tooManyLoginsBody = "Too many login attempts. Try again in a minute."
+
 func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
+	// Two budgets, cheapest first: the source address across every username (no
+	// form needed), then the (address, username) pair once we know who the
+	// attempt claims to be for. Neither alone is enough — see loginLimiter.
 	if !s.limiter.allow(r) {
-		http.Error(w, "Too many login attempts. Try again in a minute.", http.StatusTooManyRequests)
+		http.Error(w, tooManyLoginsBody, http.StatusTooManyRequests)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -93,6 +100,10 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	username := r.PostFormValue("username")
 	password := r.PostFormValue("password")
+	if !s.limiter.allowUser(r, username) {
+		http.Error(w, tooManyLoginsBody, http.StatusTooManyRequests)
+		return
+	}
 
 	ctx, cancel := s.storeCtx(r)
 	defer cancel()
@@ -106,21 +117,27 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 		if s.storeFailure(w, ctx, fmt.Sprintf("login: load user %q", username), err) {
 			return
 		}
-		s.limiter.record(r)
+		s.limiter.record(r, username)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
 	}
 	if user == nil {
-		s.limiter.record(r)
+		s.limiter.record(r, username)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
 	}
 	ok, err := auth.VerifyPassword(password, user.PasswordHash)
 	if err != nil || !ok {
-		s.limiter.record(r)
+		s.limiter.record(r, username)
 		s.renderLogin(w, http.StatusUnauthorized, invalid)
 		return
 	}
+
+	// The password is right: this account is not the one guessing, so the misses
+	// an attacker ran up against it from this address are not its to carry. The
+	// per-address fan-out count is deliberately left alone — clearing that here
+	// would let anyone holding one valid account reset their own spray budget.
+	s.limiter.clearUser(r, username)
 
 	tok, err := s.sessions.Create(user.ID, user.Username)
 	if err != nil {
