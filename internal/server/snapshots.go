@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,13 +89,19 @@ func (s *Server) postSnapshotDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshotID := r.PathValue("snapshotID")
 	if err := mode.ValidateSnapshotID(c.Mode, snapshotID); err != nil {
-		http.NotFound(w, r)
+		// Legibility, not permission: the request is still refused (nothing is
+		// unlinked), but the operator gets the reason on the page instead of a
+		// bare 404 with the cause stranded in the container log.
+		log.Printf("snapshot delete: client=%s snap=%q: refusing request: %v", c.Name, snapshotID, err)
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", "delete refused: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
 	if err := sm.DeleteSnapshot(ctx, clientDir, snapshotID); err != nil {
 		log.Printf("snapshot delete: client=%s snap=%s: %v", c.Name, snapshotID, err)
-		http.Redirect(w, r, "/clients/"+c.Slug+"?err=delete+failed", http.StatusSeeOther)
+		// The error's own text, not "delete failed": the path in it is what
+		// identifies the failing tier (host dir, permissions, readonly mount).
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", "delete failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=snapshot+deleted", http.StatusSeeOther)
@@ -178,7 +185,7 @@ func (s *Server) postOffsiteObjectDelete(w http.ResponseWriter, r *http.Request)
 	rclone := lifecycle.NewRclone(s.rcloneConfig)
 	if err := rclone.Delete(ctx, c.OffsiteRemote, objectPath); err != nil {
 		log.Printf("offsite object delete: client=%s snap=%s: %v", c.Name, snapshotID, err)
-		http.Redirect(w, r, "/clients/"+c.Slug+"?err=offsite+delete+failed", http.StatusSeeOther)
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", "offsite delete failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	if err := s.st.DeleteOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote); err != nil {
@@ -288,23 +295,37 @@ func (s *Server) postBulkDeleteSnapshots(w http.ResponseWriter, r *http.Request)
 	// Validate every id BEFORE deleting anything. A request carrying one bad id
 	// (`ids=.` reaches os.RemoveAll(<clientDir>/snapshots)) must delete nothing at
 	// all, not "everything except the bad one" — a partial batch is data loss the
-	// operator never asked for.
+	// operator never asked for. The refusal is still legible: the flash names
+	// every id that was rejected, so a hand-built form is diagnosable from the
+	// page and not only from the container log.
+	var refusals []string
 	for _, id := range ids {
 		if err := mode.ValidateSnapshotID(c.Mode, id); err != nil {
 			log.Printf("bulk snapshot delete: client=%s: refusing request: %v", c.Name, err)
-			http.Error(w, "invalid snapshot id", http.StatusBadRequest)
-			return
+			refusals = append(refusals, err.Error())
 		}
 	}
+	if len(refusals) > 0 {
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", fmt.Sprintf(
+			"nothing was deleted: %d of %d selected ids were refused: %s",
+			len(refusals), len(ids), joinCapped(refusals, 5))), http.StatusSeeOther)
+		return
+	}
 	var errs []string
+	var firstErr error
 	for _, id := range ids {
 		if err := sm.DeleteSnapshot(ctx, clientDir, id); err != nil {
 			log.Printf("bulk snapshot delete: client=%s snap=%s: %v", c.Name, id, err)
-			errs = append(errs, id)
+			errs = append(errs, fmt.Sprintf("%q", id))
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	if len(errs) > 0 {
-		http.Redirect(w, r, "/clients/"+c.Slug+"?err=some+deletes+failed", http.StatusSeeOther)
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", fmt.Sprintf(
+			"deleted %d of %d snapshots; failed: %s; first cause: %v",
+			len(ids)-len(errs), len(ids), joinCapped(errs, 5), firstErr)), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=snapshots+deleted", http.StatusSeeOther)
@@ -337,9 +358,15 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 		offsiteDir = c.Slug
 	}
 	rclone := lifecycle.NewRclone(s.rcloneConfig)
-	var errs []string
+	var failed, skipped []string
+	var firstErr error
+	deleted := 0
 	for _, id := range ids {
 		if id == "" || strings.Contains(id, "..") {
+			// Never addressed before; still reported, so "Delete selected" that
+			// quietly dropped an entry is visible on the page.
+			log.Printf("bulk offsite delete: client=%s: skipping invalid id %q", c.Name, id)
+			skipped = append(skipped, fmt.Sprintf("%q", id))
 			continue
 		}
 		var objectPath string
@@ -350,17 +377,47 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 		}
 		if err := rclone.Delete(ctx, c.OffsiteRemote, objectPath); err != nil {
 			log.Printf("bulk offsite delete: client=%s snap=%s: %v", c.Name, id, err)
-			errs = append(errs, id)
+			failed = append(failed, fmt.Sprintf("%q", id))
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			deleted++
 		}
 		if err := s.st.DeleteOffsiteObject(ctx, c.ID, id, c.OffsiteRemote); err != nil {
 			log.Printf("bulk offsite delete: db record: %v", err)
 		}
 	}
-	if len(errs) > 0 {
-		http.Redirect(w, r, "/clients/"+c.Slug+"?err=some+offsite+deletes+failed", http.StatusSeeOther)
+	if len(failed) > 0 || len(skipped) > 0 {
+		msg := fmt.Sprintf("deleted %d of %d selected offsite objects", deleted, len(ids))
+		if len(failed) > 0 {
+			msg += fmt.Sprintf("; failed: %s; first cause: %v", joinCapped(failed, 5), firstErr)
+		}
+		if len(skipped) > 0 {
+			msg += "; skipped invalid ids: " + joinCapped(skipped, 5)
+		}
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", msg), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=offsite+objects+deleted", http.StatusSeeOther)
+}
+
+// clientFlashURL builds the redirect that carries a handler's outcome back to
+// the client page. The reason travels in the query string because that is where
+// client_detail.html reads its alert from; url.Values.Encode percent-encodes it,
+// so a message containing '/', ':' or spaces still lands as one parameter.
+func clientFlashURL(slug, key, text string) string {
+	return "/clients/" + slug + "?" + url.Values{key: {text}}.Encode()
+}
+
+// joinCapped joins items with "; ", naming at most limit of them. A hand-built
+// form can carry thousands of ids: the flash names the offenders without
+// turning the Location header into a wall of text.
+func joinCapped(items []string, limit int) string {
+	if len(items) <= limit {
+		return strings.Join(items, "; ")
+	}
+	return fmt.Sprintf("%s; and %d more", strings.Join(items[:limit], "; "), len(items)-limit)
 }
 
 // rcloneCatStream pipes a remote object to w using rclone cat.

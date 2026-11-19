@@ -9,12 +9,12 @@ package server
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/th0rn0/backitup/internal/model"
@@ -90,10 +90,32 @@ func assertRsyncStoreIntact(t *testing.T, clientDir string, ids ...string) {
 	}
 }
 
+// followFlash closes a redirect response and returns the flash it carries plus
+// the page a browser would land on, so a test can assert on what the operator
+// actually reads — the whole defect was that the operator read nothing.
+func followFlash(t *testing.T, c *http.Client, ts *httptest.Server, resp *http.Response) (loc, page string) {
+	t.Helper()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 (Location %q)", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	raw := resp.Header.Get("Location")
+	loc, err := url.QueryUnescape(raw)
+	if err != nil {
+		t.Fatalf("unescape Location %q: %v", raw, err)
+	}
+	pageResp, page := mustGet(t, c, ts.URL+raw)
+	if pageResp.StatusCode != http.StatusOK {
+		t.Fatalf("flash page %q = %d, want 200 (so the reason is on screen)", raw, pageResp.StatusCode)
+	}
+	return loc, page
+}
+
 // TestBulkDeleteRefusesNonNameIDs is the regression test for the defect: a form
-// carrying ".", "..", a traversal, or empty must answer non-2xx and leave every
-// snapshot in place. "." mixed with a real id must delete nothing at all — the
-// batch is validated before it runs, so a bad id cannot half-execute.
+// carrying ".", "..", a traversal, or empty must delete nothing at all — the
+// batch is validated before it runs, so a bad id cannot half-execute — and the
+// refusal must be legible: a flash naming the offending id and saying nothing
+// was deleted, on a page the operator actually sees.
 func TestBulkDeleteRefusesNonNameIDs(t *testing.T) {
 	const (
 		snap1 = "20260101T000000Z"
@@ -102,14 +124,15 @@ func TestBulkDeleteRefusesNonNameIDs(t *testing.T) {
 	cases := []struct {
 		name string
 		ids  []string
+		want string // substring of the flash, checked both in the Location and on the page
 	}{
-		{"dot alone", []string{"."}},
-		{"dot mixed with a real id", []string{".", snap1}},
-		{"real id mixed with dot", []string{snap1, "."}},
-		{"dot dot", []string{".."}},
-		{"traversal", []string{"../../etc"}},
-		{"empty", []string{""}},
-		{"path fragment", []string{snap1 + "/payload.txt"}},
+		{"dot alone", []string{"."}, `invalid snapshot id: "."`},
+		{"dot mixed with a real id", []string{".", snap1}, `invalid snapshot id: "."`},
+		{"real id mixed with dot", []string{snap1, "."}, `invalid snapshot id: "."`},
+		{"dot dot", []string{".."}, `invalid snapshot id: ".."`},
+		{"traversal", []string{"../../etc"}, `invalid snapshot id: "../../etc"`},
+		{"empty", []string{""}, `invalid snapshot id: ""`},
+		{"path fragment", []string{snap1 + "/payload.txt"}, `is not a name`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,17 +140,26 @@ func TestBulkDeleteRefusesNonNameIDs(t *testing.T) {
 			_, clientDir := makeClient(t, srv, c, ts, "nas", model.ModeRsync)
 			plantRsyncSnapshots(t, clientDir, snap1, snap2)
 
-			resp, body := mustPostForm(t, c, ts.URL+"/clients/nas/snapshots/bulk-delete", url.Values{"ids": tc.ids})
-			// Assert the data loss first: a 2xx with the store intact would be a
-			// different bug (the request did nothing at all), and this is the
-			// ordering that makes the pre-fix output show the wipe itself.
+			resp, _ := mustPostForm(t, c, ts.URL+"/clients/nas/snapshots/bulk-delete", url.Values{"ids": tc.ids})
+			loc, page := followFlash(t, c, ts, resp)
+			// Assert the data loss first: a redirect with the store intact is
+			// the contract; this is the ordering that makes a pre-fix run show
+			// the wipe itself.
 			assertRsyncStoreIntact(t, clientDir, snap1, snap2)
 			if _, err := os.Stat(clientDir); err != nil {
 				t.Errorf("client dir itself was removed: %v", err)
 			}
-			if resp.StatusCode < 400 {
-				t.Errorf("bulk-delete ids=%q = %d, want a non-2xx (body: %s)",
-					tc.ids, resp.StatusCode, truncate([]byte(body), 300))
+			if !strings.Contains(loc, "?err=") {
+				t.Fatalf("refusal Location = %q, want a ?err= flash", loc)
+			}
+			if !strings.Contains(loc, "nothing was deleted") {
+				t.Errorf("flash does not say nothing was deleted: %q", loc)
+			}
+			if !strings.Contains(loc, tc.want) {
+				t.Errorf("flash does not name the offending id (%q): %q", tc.want, loc)
+			}
+			if !strings.Contains(page, "alert-error") || !strings.Contains(page, "nothing was deleted") {
+				t.Errorf("rendered page shows no refusal reason:\n%s", truncate([]byte(page), 2000))
 			}
 		})
 	}
@@ -158,6 +190,7 @@ func TestBulkDeleteValidIDStillDeletes(t *testing.T) {
 // TestBulkDeleteRefusesNonNameIDsTarGz covers the same form path for the other
 // mode: there DeleteSnapshot is os.Remove(dir/id), so "." is os.Remove(the client
 // dir) — harmless while the dir is non-empty, but the same missing validation.
+// The refusal is a legible flash, not a bare 400.
 func TestBulkDeleteRefusesNonNameIDsTarGz(t *testing.T) {
 	const (
 		snap1 = "backup-20260101T000000Z-000.tar.gz"
@@ -172,10 +205,13 @@ func TestBulkDeleteRefusesNonNameIDsTarGz(t *testing.T) {
 			}
 		}
 
-		resp, body := mustPostForm(t, c, ts.URL+"/clients/laptop/snapshots/bulk-delete", url.Values{"ids": ids})
-		if resp.StatusCode < 400 {
-			t.Fatalf("bulk-delete ids=%q = %d, want a non-2xx (body: %s)",
-				ids, resp.StatusCode, truncate([]byte(body), 300))
+		resp, _ := mustPostForm(t, c, ts.URL+"/clients/laptop/snapshots/bulk-delete", url.Values{"ids": ids})
+		loc, page := followFlash(t, c, ts, resp)
+		if !strings.Contains(loc, "nothing was deleted") || !strings.Contains(loc, "invalid snapshot id") {
+			t.Fatalf("ids=%q: flash = %q, want a refusal naming the bad id", ids, loc)
+		}
+		if !strings.Contains(page, "alert-error") || !strings.Contains(page, "invalid snapshot id") {
+			t.Errorf("ids=%q: rendered page shows no refusal reason:\n%s", ids, truncate([]byte(page), 2000))
 		}
 		for _, id := range []string{snap1, snap2} {
 			if data, err := os.ReadFile(filepath.Join(clientDir, id)); err != nil || string(data) != id {
@@ -191,7 +227,8 @@ func TestBulkDeleteRefusesNonNameIDsTarGz(t *testing.T) {
 // TestSingleSnapshotDeleteRefusesNonNameIDs keeps the URL route and the form
 // route on the same rule. The router will not hand "." or ".." to the handler,
 // but a mode-shaped id that is not a name (or the wrong mode's shape) must still
-// be refused rather than attempted.
+// be refused rather than attempted — and the refusal must name the id on the
+// page instead of answering a bare 404.
 func TestSingleSnapshotDeleteRefusesNonNameIDs(t *testing.T) {
 	srv, c, ts := deleteStack(t)
 	_, clientDir := makeClient(t, srv, c, ts, "nas", model.ModeRsync)
@@ -202,10 +239,12 @@ func TestSingleSnapshotDeleteRefusesNonNameIDs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("post %q: %v", id, err)
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("delete %q = %d, want 404", id, resp.StatusCode)
+		loc, page := followFlash(t, c, ts, resp)
+		if !strings.Contains(loc, "?err=") || !strings.Contains(loc, id) {
+			t.Errorf("delete %q: Location = %q, want a ?err= flash naming the id", id, loc)
+		}
+		if !strings.Contains(page, "alert-error") || !strings.Contains(page, id) {
+			t.Errorf("delete %q: rendered page does not name the id:\n%s", id, truncate([]byte(page), 2000))
 		}
 	}
 	assertRsyncStoreIntact(t, clientDir, "20260101T000000Z", "20260102T000000Z")
