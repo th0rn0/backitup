@@ -2,8 +2,9 @@
 
 Self-hosted, centralized **fleet backup** for Linux + macOS. A clean control plane
 on top of proven tools (rsync, OpenSSH, rclone): one server, one webgui, many dumb
-cron-triggered clients, with hot backups on the server and encrypted offsite tiering
-to Google Drive / S3 / 40+ providers.
+cron-triggered clients, with hot backups on the server and optional rclone offsite
+tiering to configured providers. Encryption is available when the offsite destination
+is an rclone `crypt` remote you configure.
 
 Add a machine by issuing a key in the webgui, paste one cron line on the host, and
 watch the whole fleet's backup health from a single dashboard.
@@ -66,8 +67,8 @@ code we write is the control plane, because that is where the value is.
   exits. It reads the source **read-only** and never modifies the host.
 - **Each client** has a server-issued SSH key (data channel) + bearer token (control
   channel) and its own confined directory on the server.
-- **Hot backups** live on the server; the **lifecycle worker** tiers them to encrypted
-  offsite storage and prunes per independent hot/cold retention horizons.
+- **Hot backups** live on the server; separate workers handle optional offsite uploads
+  and maintenance, with independent hot/cold retention horizons.
 
 ## Architecture
 
@@ -214,17 +215,17 @@ chmod 700 /servdata/backitup/sshd-hostkeys   # contains the private SSH host key
 ## Building the images
 
 ```sh
-# Server (control plane): Alpine + rclone, ~145 MB, cgo-free.
+# Server (control plane): Alpine + rclone, cgo-free.
 docker build -t th0rn0/backitup-server:dev -f Dockerfile .
 
-# Client (dumb uploader): Alpine + rsync + openssh-client, ~25 MB.
+# Client (dumb uploader): Alpine + rsync + openssh-client.
 docker build -t th0rn0/backitup-client:dev -f Dockerfile.client .
 
 # SSH ingest (data plane): Debian + OpenSSH + rsync/rrsync.
 docker build -t th0rn0/backitup-sshd:dev -f Dockerfile.sshd .
 ```
 
-Both are pure-Go (`CGO_ENABLED=0`) and build for `linux/amd64` and `linux/arm64`:
+The server and client Go binaries are built with `CGO_ENABLED=0`. The sshd image is Debian with OpenSSH and rsync; it does not build a Go binary. The Dockerfiles use multi-platform base images; buildx can target `linux/amd64` and `linux/arm64`:
 
 ```sh
 docker buildx build --platform linux/amd64,linux/arm64 \
@@ -238,6 +239,8 @@ docker run -d --name backitup \
   -p 127.0.0.1:8080:8080 \
   -v backitup-data:/data \
   -v backitup-backups:/srv/backups \
+  -e BACKITUP_ADMIN_USER=admin \
+  -e BACKITUP_ADMIN_PASSWORD='replace-with-a-strong-password' \
   th0rn0/backitup-server:dev
 
 curl http://127.0.0.1:8080/healthz   # -> ok
@@ -284,12 +287,18 @@ Key points:
 | `BACKITUP_TLS_KEY`         | (unset)             | TLS key path                                           |
 | `BACKITUP_AUTHKEYS`        | `/srv/authkeys/authorized_keys` | Path the app rewrites for the sshd container (D4) |
 | `BACKITUP_BACKUP_DIR`      | `/srv/backups`      | Base dir for per-client backup directories             |
-| `BACKITUP_STAGING_DIR`     | `<BACKITUP_BACKUP_DIR>/staging` | Where rsync snapshots are tar'd for upload. One archive at a time, deleted as soon as it is uploaded, so this needs room for one snapshot — not all of them. Put it on the backup volume (a full system temp dir used to fail the upload). |
+| `BACKITUP_STAGING_DIR`     | `<BACKITUP_BACKUP_DIR>/staging` | Where rsync snapshots are tar'd for upload. One archive at a time, deleted as soon as it is uploaded, so this needs room for one snapshot — not all of them. Put it on the backup volume. |
 | `BACKITUP_PUBLIC_HOST`     | `your-server:2222`  | SSH host:port shown as `BACKITUP_SERVER` in the generated docker run command |
 | `BACKITUP_PUBLIC_API`      | (unset)             | Full control-channel base URL shown as `BACKITUP_API` in generated commands (e.g. `http://10.0.0.1:8080`). If unset a placeholder is shown. |
 | `BACKITUP_CLIENT_IMAGE`    | `th0rn0/backitup-client:latest` | Client image used in the cron line |
 | `BACKITUP_RCLONE_CONFIG`   | `/data/rclone.conf` | rclone config defining the encrypted crypt remote(s)   |
-| `BACKITUP_LIFECYCLE_INTERVAL` | `1h`             | How often the lifecycle worker runs (offsite + prune)  |
+| `BACKITUP_LIFECYCLE_INTERVAL` | `5m`             | Interval for maintenance: retention, remote verification, integrity checks, and stale alerts. `docker-compose.yml` overrides this to `1h` by default. |
+| `BACKITUP_OFFSITE_POLL_INTERVAL` | `5m`          | How often the separate offsite worker checks clients; each client's offsite schedule determines whether an upload is due. |
+| `BACKITUP_LOG_RETENTION_DAYS` | `0`               | Maximum age in days for run-history rows; `0` disables log pruning. |
+| `BACKITUP_STALE_RUN_TIMEOUT` | `2h`              | Age after which a run is considered stale. |
+| `BACKITUP_DISCORD_WEBHOOK` | (unset)             | Optional Discord webhook for alerts. |
+| `BACKITUP_TIMEZONE`        | `Europe/London`     | Time zone used for Discord timestamps. |
+| `BACKITUP_VERBOSE`         | `false`             | Set to `true` or `1` for verbose logging. |
 | `BACKITUP_SSH_HOST_KEY`    | `/srv/hostkeys/ssh_host_ed25519_key.pub` | sshd host public key path; generates `known_hosts` entries in the add-client UI |
 
 ### Offsite (cold storage)
@@ -298,12 +307,13 @@ Offsite tiering is per-client: set a client's **offsite remote** in the webgui t
 rclone remote name. The remote must be defined in `rclone.conf` (pointed to by
 `BACKITUP_RCLONE_CONFIG`, default `/data/rclone.conf`).
 
-The lifecycle worker (every `BACKITUP_LIFECYCLE_INTERVAL`) tiers each client's new
-snapshots to its remote **offsite-first** (never prunes a hot snapshot that isn't
-offsited yet), prunes offsite on its own `offsite_retention_days` horizon, prunes the
-hot store (never the newest), trims run history, and integrity-checks the latest
-snapshot. tar.gz archives upload as-is; rsync snapshots are tar'd into one immutable
-object each (no hardlink inflation, no destructive `sync`).
+The maintenance worker runs on `BACKITUP_LIFECYCLE_INTERVAL`; it handles retention,
+remote verification, integrity checks, and stale-run alerts. A separate worker polls
+for offsite uploads on `BACKITUP_OFFSITE_POLL_INTERVAL` (default `5m`); each client's
+offsite cron schedule controls when it is due. Uploads precede hot pruning, so a hot
+snapshot is not pruned before it is confirmed offsite. Offsite pruning follows the
+client's independent `offsite_retention_days` horizon. tar.gz archives upload as-is;
+rsync snapshots are tarred into one object per snapshot.
 
 #### Setting up remotes via the webgui (recommended)
 
@@ -335,9 +345,9 @@ Supported backends:
 > A Shared Drive is required — service accounts have zero personal quota, so uploads to
 > My Drive always fail with `storageQuotaExceeded`.
 
-The app **owns `rclone.conf`** — it regenerates it from the database after every
-remote create/delete and on startup. Do not edit the file directly; your changes
-will be overwritten. If you need a backend not listed above, open an issue.
+The app writes its managed remotes into a managed block in `rclone.conf`, regenerating
+that block on startup and after remote changes while preserving content outside the
+block. Do not place your own config inside the managed block.
 
 > Set `BACKITUP_ADMIN_USER` + `BACKITUP_ADMIN_PASSWORD` to create the webgui login.
 > Set `BACKITUP_TLS_CERT` + `BACKITUP_TLS_KEY` to serve HTTPS (required in production —
@@ -383,9 +393,11 @@ incremental snapshots on the hot store via hardlinks (only changed data costs sp
 - **Hot retention** (`retention_days`) prunes snapshots on the server.
 - **Offsite retention** (`offsite_retention_days`) is **independent** — usually
   longer, because cold storage is your long-horizon copy.
-- Offsite uses **rclone** with an encrypted **crypt** remote, so the provider only
-  ever sees ciphertext. Adding a provider (Drive, S3, B2, …) is an rclone remote,
-  not new code.
+- Offsite encryption is opt-in: configure an rclone **crypt** remote that wraps a
+  plaintext provider remote, then select the crypt remote as the client's destination.
+  Writes through that destination reach the provider as ciphertext. The crypt remote
+  is configured in the webgui; do not point clients directly at the plaintext remote
+  if you require encryption.
 - The lifecycle worker runs **offsite first, then prune** — a snapshot is never
   pruned before it is confirmed offsited. Offsite pushes **immutable per-snapshot
   objects** (no destructive sync), so corruption cannot be replicated over your only
@@ -453,14 +465,15 @@ diff -r ~/restore/laptop-docs /home/me/documents
 
 ## Security model
 
-- **Non-destructive by design.** The client mounts the source **read-only**, only ever
-  reads it, runs as a non-root user with a read-only root filesystem and dropped
-  capabilities, and is covered by a test asserting source files are unchanged after a
-  run (both modes, including `rsync --delete`).
+- **Non-destructive by design.** The client mounts the source **read-only** and the
+  tests assert source files are unchanged after a run (both modes, including
+  `rsync --delete`). The client image defaults to an unprivileged user; the generated
+  run command does not set a read-only root filesystem or drop capabilities.
 - **Control channel is HTTPS** with the client verifying the certificate — the login
   password and bearer token never cross plaintext.
-- **Offsite is encrypted** before it leaves (rclone crypt). The hot store on your own
-  server is plaintext (the server is the trusted party; the offsite provider is not).
+- **Offsite can be encrypted** with rclone crypt when the client destination is a
+  configured crypt remote. The hot store on your own server is plaintext (the server
+  is the trusted party; the offsite provider is not).
 - **Webgui is behind an admin login** (argon2id, session cookie). It serves every
   client's data for download and issues keys, so it is never unauthenticated.
 - **Per-client SSH access is confined**: `internal-sftp` + chroot for tar.gz clients,
@@ -470,18 +483,26 @@ diff -r ~/restore/laptop-docs /home/me/documents
 
 ```sh
 go test ./...              # run all tests
-go test -cover ./...       # with coverage
+CGO_ENABLED=0 go test -cover ./... # package coverage (include command packages)
 go build ./...             # build everything
-gofmt -l . && go vet ./... # format + vet (both should be silent)
+gofmt -l ./cmd ./internal  # lists files that are not gofmt-clean
+go vet ./...              # vet
 
 # Run the server locally (no Docker):
 BACKITUP_DB=./data/backitup.db BACKITUP_ADDR=:8080 go run ./cmd/server
 curl localhost:8080/healthz
 ```
 
-Internal packages are at 100% statement coverage (`store` at 90% — the remainder is
-defensive error branches that require fault injection). `cmd/*` are thin wiring around
-the tested `internal/*` packages.
+Coverage was measured with `CGO_ENABLED=0 go test -cover ./...` (per-package output).
+On this revision, internal package coverage ranges from 29.5% (`internal/mode/targz`)
+to 97.6% (`internal/authkeys`); the lowest-covered internal packages are
+`internal/mode/targz` (29.5%), `internal/mode` (35.3%), and
+`internal/mode/rsync` (43.3%). Command packages are also included in the command's
+output (`cmd/client` 0.0%, `cmd/server` 1.1%). Coverage is not a claim that behavior
+is exhaustively tested.
+
+`gofmt -l ./cmd ./internal` currently lists five files; the command's output, not
+silence, is the check. `go vet ./...` is a separate check.
 
 ## Project layout
 
