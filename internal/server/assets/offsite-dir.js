@@ -12,6 +12,7 @@
     webdav:     { label: 'Remote path (optional)',      placeholder: 'backups/clients',             hint: 'Path on the WebDAV server. Leave empty to use the client name.' },
     azureblob:  { label: 'Container / path (optional)', placeholder: 'backups',                    hint: 'Container name and optional path. Leave empty to use the client name.' },
     ftp:        { label: 'Remote path (optional)',      placeholder: '/backups/clients',            hint: 'Path on the FTP server. Leave empty to use the client name.' },
+    crypt:      { label: 'Encrypted path (optional)',   placeholder: 'clients',                     hint: 'Path inside the encrypted remote. Leave empty to store the client name as an encrypted directory. Everything under it — names included — reaches the provider as ciphertext.' },
   };
 
   function applyRemote(sel, clearValue) {
