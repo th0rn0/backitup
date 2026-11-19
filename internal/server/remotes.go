@@ -2,9 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -13,8 +17,12 @@ import (
 	"github.com/th0rn0/backitup/internal/model"
 )
 
-// writeRcloneConfig regenerates the rclone config file from all remotes stored
-// in the database. Called after every create/delete and once on server startup.
+// writeRcloneConfig regenerates the sections of the rclone config file that
+// backitup owns. Called after every create/edit/delete and once on startup.
+//
+// It must not rewrite the file wholesale: sections an operator added by hand
+// (an rclone [crypt] section, a provider backitup has no fields for) are
+// preserved verbatim. See rcloneconf.go for who owns what.
 func (s *Server) writeRcloneConfig(ctx context.Context) error {
 	if s.rcloneConfig == "" {
 		return nil
@@ -23,12 +31,32 @@ func (s *Server) writeRcloneConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var sb strings.Builder
+	sections := make([]string, 0, len(remotes))
 	for _, r := range remotes {
-		sb.WriteString(r.RcloneSection())
-		sb.WriteString("\n")
+		sections = append(sections, r.RcloneSection())
 	}
-	return atomicfile.Write(s.rcloneConfig, []byte(sb.String()), 0o600)
+	existing, err := readFileIfExists(s.rcloneConfig)
+	if err != nil {
+		// Without the current contents there is no way to preserve what
+		// backitup does not own, and overwriting would be exactly the data loss
+		// this file is careful about. Report it instead.
+		return err
+	}
+	return atomicfile.Write(s.rcloneConfig, []byte(mergeRcloneConfig(existing, sections)), 0o600)
+}
+
+// readFileIfExists returns the file's contents, or "" if it does not exist.
+// Any other error (a permission problem, a directory in the way) is returned:
+// the caller must not overwrite a file it could not read.
+func readFileIfExists(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	return string(b), nil
 }
 
 // RegenerateRcloneConfig is the exported entry point called from main after
@@ -90,6 +118,34 @@ func (s *Server) postCreateRemote(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	// A section backitup did not create is not backitup's to replace. The
+	// writer owns sections by NAME, so a new row with this name would rewrite
+	// that section on the next write — for a hand-written [crypt] that means
+	// its key is gone and everything it already wrote becomes unreadable. The
+	// name is also referenced by every client, cron job and script that uses
+	// it, so quietly renaming the operator's section would break those just as
+	// quietly. Refuse, and let the operator choose a name.
+	owned, err := s.st.GetRemoteByName(ctx, name)
+	if err != nil {
+		log.Printf("create remote %q: look up for the config ownership check: %v", name, err)
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Could not save remote: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+	if owned == nil {
+		handWritten, hErr := s.rcloneSectionExists(name)
+		if hErr != nil {
+			log.Printf("create remote %q: read rclone config for the ownership check: %v", name, hErr)
+			http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Could not save remote: "+hErr.Error()), http.StatusSeeOther)
+			return
+		}
+		if handWritten {
+			http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(
+				"rclone.conf already has a section named \""+name+"\" that backitup did not create — rename or remove it there first, backitup would otherwise overwrite it"),
+				http.StatusSeeOther)
+			return
+		}
+	}
+
 	cfg := map[string]string{}
 	for _, f := range def.Fields {
 		val := strings.TrimSpace(r.PostFormValue(f.Key))
@@ -110,6 +166,15 @@ func (s *Server) postCreateRemote(w http.ResponseWriter, r *http.Request) {
 			val = obscured
 		}
 		cfg[f.Key] = val
+	}
+
+	if msg, vErr := s.validateRemoteConfig(ctx, name, def, cfg); vErr != nil {
+		log.Printf("create remote %q: validate: %v", name, vErr)
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Could not save remote: "+vErr.Error()), http.StatusSeeOther)
+		return
+	} else if msg != "" {
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(msg), http.StatusSeeOther)
+		return
 	}
 
 	remote := model.Remote{
@@ -216,6 +281,15 @@ func (s *Server) postEditRemote(w http.ResponseWriter, r *http.Request) {
 		cfg[f.Key] = val
 	}
 
+	if msg, vErr := s.validateRemoteConfig(ctx, name, def, cfg); vErr != nil {
+		log.Printf("update remote %q: validate: %v", name, vErr)
+		http.Redirect(w, r, "/settings/remotes/"+name+"/edit?err="+url.QueryEscape("Could not save remote: "+vErr.Error()), http.StatusSeeOther)
+		return
+	} else if msg != "" {
+		http.Redirect(w, r, "/settings/remotes/"+name+"/edit?err="+url.QueryEscape(msg), http.StatusSeeOther)
+		return
+	}
+
 	if err := s.st.UpdateRemote(ctx, name, cfg); err != nil {
 		log.Printf("update remote %q: %v", name, err)
 		http.Redirect(w, r, "/settings/remotes/"+name+"/edit?err="+url.QueryEscape("Could not save remote: "+err.Error()), http.StatusSeeOther)
@@ -264,6 +338,55 @@ func (s *Server) postDeleteRemote(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// A crypt remote is a section that points at this one; deleting the parent
+	// would leave a config rclone cannot use, and the encrypted remote's own
+	// data would be unreachable even if it is recreated. Refuse, and say what
+	// to delete first.
+	remotes, err := s.st.ListRemotes(ctx)
+	if err != nil {
+		// Not a reason to refuse the operator's explicit delete: a store blip
+		// must not block it. The rewrite below reports the same failure.
+		log.Printf("delete remote %q: list remotes for the encryption guard: %v", name, err)
+	}
+	for _, other := range remotes {
+		if other.CryptParent() == name {
+			http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(
+				"Remote \""+name+"\" is encrypted by remote \""+other.Name+"\" — delete that one first"),
+				http.StatusSeeOther)
+			return
+		}
+	}
+
+	// The loop above only sees rows, and rclone.conf can hold sections the
+	// table does not know: an operator's hand-written [crypt] with
+	// `remote = <name>:` does not become unresolvable when this remote is
+	// deleted — their offsite tier just stops working. Sections backitup does
+	// own are the rows the loop above already handled, so those are skipped
+	// here: a stale copy of a managed section in the file must not refuse a
+	// delete that is actually allowed.
+	if s.rcloneConfig != "" {
+		managed := make(map[string]bool, len(remotes))
+		for _, r := range remotes {
+			managed[r.Name] = true
+		}
+		existing, rErr := readFileIfExists(s.rcloneConfig)
+		if rErr != nil {
+			// As above: a config blip is not a reason to refuse an explicit
+			// delete. The rewrite after it reports the same failure.
+			log.Printf("delete remote %q: read rclone config for the encryption guard: %v", name, rErr)
+		} else {
+			for _, ref := range sectionsReferencing(existing, name) {
+				if managed[ref] {
+					continue
+				}
+				http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(
+					"Remote \""+name+"\" is encrypted by remote \""+ref+"\" — delete that one first"),
+					http.StatusSeeOther)
+				return
+			}
+		}
+	}
+
 	if err := s.st.DeleteRemote(ctx, name); err != nil {
 		log.Printf("delete remote %q: %v", name, err)
 		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Delete failed: "+err.Error()), http.StatusSeeOther)
@@ -306,4 +429,80 @@ func validRemoteName(name string) bool {
 		}
 	}
 	return true
+}
+
+// validateRemoteConfig applies the checks that the field list alone cannot
+// make: values that must come from a fixed vocabulary, and a crypt remote's
+// reference to the plaintext remote it wraps. It returns an operator-facing
+// message when the config is refused, or an error when the check itself could
+// not be made (a store failure — not the operator's fault, so it is not
+// reported as a bad value).
+//
+// cfg is normalised in place: the crypt parent is stored as the bare remote
+// name, since the trailing colon is rclone.conf syntax, not data.
+func (s *Server) validateRemoteConfig(ctx context.Context, name string, def *model.BackendDef, cfg map[string]string) (string, error) {
+	for _, f := range def.Fields {
+		v, ok := cfg[f.Key]
+		if !ok || v == "" {
+			continue
+		}
+		if !f.AllowsValue(v) {
+			return f.Label + " is not one of the allowed choices", nil
+		}
+	}
+	if def.ID != model.BackendCrypt {
+		return "", nil
+	}
+
+	parent := strings.TrimSuffix(strings.TrimSpace(cfg["remote"]), ":")
+	if parent == "" {
+		return "A plaintext remote to encrypt is required", nil
+	}
+	if !validRemoteName(parent) {
+		return "Plaintext remote may only contain letters, digits, hyphens, underscores, and dots", nil
+	}
+	if parent == name {
+		return fmt.Sprintf("Remote %q cannot encrypt itself — name the plaintext remote it wraps", name), nil
+	}
+	cfg["remote"] = parent
+
+	p, err := s.st.GetRemoteByName(ctx, parent)
+	if err != nil {
+		return "", err
+	}
+	if p == nil {
+		// An operator's own hand-written section is a legitimate parent — the
+		// whole point of preserving those sections is that they keep working.
+		handWritten, err := s.rcloneSectionExists(parent)
+		if err != nil {
+			return "", err
+		}
+		if !handWritten {
+			return fmt.Sprintf("Remote %q does not exist yet — create the plaintext remote first, then the encrypted one", parent), nil
+		}
+		return "", nil
+	}
+	if p.IsCrypt() {
+		return fmt.Sprintf("Remote %q is itself encrypted — an encrypted remote wraps a plaintext remote", parent), nil
+	}
+	return "", nil
+}
+
+// rcloneSectionExists reports whether the rclone config file already defines a
+// section called name — a remote the operator configured by hand rather than in
+// the UI, which therefore has no row in the database.
+func (s *Server) rcloneSectionExists(name string) (bool, error) {
+	if s.rcloneConfig == "" {
+		return false, nil
+	}
+	existing, err := readFileIfExists(s.rcloneConfig)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(existing, "\n") {
+		if n, ok := sectionName(line); ok && n == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }

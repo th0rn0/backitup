@@ -56,7 +56,8 @@
       <div class="section">
         <h2>Add remote</h2>
         <p class="section-hint">
-          Configure an rclone backend. backitup writes and manages <code>rclone.conf</code> automatically — do not edit the file by hand.
+          Configure an rclone backend. backitup generates the sections for the remotes listed here;
+          anything else you add to <code>rclone.conf</code> by hand is preserved on every change.
         </p>
 
         <form method="POST" action="/settings/remotes" class="form" autocomplete="off">
@@ -99,6 +100,9 @@
             {{else if eq .Type "password"}}
             <input name="{{.Key}}" type="password" disabled
                    placeholder="{{.Default}}" autocomplete="new-password">
+            {{else if eq .Key "remote"}}
+            <input name="{{.Key}}" type="text" list="remote-names" disabled
+                   placeholder="{{.Default}}" autocomplete="off">
             {{else}}
             <input name="{{.Key}}" type="text" disabled
                    placeholder="{{.Default}}" autocomplete="off">
@@ -106,6 +110,13 @@
             {{if .Hint}}<div class="field-hint">{{.Hint}}</div>{{end}}
             {{end}}
           </div>
+          {{end}}
+
+          {{if .Remotes}}
+          <!-- Suggests the plaintext remotes an encrypted remote can wrap. -->
+          <datalist id="remote-names">
+            {{range .Remotes}}<option value="{{.Name}}"></option>{{end}}
+          </datalist>
           {{end}}
 
           <div class="form-actions">
