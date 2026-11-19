@@ -179,7 +179,7 @@ func TestHandWrittenRcloneSectionSurvivesEveryWrite(t *testing.T) {
 	handWritten := "# Operator-owned: backitup must never rewrite or delete this.\n" +
 		"[crypt]\n" +
 		"type = crypt\n" +
-		"remote = provider:backed\n" +
+		"remote = archive:backed\n" +
 		"filename_encryption = standard\n" +
 		"password = hand-written-password\n" +
 		"password2 = hand-written-salt\n"
@@ -503,6 +503,94 @@ func TestCryptSecretsNeverLeak(t *testing.T) {
 	}
 	wantNotIn(t, "server log", logs.String(), secrets...)
 	wantNotIn(t, "rclone.conf", mustReadConf(t, confPath), cryptPassword, cryptSalt, cryptPassword2)
+}
+
+// ── a hand-written section is not backitup's to replace ──────────────────────
+
+// A section an operator wrote by hand is not backitup's, and creating a remote
+// with the same name used to rewrite it: the writer owns sections by name, so
+// the operator's [crypt] — key and all — disappeared on the next write. "crypt"
+// is exactly the name an operator who hand-wrote the section this card exists to
+// preserve would have used, so this is the realistic collision, not a corner
+// case.
+func TestCreateRemoteRefusesNameTakenByHandWrittenSection(t *testing.T) {
+	installFakeRclone(t)
+	st, ts, _, confPath := cryptStack(t)
+	c := loggedInClient(t, st, ts)
+	nc := noRedirectClientWithSession(t, st, ts)
+
+	handWritten := "# Operator-owned: backitup must never rewrite or delete this.\n" +
+		"[crypt]\n" +
+		"type = crypt\n" +
+		"remote = provider:backed\n" +
+		"password = hand-written-key-that-exists-nowhere-else\n"
+	if err := os.WriteFile(confPath, []byte(handWritten), 0o600); err != nil {
+		t.Fatalf("seed rclone.conf: %v", err)
+	}
+
+	loc := postNoRedirect(t, nc, ts.URL+"/settings/remotes", url.Values{
+		"name": {"crypt"}, "backend": {"b2"}, "account": {"acct"}, "key": {"key"},
+	})
+	if !strings.Contains(loc, "err=") || !strings.Contains(loc, `section named "crypt"`) {
+		t.Fatalf("create over a hand-written section = %q; want a refusal naming the section", loc)
+	}
+
+	// Refused means refused: no row, and the operator's file byte for byte.
+	if got, err := st.GetRemoteByName(t.Context(), "crypt"); err != nil || got != nil {
+		t.Fatalf("a refused create still stored the remote (err=%v, remote=%v)", err, got)
+	}
+	if got := mustReadConf(t, confPath); got != handWritten {
+		t.Fatalf("a refused create still rewrote rclone.conf:\ngot:\n%q\nwant:\n%q", got, handWritten)
+	}
+
+	// The refusal is for that name, not a blanket ban on creating remotes.
+	createPlaintextRemote(t, c, ts.URL, "vault")
+	if got, err := st.GetRemoteByName(t.Context(), "vault"); err != nil || got == nil {
+		t.Fatalf("a different remote was not created after the refusal (err=%v)", err)
+	}
+	wantIn(t, "rclone.conf after a different create", mustReadConf(t, confPath),
+		"[crypt]", "password = hand-written-key-that-exists-nowhere-else", "[vault]")
+}
+
+// The delete guard protected managed crypts but not the operator's own: a
+// hand-written [crypt] that wraps a managed [provider] was left dangling when
+// the managed parent was deleted, so rclone could no longer resolve it.
+func TestDeletePlaintextRemoteRefusedWhileHandWrittenCryptDependsOnIt(t *testing.T) {
+	installFakeRclone(t)
+	st, ts, _, confPath := cryptStack(t)
+	c := loggedInClient(t, st, ts)
+	nc := noRedirectClientWithSession(t, st, ts)
+
+	createPlaintextRemote(t, c, ts.URL, "provider")
+
+	handWritten := "# Operator-owned.\n" +
+		"[crypt]\n" +
+		"type = crypt\n" +
+		"remote = provider:encrypted\n" +
+		"password = hand-written-key-that-exists-nowhere-else\n"
+	if err := os.WriteFile(confPath, []byte(mustReadConf(t, confPath)+"\n"+handWritten), 0o600); err != nil {
+		t.Fatalf("append the operator's section: %v", err)
+	}
+
+	loc := postNoRedirect(t, nc, ts.URL+"/settings/remotes/provider/delete", nil)
+	if !strings.Contains(loc, "delete that one first") || !strings.Contains(loc, `"crypt"`) {
+		t.Fatalf("delete of a remote a hand-written crypt wraps = %q; want a refusal naming it", loc)
+	}
+	if got, err := st.GetRemoteByName(t.Context(), "provider"); err != nil || got == nil {
+		t.Fatalf("provider remote gone after a refused delete (err=%v)", err)
+	}
+	wantIn(t, "rclone.conf after the refused delete", mustReadConf(t, confPath),
+		"[provider]", "[crypt]", "remote = provider:encrypted")
+
+	// Once the operator removes their own section, the managed delete is
+	// allowed again — the guard must not become a permanent block.
+	if err := os.WriteFile(confPath, []byte("# the operator removed their crypt section\n"), 0o600); err != nil {
+		t.Fatalf("drop the operator's section: %v", err)
+	}
+	postForm(t, c, ts.URL+"/settings/remotes/provider/delete", nil)
+	if got, err := st.GetRemoteByName(t.Context(), "provider"); err != nil || got != nil {
+		t.Fatalf("provider remote survived its delete after the blocker was removed (err=%v, remote=%v)", err, got)
+	}
 }
 
 // ── the offsite destination can be the encrypted remote ──────────────────────

@@ -117,6 +117,46 @@ func sectionName(line string) (string, bool) {
 	return name, true
 }
 
+// sectionsReferencing returns the names of the sections in existing whose
+// `remote` setting points at name — a [crypt] that wraps it, whether backitup
+// generated that section or an operator wrote it by hand.
+//
+// It answers a question the `remotes` table cannot: deleting the remote such a
+// section references leaves a config rclone cannot resolve, even when the
+// wrapping section is not backitup's at all. Anything after the colon
+// (`remote = provider:encrypted`) is the path inside the remote, so it counts
+// too. Commented-out lines are ignored — they are text, not settings.
+func sectionsReferencing(existing, name string) []string {
+	if name == "" {
+		return nil
+	}
+	var refs []string
+	seen := make(map[string]bool)
+	current := ""
+	for _, line := range strings.Split(existing, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
+		if n, ok := sectionName(trimmed); ok {
+			current = n
+			continue
+		}
+		key, val, ok := strings.Cut(trimmed, "=")
+		if !ok || current == "" || !strings.EqualFold(strings.TrimSpace(key), "remote") {
+			continue
+		}
+		val = strings.TrimSpace(val)
+		if val == name || strings.HasPrefix(val, name+":") {
+			if !seen[current] {
+				seen[current] = true
+				refs = append(refs, current)
+			}
+		}
+	}
+	return refs
+}
+
 // firstLine returns s up to (not including) the first newline.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {

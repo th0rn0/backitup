@@ -118,6 +118,34 @@ func (s *Server) postCreateRemote(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	// A section backitup did not create is not backitup's to replace. The
+	// writer owns sections by NAME, so a new row with this name would rewrite
+	// that section on the next write — for a hand-written [crypt] that means
+	// its key is gone and everything it already wrote becomes unreadable. The
+	// name is also referenced by every client, cron job and script that uses
+	// it, so quietly renaming the operator's section would break those just as
+	// quietly. Refuse, and let the operator choose a name.
+	owned, err := s.st.GetRemoteByName(ctx, name)
+	if err != nil {
+		log.Printf("create remote %q: look up for the config ownership check: %v", name, err)
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Could not save remote: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+	if owned == nil {
+		handWritten, hErr := s.rcloneSectionExists(name)
+		if hErr != nil {
+			log.Printf("create remote %q: read rclone config for the ownership check: %v", name, hErr)
+			http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape("Could not save remote: "+hErr.Error()), http.StatusSeeOther)
+			return
+		}
+		if handWritten {
+			http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(
+				"rclone.conf already has a section named \""+name+"\" that backitup did not create — rename or remove it there first, backitup would otherwise overwrite it"),
+				http.StatusSeeOther)
+			return
+		}
+	}
+
 	cfg := map[string]string{}
 	for _, f := range def.Fields {
 		val := strings.TrimSpace(r.PostFormValue(f.Key))
@@ -326,6 +354,36 @@ func (s *Server) postDeleteRemote(w http.ResponseWriter, r *http.Request) {
 				"Remote \""+name+"\" is encrypted by remote \""+other.Name+"\" — delete that one first"),
 				http.StatusSeeOther)
 			return
+		}
+	}
+
+	// The loop above only sees rows, and rclone.conf can hold sections the
+	// table does not know: an operator's hand-written [crypt] with
+	// `remote = <name>:` does not become unresolvable when this remote is
+	// deleted — their offsite tier just stops working. Sections backitup does
+	// own are the rows the loop above already handled, so those are skipped
+	// here: a stale copy of a managed section in the file must not refuse a
+	// delete that is actually allowed.
+	if s.rcloneConfig != "" {
+		managed := make(map[string]bool, len(remotes))
+		for _, r := range remotes {
+			managed[r.Name] = true
+		}
+		existing, rErr := readFileIfExists(s.rcloneConfig)
+		if rErr != nil {
+			// As above: a config blip is not a reason to refuse an explicit
+			// delete. The rewrite after it reports the same failure.
+			log.Printf("delete remote %q: read rclone config for the encryption guard: %v", name, rErr)
+		} else {
+			for _, ref := range sectionsReferencing(existing, name) {
+				if managed[ref] {
+					continue
+				}
+				http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(
+					"Remote \""+name+"\" is encrypted by remote \""+ref+"\" — delete that one first"),
+					http.StatusSeeOther)
+				return
+			}
 		}
 	}
 

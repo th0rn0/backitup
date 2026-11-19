@@ -108,6 +108,50 @@ func TestMergeRcloneConfigKeepsUnknownSections(t *testing.T) {
 	}
 }
 
+// The delete guard asks the file, not only the table, what depends on a remote.
+func TestSectionsReferencing(t *testing.T) {
+	const conf = "# remote = commented-out:\n" +
+		"[provider]\n" +
+		"type = b2\n" +
+		"account = acct\n" +
+		"\n" +
+		"# >>> backitup managed remotes\n" +
+		"[vault]\n" +
+		"type = crypt\n" +
+		"remote = provider:clients\n" +
+		"\n" +
+		"[other]\n" +
+		"type = crypt\n" +
+		"remote = differentscope:\n" +
+		"# <<< backitup managed remotes\n" +
+		"\n" +
+		"[handwritten]\n" +
+		"Remote = provider\n"
+
+	cases := []struct {
+		name string
+		want []string
+	}{
+		{name: "provider", want: []string{"vault", "handwritten"}},
+		{name: "differentscope", want: []string{"other"}},
+		{name: "provid", want: nil},        // not a prefix match on a longer word
+		{name: "vault", want: nil},         // nothing wraps it
+		{name: "commented-out", want: nil}, // a comment is text, not a setting
+		{name: "", want: nil},
+	}
+	for _, tc := range cases {
+		got := sectionsReferencing(conf, tc.name)
+		if len(got) != len(tc.want) {
+			t.Fatalf("sectionsReferencing(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("sectionsReferencing(%q) = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	}
+}
+
 func TestSectionName(t *testing.T) {
 	cases := []struct {
 		line string

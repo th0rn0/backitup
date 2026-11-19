@@ -320,6 +320,11 @@ func (r Remote) RcloneSection() string {
 			// rclone wants the parent as `<name>:` (optionally with a path).
 			v = strings.TrimSuffix(strings.TrimSpace(v), ":") + ":"
 		}
+		// One value per line: a newline in a value would inject config lines,
+		// and a lone \r is a line break to some INI readers even though
+		// rclone 1.76 reads it as part of the value.
+		v = strings.ReplaceAll(v, "\r\n", " ")
+		v = strings.ReplaceAll(v, "\r", " ")
 		fmt.Fprintf(&sb, "%s = %s\n", k, strings.ReplaceAll(v, "\n", " "))
 	}
 	return sb.String()

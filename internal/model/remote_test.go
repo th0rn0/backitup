@@ -165,3 +165,33 @@ func TestRcloneSectionFlattensNewlinesInValues(t *testing.T) {
 		t.Fatalf("a value injected a config section:\n%s", got)
 	}
 }
+
+// A lone \r is a line break to some INI readers (rclone 1.76 treats it as part
+// of the value, but the file is read by more than rclone): it must not survive
+// into rclone.conf either.
+func TestRcloneSectionFlattensCarriageReturnsInValues(t *testing.T) {
+	r := Remote{
+		Name:    "vault",
+		Backend: BackendCrypt,
+		Config: map[string]string{
+			"remote":   "provider",
+			"password": "a\r[evil]\rtype = s3",
+		},
+	}
+	got := r.RcloneSection()
+	if strings.ContainsRune(got, '\r') {
+		t.Fatalf("a carriage return survived into the section:\n%q", got)
+	}
+	sections := 0
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") && strings.HasSuffix(line, "]") {
+			sections++
+		}
+	}
+	if sections != 1 {
+		t.Fatalf("a value injected a config section:\n%q", got)
+	}
+	if !strings.Contains(got, "password = a [evil] type = s3") {
+		t.Fatalf("the value was not flattened onto one line:\n%q", got)
+	}
+}
