@@ -22,6 +22,9 @@ func (f fakeServerMode) Mode() model.Mode { return f.m }
 func (f fakeServerMode) List(context.Context, string) ([]Snapshot, error) {
 	return nil, ErrNotImplemented
 }
+func (f fakeServerMode) VerifySnapshot(context.Context, string, Snapshot) error {
+	return ErrNotImplemented
+}
 func (f fakeServerMode) PrepareOffsite(context.Context, string, Snapshot) (string, error) {
 	return "", ErrNotImplemented
 }

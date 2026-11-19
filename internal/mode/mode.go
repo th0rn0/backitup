@@ -93,6 +93,17 @@ type ServerMode interface {
 	Mode() model.Mode
 	// List returns the snapshots currently on the hot store for a client dir.
 	List(ctx context.Context, clientDir string) ([]Snapshot, error)
+	// VerifySnapshot checks that the snapshot described by snap is still a usable
+	// backup on the hot store, and says in operator terms what is wrong with it
+	// when it is not; nil means nothing was found wrong.
+	//
+	// What "usable" means is the mode's business: tar.gz reads the archive so
+	// gzip/CRC errors surface, and a mode whose snapshot is a directory tree
+	// samples its shape (present, not empty) instead. It MUST be cheap — the
+	// lifecycle calls this once per client per pass — so it samples and never
+	// walks a whole snapshot tree, and it MUST NOT be a size test: a mode may
+	// legitimately report Snapshot.Bytes as 0 (rsync does, see mode/rsync).
+	VerifySnapshot(ctx context.Context, clientDir string, snap Snapshot) error
 	// PrepareOffsite returns a path to an immutable object to upload for the given
 	// snapshot (D8): tar.gz -> the archive itself; rsync -> a tar of the snapshot
 	// dir created once. Never an rclone sync of a hardlink tree. For modes that

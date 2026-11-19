@@ -103,6 +103,36 @@ func (Server) PrepareOffsite(ctx context.Context, clientDir string, snap mode.Sn
 	return tmp.Name(), nil
 }
 
+// VerifySnapshot samples the snapshot on disk: the directory must still be
+// there and must hold at least one entry, and `latest` must still resolve.
+//
+// Bytes is 0 for rsync by design (see List), so a size test says nothing about
+// this mode — the lifecycle's old `latest.Bytes == 0` check therefore warned on
+// every pass for every rsync client while nothing was wrong. The cheap check that
+// does mean something for a directory tree is its shape: one ReadDir of the
+// snapshot's top level, never a WalkDir of the tree (which is what List rightly
+// refuses to do — a hardlinked tree can be huge and this runs on every pass).
+func (Server) VerifySnapshot(ctx context.Context, clientDir string, snap mode.Snapshot) error {
+	snapDir := filepath.Join(snapshotsDir(clientDir), snap.ID)
+	entries, err := os.ReadDir(snapDir)
+	switch {
+	case os.IsNotExist(err):
+		return fmt.Errorf("snapshot directory %s is missing", snapDir)
+	case err != nil:
+		return fmt.Errorf("read snapshot directory %s: %w", snapDir, err)
+	case len(entries) == 0:
+		return fmt.Errorf("snapshot directory %s is empty", snapDir)
+	}
+	// `latest` is the base the client's next run hardlinks against
+	// (--link-dest=/snapshots/latest). A dangling one does not fail that run —
+	// rsync simply has no base and copies everything again — so nothing else
+	// would tell the operator that hardlinking has silently stopped.
+	if _, err := os.Stat(filepath.Join(snapshotsDir(clientDir), "latest")); err != nil {
+		return fmt.Errorf("`latest` does not point at an existing snapshot (%v): the next run has no hardlink base", err)
+	}
+	return nil
+}
+
 // DeleteSnapshot removes one snapshot dir, refusing the one `latest` points at
 // (deleting it would break the next --link-dest base). The lifecycle also
 // protects the newest snapshot, but this is a belt-and-braces guard.
@@ -113,4 +143,3 @@ func (Server) DeleteSnapshot(ctx context.Context, clientDir, id string) error {
 	}
 	return os.RemoveAll(filepath.Join(dir, id))
 }
-

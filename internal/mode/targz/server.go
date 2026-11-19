@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/th0rn0/backitup/internal/archiveutil"
 	"github.com/th0rn0/backitup/internal/mode"
 	"github.com/th0rn0/backitup/internal/model"
 )
@@ -46,6 +47,14 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 // (D8). Nothing to build, nothing to clean up.
 func (Server) PrepareOffsite(ctx context.Context, clientDir string, snap mode.Snapshot) (string, error) {
 	return filepath.Join(clientDir, snap.ID), nil
+}
+
+// VerifySnapshot reads the whole archive so gzip/CRC damage inside it surfaces
+// here rather than at restore time (D9). Bytes came from the file size at List
+// time, so a size test would only prove the file was there then — the archive is
+// opened and read.
+func (Server) VerifySnapshot(ctx context.Context, clientDir string, snap mode.Snapshot) error {
+	return archiveutil.VerifyGzip(filepath.Join(clientDir, snap.ID))
 }
 
 // DeleteSnapshot removes one archive from the hot store.
