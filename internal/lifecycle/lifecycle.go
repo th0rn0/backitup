@@ -21,7 +21,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -167,7 +166,7 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 		return fmt.Errorf("list snapshots: %w", err)
 	}
 	// Newest first; the newest is always protected from pruning.
-	sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt.After(snaps[j].CreatedAt) })
+	mode.SortNewestFirst(snaps)
 
 	offsiteOn := d.Offsite != nil && c.OffsiteRemote != ""
 	offsited, err := d.offsitedSet(ctx, c.ID)
@@ -257,7 +256,7 @@ func uploadClient(ctx context.Context, d Deps, c model.Client) error {
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)
 	}
-	sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt.After(snaps[j].CreatedAt) })
+	mode.SortNewestFirst(snaps)
 
 	offsited, err := d.offsitedSet(ctx, c.ID)
 	if err != nil {
@@ -490,6 +489,16 @@ func prunePartOrphans(d Deps, clientDir, clientName string) {
 // pruneHot deletes hot snapshots older than retention, never the newest, and —
 // when offsite is enabled — only those already offsited (offsite-first, D8).
 //
+// "Never the newest" is decided from the snapshots, not from the slice order:
+// the newest is the one with the greatest CreatedAt, with the ID breaking ties.
+// Trusting index 0 made the guarantee depend on the caller sorting newest-first,
+// and when a listing arrived oldest-first (os.ReadDir is filename-ascending, and
+// snapshot IDs begin with the timestamp) it protected the OLDEST snapshot and
+// offered the newest one for deletion. The order is now fixed at the source as
+// well (mode.SortNewestFirst in each mode's List); this is the second lock on the
+// same door, because a silent regression in either place deletes the wrong end
+// of the list.
+//
 // It reports what happened: how many snapshots it deleted, how many deletions
 // failed, and the first failure. Returning nothing made a pass that deleted
 // nothing at all indistinguishable from a pass with nothing to do — which is how
@@ -499,9 +508,13 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 		return 0, 0, nil
 	}
 	cutoff := d.now().Add(-time.Duration(c.RetentionDays) * 24 * time.Hour)
-	for i, s := range snaps {
-		if i == 0 || !s.CreatedAt.Before(cutoff) {
-			continue // protect newest; keep anything within the hot horizon
+	newest, ok := newestSnapshot(snaps)
+	for _, s := range snaps {
+		if ok && s.ID == newest.ID {
+			continue // protect the newest, whatever position it is in
+		}
+		if !s.CreatedAt.Before(cutoff) {
+			continue // within the hot horizon
 		}
 		if offsiteOn && !offsited[s.ID] {
 			log.Printf("lifecycle: client %d: keeping un-offsited snapshot %s (offsite-first)", c.ID, s.ID)
@@ -520,6 +533,23 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 	return deleted, failed, err
 }
 
+// newestSnapshot returns the snapshot that must never be pruned: the one with
+// the greatest CreatedAt, with the ID as tie-break so the answer is a property
+// of the set rather than of its order. ok is false for an empty slice.
+func newestSnapshot(snaps []mode.Snapshot) (mode.Snapshot, bool) {
+	if len(snaps) == 0 {
+		return mode.Snapshot{}, false
+	}
+	newest := snaps[0]
+	for _, s := range snaps[1:] {
+		if s.CreatedAt.After(newest.CreatedAt) ||
+			(s.CreatedAt.Equal(newest.CreatedAt) && s.ID > newest.ID) {
+			newest = s
+		}
+	}
+	return newest, true
+}
+
 // verifyLatest integrity-checks the most recent snapshot (D9). What "intact"
 // means is the mode's business (mode.ServerMode.VerifySnapshot): tar.gz is read
 // so gzip/CRC damage surfaces, and rsync — whose snapshots report Bytes: 0 by
@@ -530,10 +560,10 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 // empty snapshot, and treating it as one logged "INTEGRITY WARN" on every pass
 // for every rsync client, which made the signal that does matter unreadable.
 func verifyLatest(ctx context.Context, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot) {
-	if len(snaps) == 0 {
+	latest, ok := newestSnapshot(snaps)
+	if !ok {
 		return
 	}
-	latest := snaps[0]
 	if err := sm.VerifySnapshot(ctx, clientDir, latest); err != nil {
 		log.Printf("lifecycle: client %d: INTEGRITY FAIL on %s: %v", c.ID, latest.ID, err)
 	}
@@ -690,7 +720,7 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)
 	}
-	sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt.After(snaps[j].CreatedAt) })
+	mode.SortNewestFirst(snaps)
 
 	offsited, err := d.offsitedSet(ctx, c.ID)
 	if err != nil {
