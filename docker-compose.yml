@@ -59,6 +59,13 @@ services:
       dockerfile: Dockerfile.sshd
     image: th0rn0/backitup-sshd:dev
     restart: unless-stopped
+    environment:
+      # Ingest guards read by backitup-recv (the forced command for every tar.gz
+      # upload): one client cannot fill the shared backups volume, which would
+      # fail every other client's backup. Whole byte counts; 0 disables either.
+      # See "SSH ingest (backitup-sshd)" in the README.
+      BACKITUP_RECV_MAX_BYTES: ${BACKITUP_RECV_MAX_BYTES:-53687091200}
+      BACKITUP_RECV_MIN_FREE_BYTES: ${BACKITUP_RECV_MIN_FREE_BYTES:-2147483648}
     ports:
       - "2222:2222" # the data channel clients connect to
     volumes:

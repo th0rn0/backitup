@@ -133,6 +133,11 @@ services:
   sshd:
     image: th0rn0/backitup-sshd:latest
     restart: unless-stopped
+    environment:
+      # Ingest guards: one client cannot fill the shared backup volume. Both are
+      # plain byte counts. See "SSH ingest (backitup-sshd)" in the reference.
+      BACKITUP_RECV_MAX_BYTES: 53687091200       # 50 GiB per upload
+      BACKITUP_RECV_MIN_FREE_BYTES: 2147483648   # never write below 2 GiB free
     ports:
       - "2222:2222"             # data channel — clients SSH into this port
     volumes:
@@ -300,6 +305,33 @@ Key points:
 | `BACKITUP_TIMEZONE`        | `Europe/London`     | Time zone used for Discord timestamps. |
 | `BACKITUP_VERBOSE`         | `false`             | Set to `true` or `1` for verbose logging. |
 | `BACKITUP_SSH_HOST_KEY`    | `/srv/hostkeys/ssh_host_ed25519_key.pub` | sshd host public key path; generates `known_hosts` entries in the add-client UI |
+
+### SSH ingest (`backitup-sshd`)
+
+These two are read by `backitup-recv`, the forced command the **sshd** container
+runs for every tar.gz upload, so they belong on the `sshd` service — not on `app`
+(which never sees an upload). They bound what a single client can write onto the
+shared `backups` volume: without them a compromised or merely misconfigured
+client — a source directory that grew, a runaway glob — can fill the volume, and
+then *every* client's backup fails with `ENOSPC` and a half-written archive left
+behind.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKITUP_RECV_MAX_BYTES` | `53687091200` (50 GiB) | Per-run byte cap. An upload that exceeds it is aborted mid-stream, the partial archive is removed, and the run exits non-zero with a message naming the limit — so the client reports a failure the dashboard shows instead of filling the disk. `0` disables the cap. |
+| `BACKITUP_RECV_MIN_FREE_BYTES` | `2147483648` (2 GiB) | Headroom floor. A new snapshot is refused outright when the backup volume has less free space than this, and the per-run cap is lowered to what is left above the floor, so a single run can never eat the reserve. `0` disables the floor. |
+
+Both are whole byte counts — no `GiB` suffix (a value that is not a number stops
+the run rather than silently disarming it). sshd starts every session with a
+fresh environment, so these cannot reach the forced command as environment
+variables; `docker/sshd/entrypoint.sh` writes them to `/etc/backitup/recv-limits`
+on every container start, which is what the script reads. Changing a limit means
+recreating the `sshd` container, not rebuilding the image.
+
+**Not included on purpose:** a per-client *snapshot count* cap. Retention already
+prunes to the client's window, and a count cap would fight it — refusing a new
+snapshot because old ones have not been pruned yet is the failure the operator
+would least expect.
 
 ### Offsite (cold storage)
 

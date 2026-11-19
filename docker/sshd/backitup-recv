@@ -5,10 +5,95 @@
 # client's directory. The directory comes from authorized_keys (server-derived
 # from the client ID), never from anything the client sends, so the client can
 # only ever write into its own directory.
+#
+# Two guards stop one client (compromised, or merely misconfigured: a source
+# directory that grew, a runaway glob) from filling the shared backup volume,
+# which would fail every other client's backup as well and leave a partial
+# archive behind on the way:
+#
+#   BACKITUP_RECV_MAX_BYTES       Per-run byte cap. At most this many bytes are
+#                                 read; an upload that exceeds it is aborted,
+#                                 the partial archive is removed, and the run
+#                                 exits non-zero so the client reports a
+#                                 failure instead of filling the disk.
+#                                 Default 53687091200 (50 GiB). 0 disables.
+#   BACKITUP_RECV_MIN_FREE_BYTES  Headroom floor. A snapshot is refused outright
+#                                 when the backup volume has less free space
+#                                 than this, and the per-run cap is reduced to
+#                                 what is left above the floor, so one run can
+#                                 never eat the reserved headroom.
+#                                 Default 2147483648 (2 GiB). 0 disables.
+#
+# Both are plain byte counts (no "GiB" suffix) because that is what docker
+# compose and .env files carry without surprises.
 set -eu
 
 dir="${1:?usage: backitup-recv <dir>}"
+
+# sshd gives every session a fresh environment - PermitUserEnvironment is off
+# and the container's own variables do not reach a session - so a variable
+# exported in docker-compose.yml would be invisible here. entrypoint.sh writes
+# the effective values to this file instead. A variable that IS set in the
+# environment wins over the file (running the script by hand, or a test).
+conf=/etc/backitup/recv-limits
+env_max_bytes="${BACKITUP_RECV_MAX_BYTES:-}"
+env_min_free="${BACKITUP_RECV_MIN_FREE_BYTES:-}"
+if [ -r "$conf" ]; then
+  . "$conf"
+fi
+max_bytes="${env_max_bytes:-${BACKITUP_RECV_MAX_BYTES:-53687091200}}"
+min_free="${env_min_free:-${BACKITUP_RECV_MIN_FREE_BYTES:-2147483648}}"
+
+tmp=''
+cleanup() {
+  # A partial upload must never be mistaken for a snapshot, and must never be
+  # left behind to eat the volume either.
+  if [ -n "$tmp" ]; then rm -f "$tmp"; fi
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+
+fail() {
+  printf 'backitup-recv: %s\n' "$*" >&2
+  exit 1
+}
+
+# Fail closed on a limit we cannot read: a typo must not silently remove the
+# guard from a shared volume.
+check_bytes() {
+  case "$2" in
+  '' | *[!0-9]*) fail "$1 must be a whole number of bytes, got '$2'" ;;
+  esac
+}
+check_bytes BACKITUP_RECV_MAX_BYTES "$max_bytes"
+check_bytes BACKITUP_RECV_MIN_FREE_BYTES "$min_free"
+
 mkdir -p "$dir"
+
+# limit is the effective per-run cap in bytes; 0 means "no cap", which only
+# happens when both knobs are explicitly disabled.
+limit="$max_bytes"
+limit_note="BACKITUP_RECV_MAX_BYTES ($max_bytes bytes)"
+if [ "$min_free" -gt 0 ]; then
+  avail_kb="$(df -P -k "$dir" | awk 'NR == 2 { print $4 }')"
+  case "$avail_kb" in
+  '' | *[!0-9]*) fail "could not read the free space of $dir (df gave '$avail_kb')" ;;
+  esac
+  avail_bytes=$((avail_kb * 1024))
+  if [ "$avail_bytes" -lt "$min_free" ]; then
+    fail "refusing to start: $avail_bytes bytes free on the backup volume, below BACKITUP_RECV_MIN_FREE_BYTES ($min_free); nothing written"
+  fi
+  headroom=$((avail_bytes - min_free))
+  if [ "$headroom" -eq 0 ]; then
+    fail "refusing to start: no free space above BACKITUP_RECV_MIN_FREE_BYTES ($min_free) on the backup volume; nothing written"
+  fi
+  # Never let a single run reach into the reserved headroom: filling the last
+  # bytes and then failing is worse than refusing early.
+  if [ "$limit" -eq 0 ] || [ "$headroom" -lt "$limit" ]; then
+    limit="$headroom"
+    limit_note="the $limit bytes free above BACKITUP_RECV_MIN_FREE_BYTES ($min_free)"
+  fi
+fi
 
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 # Monotonic suffix avoids same-second collisions.
@@ -22,5 +107,22 @@ done
 # Write to a .part file then rename so a partial/interrupted upload is never
 # mistaken for a complete snapshot.
 tmp="$out.part"
-cat > "$tmp"
+if [ "$limit" -gt 0 ]; then
+  # Read one byte past the limit so an over-cap upload is detectable. head
+  # stops there either way: on an oversized upload the client's next write gets
+  # a broken pipe and reports the failure, and the partial archive is removed
+  # below.
+  if ! head -c "$((limit + 1))" >"$tmp"; then
+    fail "writing the upload to $tmp failed (out of space?); partial archive removed"
+  fi
+  size="$(stat -c %s "$tmp")"
+  if [ "$size" -gt "$limit" ]; then
+    fail "upload exceeds $limit_note; aborted after $size bytes, partial archive removed, no snapshot written"
+  fi
+else
+  if ! cat >"$tmp"; then
+    fail "writing the upload to $tmp failed (out of space?); partial archive removed"
+  fi
+fi
 mv "$tmp" "$out"
+tmp=''
