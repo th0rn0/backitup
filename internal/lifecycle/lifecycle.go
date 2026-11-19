@@ -397,12 +397,35 @@ func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.Server
 	return bytes, true, nil
 }
 
+// offsiteRetentionDisabledReason names the setting that switched offsite
+// pruning off, and returns "" when pruning is on. The flag is named first, then
+// the horizon; both are reported when both apply, because the operator who set
+// them needs to know which one to change.
+func offsiteRetentionDisabledReason(c model.Client) string {
+	var reasons []string
+	if c.DisableOffsitePruning {
+		reasons = append(reasons, "offsite_pruning_disabled=true")
+	}
+	if c.OffsiteRetentionDays <= 0 {
+		reasons = append(reasons, fmt.Sprintf("offsite_retention_days=%d", c.OffsiteRetentionDays))
+	}
+	return strings.Join(reasons, ", ")
+}
+
 // pruneOffsite enforces the INDEPENDENT offsite retention horizon (D8), keeping
 // the newest offsite object regardless of age. Skipped when DisableOffsitePruning
 // is set so operators can delegate pruning to the storage provider's own lifecycle
 // policy (e.g. B2 lifecycle rules).
+//
+// A skipped pass says so, naming the setting responsible. Returning in silence
+// made "offsite retention is 0" indistinguishable from "nothing is old enough
+// yet" from the outside, which is exactly the question an operator asks when
+// cold storage keeps growing. One line per pass per client: that is the
+// granularity of a pass, it costs nothing per object, and it keeps the answer
+// visible in any window of the log rather than only since the process started.
 func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
-	if c.DisableOffsitePruning || c.OffsiteRetentionDays <= 0 {
+	if reason := offsiteRetentionDisabledReason(c); reason != "" {
+		log.Printf("lifecycle: offsite retention disabled for client %q (%s): no objects will be pruned", c.Name, reason)
 		return nil
 	}
 	objs, err := d.Store.ListOffsiteObjects(ctx, c.ID) // newest first
@@ -503,8 +526,15 @@ func prunePartOrphans(d Deps, clientDir, clientName string) {
 // failed, and the first failure. Returning nothing made a pass that deleted
 // nothing at all indistinguishable from a pass with nothing to do — which is how
 // a permanently failing prune stayed invisible while the hot store filled up.
+//
+// A disabled hot horizon is reported for the same reason as a disabled offsite
+// one: no pruning every pass, forever, with no line explaining it.
 func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsiteOn bool, offsited map[string]bool) (deleted, failed int, err error) {
-	if c.RetentionDays <= 0 || len(snaps) <= 1 {
+	if c.RetentionDays <= 0 {
+		log.Printf("lifecycle: hot retention disabled for client %q (retention_days=%d): no snapshots will be pruned", c.Name, c.RetentionDays)
+		return 0, 0, nil
+	}
+	if len(snaps) <= 1 {
 		return 0, 0, nil
 	}
 	cutoff := d.now().Add(-time.Duration(c.RetentionDays) * 24 * time.Hour)
