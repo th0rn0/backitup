@@ -476,6 +476,10 @@ diff -r ~/restore/laptop-docs /home/me/documents
   is the trusted party; the offsite provider is not).
 - **Webgui is behind an admin login** (argon2id, session cookie). It serves every
   client's data for download and issues keys, so it is never unauthenticated.
+  Failed logins are budgeted per account **and** per source address — ten failures
+  for one account from one address lock *that account, from that address*, out for
+  a minute, while other accounts keep working — so an attacker cannot lock the
+  fleet out of the dashboard it needs to see whether backups are running.
 - **Per-client SSH access is confined**: `internal-sftp` + chroot for tar.gz clients,
   restricted `rrsync` locked to the client's directory for rsync clients.
 

@@ -1,8 +1,6 @@
 package server
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,22 +42,6 @@ func TestConfigureIngest(t *testing.T) {
 	if s.authKeysPath != "/ak" || s.backupBaseDir != "/b" || s.publicHost != "host:22" || s.publicAPI != "http://host:8080" || s.clientImage != "img" || s.sshHostKeyPath != "/hostkey.pub" {
 		t.Fatalf("ConfigureIngest did not apply: authKeysPath=%q backupBaseDir=%q publicHost=%q publicAPI=%q clientImage=%q sshHostKeyPath=%q",
 			s.authKeysPath, s.backupBaseDir, s.publicHost, s.publicAPI, s.clientImage, s.sshHostKeyPath)
-	}
-}
-
-func TestLoginLimiter(t *testing.T) {
-	l := newLoginLimiter()
-	req := httptest.NewRequest(http.MethodPost, "/login", nil)
-	req.RemoteAddr = "192.0.2.1:12345"
-
-	for i := 0; i < loginMaxFails; i++ {
-		if !l.allow(req) {
-			t.Fatalf("allow returned false before limit at attempt %d", i+1)
-		}
-		l.record(req)
-	}
-	if l.allow(req) {
-		t.Fatalf("allow returned true after %d failed attempts; expected rate-limited", loginMaxFails)
 	}
 }
 

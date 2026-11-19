@@ -317,11 +317,11 @@ func TestLoginStoreTimeoutIsNotAWrongPassword(t *testing.T) {
 	}
 
 	srv.limiter.mu.Lock()
-	n := len(srv.limiter.ips)
+	ips, pairs := len(srv.limiter.ips), len(srv.limiter.pairs)
 	srv.limiter.mu.Unlock()
-	if n != 0 {
-		t.Fatalf("a store timeout was recorded as a failed login attempt (%d IP(s) tracked); "+
-			"ten of those lock the operator out", n)
+	if ips != 0 || pairs != 0 {
+		t.Fatalf("a store timeout was recorded as a failed login attempt (%d address bucket(s), "+
+			"%d address+user bucket(s) tracked); ten of those lock the operator out", ips, pairs)
 	}
 }
 
