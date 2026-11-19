@@ -50,10 +50,10 @@ func TestDeduplicatedUploadIsRecordedSoHotPruneProceeds(t *testing.T) {
 
 	// Three snapshots of an unchanged tree: the newest inside the hot horizon,
 	// the other two already past it.
-	newest := filepath.Join(dir, "s3.tar.gz")
+	newest := filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz")
 	mkArchiveContent(t, newest, now.Add(-1*time.Hour), "unchanged-tree")
-	copyArchive(t, newest, filepath.Join(dir, "s2.tar.gz"), now.Add(-30*time.Hour))
-	copyArchive(t, newest, filepath.Join(dir, "s1.tar.gz"), now.Add(-40*time.Hour))
+	copyArchive(t, newest, filepath.Join(dir, "backup-20260617T000000Z-000.tar.gz"), now.Add(-30*time.Hour))
+	copyArchive(t, newest, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*time.Hour))
 
 	deps := Deps{Store: st, Offsite: &fakeOffsite{}, BackupBaseDir: base, Now: func() time.Time { return now }}
 	if err := RunOffsiteOnce(context.Background(), deps); err != nil {
@@ -74,18 +74,18 @@ func TestDeduplicatedUploadIsRecordedSoHotPruneProceeds(t *testing.T) {
 
 	// A snapshot with unique content that was never offsited must still be
 	// protected by the offsite-first rule (created after the upload pass).
-	unoffsited := filepath.Join(dir, "never-offsited.tar.gz")
+	unoffsited := filepath.Join(dir, "backup-20260509T000001Z-000.tar.gz")
 	mkArchiveContent(t, unoffsited, now.Add(-40*time.Hour), "unique-content")
 
 	if err := RunOnce(context.Background(), deps); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	for _, pruned := range []string{"s1.tar.gz", "s2.tar.gz"} {
+	for _, pruned := range []string{"backup-20260509T000000Z-000.tar.gz", "backup-20260617T000000Z-000.tar.gz"} {
 		if _, statErr := os.Stat(filepath.Join(dir, pruned)); statErr == nil {
 			t.Errorf("%s must be pruned: its content is offsite (deduplicated) and it is past the 1-day hot horizon", pruned)
 		}
 	}
-	for _, kept := range []string{"s3.tar.gz", "never-offsited.tar.gz"} {
+	for _, kept := range []string{"backup-20260618T000000Z-000.tar.gz", "backup-20260509T000001Z-000.tar.gz"} {
 		if _, statErr := os.Stat(filepath.Join(dir, kept)); statErr != nil {
 			t.Errorf("%s must survive (newest snapshot / no offsite record): %v", kept, statErr)
 		}
@@ -219,7 +219,7 @@ func TestScheduledOffsiteUploadSurvivesCorruptTimestampRow(t *testing.T) {
 	// A readable upload two hours ago: the next cron tick is in the past, so the
 	// client is due.
 	if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
-		ClientID: id, SnapshotID: "prior.tar.gz", Remote: "local", UploadedAt: now.Add(-2 * time.Hour),
+		ClientID: id, SnapshotID: "backup-20260618T000001Z-000.tar.gz", Remote: "local", UploadedAt: now.Add(-2 * time.Hour),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -232,12 +232,12 @@ func TestScheduledOffsiteUploadSurvivesCorruptTimestampRow(t *testing.T) {
 	defer func() { _ = raw.Close() }()
 	if _, err := raw.ExecContext(ctx,
 		`INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at) VALUES (?,?,?,0,?)`,
-		id, "corrupt.tar.gz", "local", "99/06/2026 11:30"); err != nil {
+		id, "backup-20260601T000000Z-000.tar.gz", "local", "99/06/2026 11:30"); err != nil {
 		t.Fatalf("insert corrupt row: %v", err)
 	}
 	// One snapshot on disk that has never been offsited: the work the schedule
 	// exists to trigger.
-	mkArchiveContent(t, filepath.Join(dir, "new.tar.gz"), now.Add(-30*time.Minute), "fresh-content")
+	mkArchiveContent(t, filepath.Join(dir, "backup-20260618T000002Z-000.tar.gz"), now.Add(-30*time.Minute), "fresh-content")
 
 	off := &fakeOffsite{}
 	deps := Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}
@@ -249,8 +249,8 @@ func TestScheduledOffsiteUploadSurvivesCorruptTimestampRow(t *testing.T) {
 			"offsite uploads — that is the silent retention stall this pass exists to remove", len(off.up), off.up)
 	}
 	for obj := range off.up {
-		if !strings.HasSuffix(obj, "/new.tar.gz") {
-			t.Errorf("uploaded %q, want the never-offsited snapshot new.tar.gz", obj)
+		if !strings.HasSuffix(obj, "/backup-20260618T000002Z-000.tar.gz") {
+			t.Errorf("uploaded %q, want the never-offsited snapshot backup-20260618T000002Z-000.tar.gz", obj)
 		}
 	}
 }

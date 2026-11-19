@@ -59,5 +59,12 @@ func (Server) VerifySnapshot(ctx context.Context, clientDir string, snap mode.Sn
 
 // DeleteSnapshot removes one archive from the hot store.
 func (Server) DeleteSnapshot(ctx context.Context, clientDir, id string) error {
-	return os.Remove(filepath.Join(clientDir, id))
+	if err := mode.ValidateSnapshotID(model.ModeTarGz, id); err != nil {
+		return err
+	}
+	path, err := mode.SnapshotPath(clientDir, id)
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
 }

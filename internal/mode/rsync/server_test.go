@@ -89,20 +89,20 @@ func TestServerPrepareOffsiteTarsSnapshot(t *testing.T) {
 
 func TestServerDeleteRefusesLatest(t *testing.T) {
 	dir := t.TempDir()
-	makeSnap(t, dir, "T1", "x")
-	makeSnap(t, dir, "T2", "y")
-	_ = os.Symlink("T2", filepath.Join(dir, "snapshots", "latest"))
+	makeSnap(t, dir, "20260101T000000Z", "x")
+	makeSnap(t, dir, "20260102T000000Z", "y")
+	_ = os.Symlink("20260102T000000Z", filepath.Join(dir, "snapshots", "latest"))
 
 	// Deleting the latest target must be refused (protects the --link-dest base).
-	if err := (Server{}).DeleteSnapshot(context.Background(), dir, "T2"); err == nil {
+	if err := (Server{}).DeleteSnapshot(context.Background(), dir, "20260102T000000Z"); err == nil {
 		t.Fatal("expected refusal deleting the current latest")
 	}
 	// A non-latest snapshot deletes fine.
-	if err := (Server{}).DeleteSnapshot(context.Background(), dir, "T1"); err != nil {
-		t.Fatalf("delete T1: %v", err)
+	if err := (Server{}).DeleteSnapshot(context.Background(), dir, "20260101T000000Z"); err != nil {
+		t.Fatalf("delete 20260101T000000Z: %v", err)
 	}
 	snaps, _ := Server{}.List(context.Background(), dir)
-	if len(snaps) != 1 || snaps[0].ID != "T2" {
+	if len(snaps) != 1 || snaps[0].ID != "20260102T000000Z" {
 		t.Fatalf("after delete: %+v", snaps)
 	}
 }
@@ -148,6 +148,28 @@ func TestServerVerifySnapshot(t *testing.T) {
 	if err := (Server{}).VerifySnapshot(context.Background(), dir, mode.Snapshot{ID: "T2"}); err == nil ||
 		!strings.Contains(err.Error(), "hardlink base") {
 		t.Fatalf("a dangling latest must be reported, got: %v", err)
+	}
+}
+
+// ids that are path fragments rather than names must be refused by DeleteSnapshot
+// itself, so a caller that forgets to validate cannot remove the snapshots/
+// directory. "." is the one that bit: filepath.Join(dir, ".") cleans to dir, so
+// the old code os.RemoveAll'd every snapshot the moment the handler passed it on.
+func TestServerDeleteRefusesNonNameIDs(t *testing.T) {
+	for _, id := range []string{"", ".", "..", "../..", "../../etc", "sub/dir", `sub\dir`, "..20260101T000000Z"} {
+		dir := t.TempDir()
+		makeSnap(t, dir, "20260101T000000Z", "one")
+		makeSnap(t, dir, "20260102T000000Z", "two")
+		_ = os.Symlink("20260102T000000Z", filepath.Join(dir, "snapshots", "latest"))
+
+		if err := (Server{}).DeleteSnapshot(context.Background(), dir, id); err == nil {
+			t.Errorf("DeleteSnapshot(%q) = nil, want refusal", id)
+		}
+		for _, want := range []string{"20260101T000000Z", "20260102T000000Z", "latest"} {
+			if _, err := os.Lstat(filepath.Join(dir, "snapshots", want)); err != nil {
+				t.Errorf("id %q: snapshots/%s gone after a refused delete: %v", id, want, err)
+			}
+		}
 	}
 }
 
