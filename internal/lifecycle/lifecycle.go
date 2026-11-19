@@ -27,7 +27,6 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"github.com/th0rn0/backitup/internal/alert"
-	"github.com/th0rn0/backitup/internal/archiveutil"
 	"github.com/th0rn0/backitup/internal/authkeys"
 	"github.com/th0rn0/backitup/internal/mode"
 	"github.com/th0rn0/backitup/internal/model"
@@ -521,22 +520,22 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 	return deleted, failed, err
 }
 
-// verifyLatest integrity-checks the most recent snapshot (D9): tar.gz archives
-// are read fully so gzip/CRC errors surface; rsync snapshots must be non-empty.
+// verifyLatest integrity-checks the most recent snapshot (D9). What "intact"
+// means is the mode's business (mode.ServerMode.VerifySnapshot): tar.gz is read
+// so gzip/CRC damage surfaces, and rsync — whose snapshots report Bytes: 0 by
+// design, because summing a hardlinked tree is not free — is checked by a sample
+// of its directory instead.
+//
+// Nothing here compares sizes. A mode reporting Bytes: 0 is not a mode with an
+// empty snapshot, and treating it as one logged "INTEGRITY WARN" on every pass
+// for every rsync client, which made the signal that does matter unreadable.
 func verifyLatest(ctx context.Context, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot) {
 	if len(snaps) == 0 {
 		return
 	}
 	latest := snaps[0]
-	switch c.Mode {
-	case model.ModeTarGz:
-		if err := archiveutil.VerifyGzip(filepath.Join(clientDir, latest.ID)); err != nil {
-			log.Printf("lifecycle: client %d: INTEGRITY FAIL on %s: %v", c.ID, latest.ID, err)
-		}
-	case model.ModeRsync:
-		if latest.Bytes == 0 {
-			log.Printf("lifecycle: client %d: INTEGRITY WARN: latest snapshot %s is empty", c.ID, latest.ID)
-		}
+	if err := sm.VerifySnapshot(ctx, clientDir, latest); err != nil {
+		log.Printf("lifecycle: client %d: INTEGRITY FAIL on %s: %v", c.ID, latest.ID, err)
 	}
 }
 
