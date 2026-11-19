@@ -38,6 +38,7 @@ watch the whole fleet's backup health from a single dashboard.
 - [Configuration reference](#configuration-reference)
 - [Backup modes](#backup-modes)
 - [Retention & offsite](#retention--offsite)
+- [Restore](#restore)
 - [Security model](#security-model)
 - [Development](#development)
 - [Project layout](#project-layout)
@@ -389,6 +390,66 @@ incremental snapshots on the hot store via hardlinks (only changed data costs sp
   pruned before it is confirmed offsited. Offsite pushes **immutable per-snapshot
   objects** (no destructive sync), so corruption cannot be replicated over your only
   cold copy.
+
+## Restore
+
+A backup you have never restored from is a hypothesis. These are the actual paths
+back, for each mode and each tier.
+
+**Hot store, `targz` client.** `GET /clients/<slug>/snapshots/<snapshot>?view=1`
+from the client's page, or with a session cookie:
+
+```bash
+curl -fL -b cookies.txt -OJ \
+  https://backup.example.com/clients/laptop-docs/snapshots/backup-20260101T000000Z-000.tar.gz
+# (drop -J and add ?view=1 to stream it inline instead of downloading an attachment)
+# The archive stores paths relative to the source root, so extract into a directory
+# of its own — this is what stops a restore from scattering into your cwd.
+mkdir -p ~/restore/laptop-docs && cd ~/restore/laptop-docs
+tar -xzf ~/backup-20260101T000000Z-000.tar.gz
+```
+
+**Hot store, `rsync` client.** No archive is kept: the server builds a tar.gz of the
+snapshot directory **on demand**, so the download streams and can take a while on a
+large snapshot.
+
+```bash
+curl -fL -b cookies.txt -OJ \
+  https://backup.example.com/clients/nas-photos/snapshots/20260101T000000Z
+# rsync snapshots archive under a top-level directory named after the snapshot, so
+# the extracted tree is 20260101T000000Z/ — copy it out with rsync to keep modes/times.
+tar -xzf ~/20260101T000000Z.tar.gz -C ~/restore
+rsync -a ~/restore/20260101T000000Z/ /srv/photos/
+```
+
+**Offsite (cold).** Either download through the UI/API —
+`GET /clients/<slug>/offsite/<snapshotID>/download`, which streams through
+`rclone cat` — or fetch the object directly with rclone. The object path is deterministic:
+`<offsite-dir>/<snapshot-id>` for `targz` clients, and
+`<offsite-dir>/<snapshot-id>.tar.gz` for `rsync` clients, where `<offsite-dir>`
+defaults to the client's slug.
+
+```bash
+# store the remote as [archive] in the config rclone uses (see BACKITUP_RCLONE_CONFIG)
+rclone copy archive:laptop-docs/backup-20260101T000000Z-000.tar.gz ~/restore/
+rclone copy archive:nas-photos/20260101T000000Z.tar.gz            ~/restore/
+```
+
+**What a restore preserves, and what it does not.** File contents, permission
+bits, modification times and symlink targets are preserved, in both modes — the
+tests that prove it compare sha256, mode, mtime and link target per entry
+(`internal/server/restore_test.go`). What it does **not** preserve: numeric
+ownership (tar carries it, but extracting as a normal user cannot apply it — restore
+as root if ownership matters), extended attributes and ACLs, and hardlink structure
+between separate snapshots (an `rsync` snapshot is internally hardlinked on the hot
+store, but a restored copy is plain files).
+
+**Restore is not a drill until you have done it.** Pull one snapshot of one client
+to a scratch directory and diff it against the source before you need it:
+
+```bash
+diff -r ~/restore/laptop-docs /home/me/documents
+```
 
 ## Security model
 
