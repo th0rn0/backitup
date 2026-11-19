@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/th0rn0/backitup/internal/lifecycle"
-	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/mode"
+	"github.com/th0rn0/backitup/internal/model"
 )
 
 // getSnapshotDownload streams a local snapshot to the browser.
@@ -87,7 +87,7 @@ func (s *Server) postSnapshotDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshotID := r.PathValue("snapshotID")
-	if snapshotID == "" || strings.Contains(snapshotID, "..") {
+	if err := mode.ValidateSnapshotID(c.Mode, snapshotID); err != nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -285,11 +285,19 @@ func (s *Server) postBulkDeleteSnapshots(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	// Validate every id BEFORE deleting anything. A request carrying one bad id
+	// (`ids=.` reaches os.RemoveAll(<clientDir>/snapshots)) must delete nothing at
+	// all, not "everything except the bad one" — a partial batch is data loss the
+	// operator never asked for.
+	for _, id := range ids {
+		if err := mode.ValidateSnapshotID(c.Mode, id); err != nil {
+			log.Printf("bulk snapshot delete: client=%s: refusing request: %v", c.Name, err)
+			http.Error(w, "invalid snapshot id", http.StatusBadRequest)
+			return
+		}
+	}
 	var errs []string
 	for _, id := range ids {
-		if id == "" || strings.Contains(id, "..") {
-			continue
-		}
 		if err := sm.DeleteSnapshot(ctx, clientDir, id); err != nil {
 			log.Printf("bulk snapshot delete: client=%s snap=%s: %v", c.Name, id, err)
 			errs = append(errs, id)

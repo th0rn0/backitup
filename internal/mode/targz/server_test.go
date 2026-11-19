@@ -12,9 +12,10 @@ import (
 
 func TestServerListAndDelete(t *testing.T) {
 	dir := t.TempDir()
-	// Two archives + noise that must be ignored.
-	writeFile(t, filepath.Join(dir, "backup-A.tar.gz"), "a")
-	writeFile(t, filepath.Join(dir, "backup-B.tar.gz"), "bb")
+	// Two archives + noise that must be ignored. Names are the shape
+	// docker/sshd/backitup-recv actually writes.
+	writeFile(t, filepath.Join(dir, "backup-20260101T000000Z-000.tar.gz"), "a")
+	writeFile(t, filepath.Join(dir, "backup-20260102T000000Z-000.tar.gz"), "bb")
 	writeFile(t, filepath.Join(dir, "notes.txt"), "ignore")
 	_ = os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
 
@@ -53,6 +54,27 @@ func TestServerListMissingDir(t *testing.T) {
 func TestServerModeName(t *testing.T) {
 	if (Server{}).Mode() != "targz" {
 		t.Fatalf("server mode = %q", (Server{}).Mode())
+	}
+}
+
+// The same non-name ids the HTTP form can carry must be refused here too:
+// os.Remove(filepath.Join(clientDir, ".")) is os.Remove(clientDir), and an id is
+// a name, not a path fragment.
+func TestServerDeleteRefusesNonNameIDs(t *testing.T) {
+	for _, id := range []string{"", ".", "..", "../..", "../../etc", "sub/dir", `sub\dir`, "backup-20260101T000000Z-000.tar.gz/.."} {
+		dir := t.TempDir()
+		keep := filepath.Join(dir, "backup-20260101T000000Z-000.tar.gz")
+		writeFile(t, keep, "irreplaceable")
+
+		if err := (Server{}).DeleteSnapshot(context.Background(), dir, id); err == nil {
+			t.Errorf("DeleteSnapshot(%q) = nil, want refusal", id)
+		}
+		if _, err := os.Stat(keep); err != nil {
+			t.Errorf("id %q: the archive is gone after a refused delete: %v", id, err)
+		}
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("id %q: the client dir itself was removed: %v", id, err)
+		}
 	}
 }
 

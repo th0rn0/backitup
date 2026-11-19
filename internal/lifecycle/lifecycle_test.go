@@ -104,9 +104,9 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
 		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
 	})
-	mkArchiveContent(t, filepath.Join(dir, "old.tar.gz"), now.Add(-40*24*time.Hour), "payload-old")
-	mkArchiveContent(t, filepath.Join(dir, "mid.tar.gz"), now.Add(-5*24*time.Hour), "payload-mid")
-	mkArchiveContent(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour), "payload-new")
+	mkArchiveContent(t, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*24*time.Hour), "payload-old")
+	mkArchiveContent(t, filepath.Join(dir, "backup-20260613T000000Z-000.tar.gz"), now.Add(-5*24*time.Hour), "payload-mid")
+	mkArchiveContent(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour), "payload-new")
 
 	deps := Deps{Store: st, Offsite: &fakeOffsite{}, BackupBaseDir: base, Now: func() time.Time { return now }}
 	off := deps.Offsite.(*fakeOffsite)
@@ -134,10 +134,10 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 	for _, e := range left {
 		names[e.Name()] = true
 	}
-	if names["old.tar.gz"] {
+	if names["backup-20260509T000000Z-000.tar.gz"] {
 		t.Error("old archive should have been pruned from hot")
 	}
-	if !names["mid.tar.gz"] || !names["new.tar.gz"] {
+	if !names["backup-20260613T000000Z-000.tar.gz"] || !names["backup-20260618T000000Z-000.tar.gz"] {
 		t.Errorf("mid/new should survive: %v", names)
 	}
 }
@@ -151,8 +151,8 @@ func TestRunOnceOffsiteFirstProtectsHot(t *testing.T) {
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
 		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
 	})
-	mkArchive(t, filepath.Join(dir, "old.tar.gz"), now.Add(-40*24*time.Hour))
-	mkArchive(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour))
+	mkArchive(t, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*24*time.Hour))
+	mkArchive(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour))
 
 	deps := Deps{Store: st, Offsite: &fakeOffsite{fail: true}, BackupBaseDir: base, Now: func() time.Time { return now }}
 
@@ -166,7 +166,7 @@ func TestRunOnceOffsiteFirstProtectsHot(t *testing.T) {
 
 	// Lifecycle worker runs — must not prune the un-offsited old snapshot.
 	_ = RunOnce(context.Background(), deps)
-	if _, err := os.Stat(filepath.Join(dir, "old.tar.gz")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz")); err != nil {
 		t.Fatal("old un-offsited archive must NOT be pruned (offsite-first)")
 	}
 }
@@ -178,18 +178,18 @@ func TestRunOnceNoOffsitePrunesByAge(t *testing.T) {
 	_, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "", RetentionDays: 14, Enabled: true,
 	})
-	mkArchive(t, filepath.Join(dir, "old.tar.gz"), now.Add(-40*24*time.Hour))
-	mkArchive(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour))
+	mkArchive(t, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*24*time.Hour))
+	mkArchive(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour))
 
 	off := &fakeOffsite{}
 	_ = RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }})
 	if len(off.up) != 0 {
 		t.Fatal("no offsite remote -> no uploads")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "old.tar.gz")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz")); err == nil {
 		t.Fatal("old archive should be pruned by hot retention even without offsite")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "new.tar.gz")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz")); err != nil {
 		t.Fatal("newest must be protected")
 	}
 }

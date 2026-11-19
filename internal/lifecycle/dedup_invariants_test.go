@@ -86,8 +86,8 @@ func TestDedupRecordOnlyProtectsWhileOwnerObjectExists(t *testing.T) {
 		missing  bool
 		wantKill want
 	}{
-		{"intact", false, want{pruned: []string{"dup.tar.gz", "owner.tar.gz"}, kept: []string{"new.tar.gz"}}},
-		{"owner-missing", true, want{pruned: nil, kept: []string{"dup.tar.gz", "owner.tar.gz", "new.tar.gz"}}},
+		{"intact", false, want{pruned: []string{"backup-20260617T000000Z-000.tar.gz", "backup-20260616T000000Z-000.tar.gz"}, kept: []string{"backup-20260618T000000Z-000.tar.gz"}}},
+		{"owner-missing", true, want{pruned: nil, kept: []string{"backup-20260617T000000Z-000.tar.gz", "backup-20260616T000000Z-000.tar.gz", "backup-20260618T000000Z-000.tar.gz"}}},
 	}
 
 	base := t.TempDir()
@@ -97,23 +97,23 @@ func TestDedupRecordOnlyProtectsWhileOwnerObjectExists(t *testing.T) {
 			Name: tc.name, Mode: model.ModeTarGz, OffsiteRemote: "local",
 			RetentionDays: 1, OffsiteRetentionDays: 90, Enabled: true,
 		})
-		mkArchiveContent(t, filepath.Join(dir, "new.tar.gz"), now.Add(-1*time.Hour), tc.name+"-new")
-		mkArchiveContent(t, filepath.Join(dir, "owner.tar.gz"), now.Add(-40*time.Hour), tc.name+"-content")
-		mkArchiveContent(t, filepath.Join(dir, "dup.tar.gz"), now.Add(-30*time.Hour), tc.name+"-content")
+		mkArchiveContent(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour), tc.name+"-new")
+		mkArchiveContent(t, filepath.Join(dir, "backup-20260616T000000Z-000.tar.gz"), now.Add(-40*time.Hour), tc.name+"-content")
+		mkArchiveContent(t, filepath.Join(dir, "backup-20260617T000000Z-000.tar.gz"), now.Add(-30*time.Hour), tc.name+"-content")
 
 		if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
-			ClientID: id, SnapshotID: "owner.tar.gz", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour),
+			ClientID: id, SnapshotID: "backup-20260616T000000Z-000.tar.gz", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour),
 		}); err != nil {
 			t.Fatal(err)
 		}
 		if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
-			ClientID: id, SnapshotID: "dup.tar.gz", Remote: "local", DedupOf: "owner.tar.gz",
+			ClientID: id, SnapshotID: "backup-20260617T000000Z-000.tar.gz", Remote: "local", DedupOf: "backup-20260616T000000Z-000.tar.gz",
 			UploadedAt: now.Add(-30 * 24 * time.Hour),
 		}); err != nil {
 			t.Fatal(err)
 		}
 		if tc.missing {
-			if err := st.UpdateOffsiteRemoteStatus(ctx, offsiteRowID(t, st, id, "owner.tar.gz"), true, now); err != nil {
+			if err := st.UpdateOffsiteRemoteStatus(ctx, offsiteRowID(t, st, id, "backup-20260616T000000Z-000.tar.gz"), true, now); err != nil {
 				t.Fatal(err)
 			}
 		}

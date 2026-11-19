@@ -137,9 +137,16 @@ func (Server) VerifySnapshot(ctx context.Context, clientDir string, snap mode.Sn
 // (deleting it would break the next --link-dest base). The lifecycle also
 // protects the newest snapshot, but this is a belt-and-braces guard.
 func (Server) DeleteSnapshot(ctx context.Context, clientDir, id string) error {
+	if err := mode.ValidateSnapshotID(model.ModeRsync, id); err != nil {
+		return err
+	}
 	dir := snapshotsDir(clientDir)
+	path, err := mode.SnapshotPath(dir, id)
+	if err != nil {
+		return err
+	}
 	if keep, _ := os.Readlink(filepath.Join(dir, "latest")); keep == id {
 		return fmt.Errorf("refusing to delete snapshot %q: it is the current `latest`", id)
 	}
-	return os.RemoveAll(filepath.Join(dir, id))
+	return os.RemoveAll(path)
 }
