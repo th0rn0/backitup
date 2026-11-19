@@ -163,9 +163,11 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 
 	// A reported "ok" is a claim, not evidence: the bearer token says which host
 	// is talking, not that a backup happened. Corroborate it against the store
-	// before it can become the dashboard's idea of health — an unverifiable
-	// claim is recorded as a failure and explained in log_tail (the wire protocol
-	// is unchanged: the client still gets its 201 and run_id).
+	// before it can become the dashboard's idea of health — a claim the store
+	// can check and cannot match is recorded as a failure, while one the server
+	// could not check at all keeps the client's report and is flagged in
+	// log_tail as unverified (the wire protocol is unchanged either way: the
+	// client still gets its 201 and run_id).
 	st, req.LogTail = s.corroboratedStatus(ctx, cl, st, req.SnapshotID, started, req.LogTail)
 
 	// Update path: client is finalising a run it previously started.

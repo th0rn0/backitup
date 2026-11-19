@@ -18,6 +18,13 @@ import (
 // on the run log, so the wording is deliberate.
 const unverifiedMarker = "unverified by server"
 
+// cannotVerifyPrefix explains, in the run log, that the CHECK did not run — as
+// opposed to running and disagreeing with the client. The distinction is the
+// whole point: a store that stalled for a few seconds is a fact about the
+// server, and recording it as a `failed` run writes it into the backup history
+// as a fact about the client's backup, where no later success edits it out.
+const cannotVerifyPrefix = "verification could not run"
+
 // uploadSkewAllowance is how far the client's reported run start may be ahead of
 // the archive's own mtime before an upload stops counting as "this run's". The
 // client stamps started_at from its own clock (and the host is untrusted); the
@@ -49,9 +56,11 @@ const uploadMaxLag = 2 * time.Hour
 //	           (minus a skew allowance) and no earlier than maxLag before the
 //	           report, so a backdated start cannot reach back to an old archive
 //
-// Returns ("", nil) when the claim checks out, (reason, nil) when it does not,
-// and a non-nil error when the check itself could not be performed. Callers treat
-// both of the last two as "not corroborated" and record a failure.
+// Returns ("", nil) when the claim checks out, (reason, nil) when it does not
+// — a completed verification that disagrees — and a non-nil error when the
+// check itself could not be performed. The two are NOT the same thing and
+// callers must not treat them the same: only the first two say anything about
+// the client's backup, while an error says only that the server could not look.
 //
 // Deliberately not done here: gunzipping the archive to prove it is intact. That
 // would read every byte of every archive on every run report, on the same disk
@@ -67,6 +76,17 @@ const uploadMaxLag = 2 * time.Hour
 // the timestamp health ages from, so a future-dated finished_at holds a client
 // at "ok"; that predates this check and is tracked separately.
 func (s *Server) corroborateSuccess(ctx context.Context, cl *model.Client, snapshotID string, startedAt time.Time) (string, error) {
+	// A check that cannot run must fail as "could not run", never as a verdict.
+	// postStatus passes the request's store context here, so a spent store
+	// deadline already means the store is not answering; the listing below does
+	// not itself look at the context, so without this it would go on to read the
+	// directory and produce an answer nobody is waiting for — and an empty
+	// listing reads exactly like "the client's snapshot is not there", which is a
+	// statement about the client's backup that this request is in no position to
+	// make.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	sm, ok := mode.Server(cl.Mode)
 	if !ok {
 		// Cannot verify without the mode's idea of a snapshot. Fail closed and
@@ -79,6 +99,13 @@ func (s *Server) corroborateSuccess(ctx context.Context, cl *model.Client, snaps
 	}
 	snaps, err := sm.List(ctx, dir)
 	if err != nil {
+		return "", err
+	}
+	// The listing finished, but after the deadline the request had for it: the
+	// store was stalled while the answer was produced, so the answer is not one
+	// this run can be judged on. Saying "not in the store" here would be the
+	// database's stall written down as the client's missing backup.
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
@@ -159,18 +186,56 @@ func markUnverified(logTail, reason string) string {
 	return logTail + "\n" + line
 }
 
+// unverifiedReason explains, for the run log, why the verification did not run.
+// The machine condition is named when the classifier recognises one, and the
+// underlying error is kept verbatim after it: a flattened "unverified" is what
+// sends an operator looking for a bug in their backup client.
+func (s *Server) unverifiedReason(ctx context.Context, err error) string {
+	switch classifyStoreFailure(ctx, err) {
+	case storeDeadline:
+		return cannotVerifyPrefix + ": the store did not answer (" + s.deadlineReason(ctx) + "): " + err.Error()
+	case storeLocked:
+		return cannotVerifyPrefix + ": the store is busy with another write: " + err.Error()
+	default:
+		return cannotVerifyPrefix + ": " + err.Error()
+	}
+}
+
 // corroboratedStatus decides what to record for a reported run. Only a claimed
 // success is checked; failures and overlaps are the client admitting something
 // went wrong, which is not a claim worth doubting. The run is not rejected — the
 // wire protocol is unchanged, the client still gets its run_id — the row just
 // records what the server could confirm.
+//
+// "Could not verify" and "verified and it disagrees" are different outcomes and
+// are recorded differently:
+//
+//   - the check ran and disagrees: `failed`, with the reason appended. The
+//     client claimed a backup the store cannot see, which is a fact about the
+//     client's run.
+//   - the check could not run (a store deadline or a stalled or locked store —
+//     see classifyStoreFailure): the client's own report is kept and flagged
+//     `unverified by server: verification could not run: <why>` in its log tail.
+//     The failure was the server's; writing `failed` here fabricated a durable
+//     fact about a backup that the operator would then debug.
+//
+// There is no third status value to use for the second case: runs.status is
+// CHECK-constrained to ok/failed/overlap/running and the dashboard, health
+// derivation and alerts all read status, so an "unknown" would be a schema
+// migration and a new health state, not a label. The log tail is the honest
+// place for "the server could not look", and it survives on the row.
 func (s *Server) corroboratedStatus(ctx context.Context, cl *model.Client, st model.RunStatus, snapshotID string, startedAt time.Time, logTail string) (model.RunStatus, string) {
 	if st != model.StatusOK {
 		return st, logTail
 	}
 	reason, err := s.corroborateSuccess(ctx, cl, snapshotID, startedAt)
 	if err != nil {
-		reason = "check failed: " + err.Error()
+		// The verification did not run. Leave the run the client reported, and
+		// say on the row — and in the log, with the error — that it stands
+		// unverified rather than disproved.
+		why := s.unverifiedReason(ctx, err)
+		log.Printf("status: client=%q claimed ok; %s", cl.Name, why)
+		return st, markUnverified(logTail, why)
 	}
 	if reason == "" {
 		return st, logTail
