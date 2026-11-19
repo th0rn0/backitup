@@ -4,12 +4,22 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/th0rn0/backitup/internal/archiveutil"
 	"github.com/th0rn0/backitup/internal/mode"
 	"github.com/th0rn0/backitup/internal/model"
 )
+
+// snapshotIDTimeLayout is the timestamp every snapshot ID starts with, in both
+// modes: `backup-<ts>-<seq>.tar.gz` here, `<ts>` for rsync.
+const snapshotIDTimeLayout = "20060102T150405Z"
+
+// targzIDTime matches the archive names docker/sshd/backitup-recv writes and
+// captures the timestamp it stamps into them.
+var targzIDTime = regexp.MustCompile(`^backup-([0-9]{8}T[0-9]{6}Z)-[0-9]+\.tar\.gz$`)
 
 // Server is the lifecycle-side behaviour for tar.gz: each archive in the client
 // dir is one immutable snapshot.
@@ -19,8 +29,19 @@ func (Server) Mode() model.Mode { return model.ModeTarGz }
 
 func init() { mode.RegisterServer(Server{}) }
 
-// List returns the .tar.gz archives directly under clientDir. CreatedAt uses
-// file mtime (decoupled from the filename format).
+// List returns the .tar.gz archives directly under clientDir, newest first.
+//
+// CreatedAt is parsed from the timestamp in the archive's own name — the same
+// source rsync uses — and NOT from the file's mtime. mtime only says when the
+// bytes last landed on this filesystem: a cp, a volume copy, a restore, a
+// file-level sync or an archive extraction rewrites it, so an old snapshot that
+// has been through any of those looks new forever and retention never fires on
+// it. backitup-recv stamps the name on the server's clock as it writes the
+// upload, so the name is the age the snapshot actually has.
+//
+// mtime is the fallback for an archive whose name is not the shape recv writes
+// (a hand-placed file, an older layout): there is nothing else to go on there,
+// and it is the only case in which the filesystem gets a vote on age.
 func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, error) {
 	entries, err := os.ReadDir(clientDir)
 	if os.IsNotExist(err) {
@@ -38,8 +59,18 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: info.ModTime(), Bytes: info.Size()})
+		createdAt := info.ModTime() // fallback: name is not the shape recv writes
+		if m := targzIDTime.FindStringSubmatch(e.Name()); m != nil {
+			if ts, perr := time.Parse(snapshotIDTimeLayout, m[1]); perr == nil {
+				createdAt = ts
+			}
+		}
+		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: createdAt, Bytes: info.Size()})
 	}
+	// Newest first: os.ReadDir is filename-ascending, i.e. oldest first. Callers
+	// treat snaps[0] as the newest (prune protection, verifyLatest), so this
+	// ordering is part of the contract, not a display detail.
+	mode.SortNewestFirst(out)
 	return out, nil
 }
 

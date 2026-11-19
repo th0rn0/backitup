@@ -24,7 +24,10 @@ func init() { mode.RegisterServer(Server{}) }
 
 func snapshotsDir(clientDir string) string { return filepath.Join(clientDir, "snapshots") }
 
-// List returns snapshot directories (excluding the `latest` symlink).
+// List returns snapshot directories (excluding the `latest` symlink), newest
+// first. os.ReadDir hands entries back in filename order, which for `<ts>` names
+// is oldest first, so the ordering Callers rely on (snaps[0] is the newest) has
+// to be applied here rather than assumed.
 func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, error) {
 	dir := snapshotsDir(clientDir)
 	entries, err := os.ReadDir(dir)
@@ -56,6 +59,7 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 		// Size is reported as 0 (displayed as "—" in the UI).
 		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: createdAt, Bytes: 0})
 	}
+	mode.SortNewestFirst(out)
 	return out, nil
 }
 

@@ -163,10 +163,22 @@ func (s *Server) corroborateSuccess(ctx context.Context, cl *model.Client, snaps
 		cutoff = floor
 	}
 	for _, snap := range snaps {
-		if snap.Bytes == 0 || snap.CreatedAt.IsZero() {
-			continue // empty archives and undated entries are not evidence
+		if snap.Bytes == 0 {
+			continue // an empty archive is not evidence of anything
 		}
-		if snap.CreatedAt.Before(cutoff) {
+		// Age here is deliberately NOT snap.CreatedAt. That field is the
+		// snapshot's own timestamp — for tar.gz it is parsed from the archive
+		// name, which backitup-recv stamps when the upload BEGINS — and this
+		// check asks a different question: did bytes land on the hot store at or
+		// after this run started? The end of the write is the file's mtime, and
+		// choosing it is deliberate: a slow upload finishes long after the
+		// start-time stamp, and judging it by the start would report a real
+		// backup as unverified.
+		info, statErr := os.Stat(filepath.Join(dir, snap.ID))
+		if statErr != nil {
+			continue // listed a moment ago, gone now: not this run's evidence
+		}
+		if info.ModTime().Before(cutoff) {
 			continue
 		}
 		return "", nil
