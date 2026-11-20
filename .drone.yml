@@ -23,33 +23,10 @@ steps:
 
 # ── Lint ─────────────────────────────────────────────────────────────────────
 
-  - name: discord-lint-start
-    image: curlimages/curl:8.7.1
-    failure: ignore
-    environment:
-      DISCORD_WEBHOOK_URL:
-        from_secret: discord_webhook_url
-    commands:
-      - |
-        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Lint Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
-
   - name: lint
     image: golangci/golangci-lint:v2.12.2
     commands:
       - golangci-lint run --timeout 5m ./...
-
-  - name: discord-lint-success
-    image: curlimages/curl:8.7.1
-    failure: ignore
-    environment:
-      DISCORD_WEBHOOK_URL:
-        from_secret: discord_webhook_url
-    commands:
-      - |
-        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Lint Success!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
-    when:
-      status:
-        - success
 
   - name: discord-lint-failure
     image: curlimages/curl:8.7.1
@@ -66,16 +43,6 @@ steps:
 
 # ── Go Tests ──────────────────────────────────────────────────────────────────
 
-  - name: discord-test-start
-    image: curlimages/curl:8.7.1
-    failure: ignore
-    environment:
-      DISCORD_WEBHOOK_URL:
-        from_secret: discord_webhook_url
-    commands:
-      - |
-        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Test Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
-
   - name: test
     # Pinned to 1.26.11: vulnerability floor — govulncheck fails on stdlib
     # vulns fixed in < 1.26.11 (e.g. GO-2026-6859, fixed in net/http 1.26.11).
@@ -86,19 +53,6 @@ steps:
     commands:
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out | tail -1
-
-  - name: discord-test-success
-    image: curlimages/curl:8.7.1
-    failure: ignore
-    environment:
-      DISCORD_WEBHOOK_URL:
-        from_secret: discord_webhook_url
-    commands:
-      - |
-        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Test Success!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
-    when:
-      status:
-        - success
 
   - name: discord-test-failure
     image: curlimages/curl:8.7.1
