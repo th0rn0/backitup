@@ -1112,6 +1112,42 @@ func (s *Store) DeleteClient(ctx context.Context, id int64) error {
 	return nil
 }
 
+// ListRunsSince returns every run row for a client that started at or after
+// since, oldest first.
+//
+// It exists for the hot-store guard (mode.UnbackedSnapshots), which asks "is
+// there any run that reached ok for this snapshot directory" and must be able to
+// tell a row that is absent because the run never finished from a row that is
+// absent because history was pruned: the answer has to come from the rows that
+// are still there, so the query returns them all rather than "the latest N".
+//
+// Only a bounded prefix of log_tail is loaded. The full column is capped at 64 KB
+// per row and is cleared by the log-retention pass anyway; what the guard wants
+// from it is the one line the server wrote when it declared a silent run dead
+// ("interrupted: …"), which is quoted in the lifecycle's log line. Reading the
+// whole column for every run of a client on every dashboard request is how a
+// listing becomes expensive for no reason.
+func (s *Store) ListRunsSince(ctx context.Context, clientID int64, since time.Time) ([]model.Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, client_id, started_at, finished_at, status, bytes, files, snapshot_id,
+		       substr(log_tail, 1, 512)
+		FROM runs WHERE client_id = ? AND started_at >= ?
+		ORDER BY started_at`, clientID, since.UTC().Format(rfc3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ListRuns returns up to limit runs for a client, newest first.
 func (s *Store) ListRuns(ctx context.Context, clientID int64, limit int) ([]model.Run, error) {
 	rows, err := s.db.QueryContext(ctx, `

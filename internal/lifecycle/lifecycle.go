@@ -122,11 +122,31 @@ func (d Deps) now() time.Time {
 // RunOnce executes one lifecycle pass over all enabled clients. A failure on one
 // client is logged and does not stop the others; the first error is returned.
 func RunOnce(ctx context.Context, d Deps) error {
+	// Mark runs stuck in "running" state as failed BEFORE any client is
+	// processed (safety net for clients that crash and never reconnect; getConfig
+	// handles the common case). The order is part of the killed-run guard: a run
+	// that stops reporting is exactly the one that leaves an unmarked directory
+	// behind, and the hot-store guard decides what to do with a directory from
+	// the row that named it. A row still saying `running` means "this may be
+	// being written right now" (mode.UnbackedSnapshots leaves such a snapshot
+	// alone), so it has to be settled first — otherwise this pass would leave the
+	// leftovers visible for one more pass after the timeout had already expired.
+	staleTimeout := d.StaleRunTimeout
+	if staleTimeout == 0 {
+		staleTimeout = DefaultStaleRunTimeout
+	}
+	var firstErr error
+	if n, err := d.Store.MarkStaleRunsFailed(ctx, d.now().Add(-staleTimeout)); err != nil {
+		log.Printf("lifecycle: mark stale runs failed: %v", err)
+		firstErr = err
+	} else if n > 0 {
+		log.Printf("lifecycle: marked %d stale run(s) as failed (exceeded %s)", n, staleTimeout)
+	}
+
 	clients, err := d.Store.ListClients(ctx)
 	if err != nil {
 		return fmt.Errorf("list clients: %w", err)
 	}
-	var firstErr error
 	for _, c := range clients {
 		if !c.Enabled {
 			continue
@@ -137,21 +157,6 @@ func RunOnce(ctx context.Context, d Deps) error {
 				firstErr = err
 			}
 		}
-	}
-
-	// Mark runs stuck in "running" state as failed (safety net for clients
-	// that crash and never reconnect; getConfig handles the common case).
-	staleTimeout := d.StaleRunTimeout
-	if staleTimeout == 0 {
-		staleTimeout = DefaultStaleRunTimeout
-	}
-	if n, err := d.Store.MarkStaleRunsFailed(ctx, d.now().Add(-staleTimeout)); err != nil {
-		log.Printf("lifecycle: mark stale runs failed: %v", err)
-		if firstErr == nil {
-			firstErr = err
-		}
-	} else if n > 0 {
-		log.Printf("lifecycle: marked %d stale run(s) as failed (exceeded %s)", n, staleTimeout)
 	}
 
 	// Prune run logs globally (not per-client) on each tick.
@@ -203,6 +208,18 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)
 	}
+	// The mode lists directories. A directory a run was killed in the middle of
+	// writing is not a backup, and only the run history knows that: nothing
+	// marked it, because the run never got to report. Drop those from the pass
+	// (retention must not count them, verifyLatest must not vouch for them) and
+	// hand them to pruneIncomplete, which reclaims them once they are old.
+	snaps, unbacked, err := VisibleSnapshots(ctx, d.Store, c, sm, snaps)
+	if err != nil {
+		// A history that could not be read is not evidence that a snapshot is
+		// not a backup, so the listing comes back whole and this pass goes on
+		// with it. The store error will surface from the calls below anyway.
+		log.Printf("lifecycle: client %d (%s): %v: not hiding any snapshot this pass", c.ID, c.Name, err)
+	}
 	// Newest first; the newest is always protected from pruning.
 	mode.SortNewestFirst(snaps)
 
@@ -231,11 +248,11 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	}
 	// Remove stale .part files left by interrupted uploads before any pruning.
 	prunePartOrphans(d, clientDir, c.Name)
-	// Reclaim the directories failed runs left behind. They are already
-	// invisible to the listing, so nothing else would ever remove them — and a
-	// half-copied 375 GB tree that no listing, check or retention rule can see
-	// is exactly how a backup volume fills up with nothing to show for it.
-	pruneIncomplete(ctx, d, c, sm, clientDir)
+	// Reclaim the directories failed and killed runs left behind. They are
+	// already invisible to the listing, so nothing else would ever remove them —
+	// and a half-copied 375 GB tree that no listing, check or retention rule can
+	// see is exactly how a backup volume fills up with nothing to show for it.
+	pruneIncomplete(ctx, d, c, sm, clientDir, unbacked)
 
 	// The remote check runs BEFORE the prune, not after it. pruneHot deletes a
 	// hot snapshot because an offsite record says the content is elsewhere, so
@@ -345,6 +362,16 @@ func uploadClient(ctx context.Context, d Deps, c model.Client, root string) erro
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)
+	}
+	// Nothing goes offsite that the run history cannot vouch for. A directory a
+	// killed run left behind is unmarked and would otherwise be tarred and
+	// uploaded as this client's newest backup — the failure this whole path
+	// exists to prevent. Unlike the lifecycle pass, this one treats an
+	// unreadable run history as fatal: uploading an unverified directory is
+	// worse than waiting for the next pass.
+	snaps, _, err = VisibleSnapshots(ctx, d.Store, c, sm, snaps)
+	if err != nil {
+		return fmt.Errorf("verify snapshots against the run history: %w", err)
 	}
 	mode.SortNewestFirst(snaps)
 
@@ -579,27 +606,32 @@ func prunePartOrphans(d Deps, clientDir, clientName string) {
 	}
 }
 
-// pruneIncomplete removes the snapshot directories a failed run left behind.
+// pruneIncomplete removes the snapshot directories that are not backups.
 //
-// What it must NOT do is trust the listing it already has: a marked snapshot is
-// deliberately absent from List, so iterating that would find nothing and leave
-// the directory on the volume forever. The mode is asked directly
-// (ServerMode.ListIncomplete), which is also why the interface has that method at
-// all.
+// There are two kinds, and they need different evidence:
 //
-// Every removal is logged with the failed run's own error, because "a directory
-// disappeared from the backup volume" is not something an operator should have
-// to reconstruct from the absence of a snapshot.
-func pruneIncomplete(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string) {
+//   - Marked directories. A failed rsync run writes IncompleteMarker into its own
+//     destination and the client survives to do it. These are deliberately absent
+//     from List, so iterating a listing would find nothing and leave the directory
+//     on the volume forever; the mode is asked directly (ListIncomplete), which is
+//     also why the interface has that method at all. Age is the marker's mtime.
+//   - Unbacked directories. A run that was killed before it could report never
+//     marks anything, so the server works it out from the run row it opened and
+//     that never reached ok (mode.UnbackedSnapshots, via VisibleSnapshots). The
+//     caller has already removed them from its listing; this is the only thing
+//     that will ever delete them. Age is when the run was recorded as not-ok, so
+//     a run that was only just declared dead still gets the full grace.
+//
+// Every one of them is logged, every pass, with why it is not a backup: "a
+// directory disappeared from the backup volume" is not something an operator
+// should have to reconstruct from the absence of a snapshot.
+func pruneIncomplete(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, unbacked []mode.UnbackedSnapshot) {
+	cutoff := d.now().Add(-DefaultIncompleteAge)
+
 	snaps, err := sm.ListIncomplete(ctx, clientDir)
 	if err != nil {
 		log.Printf("lifecycle: client %d (%s): list incomplete snapshots: %v", c.ID, c.Name, err)
-		return
 	}
-	if len(snaps) == 0 {
-		return
-	}
-	cutoff := d.now().Add(-DefaultIncompleteAge)
 	for _, s := range snaps {
 		if s.CreatedAt.After(cutoff) {
 			// Marked a moment ago: possibly a second run writing into the same
@@ -612,6 +644,26 @@ func pruneIncomplete(ctx context.Context, d Deps, c model.Client, sm mode.Server
 		}
 		log.Printf("lifecycle: client %d (%s): removed incomplete snapshot %s left by a failed run on %s",
 			c.ID, c.Name, s.ID, s.CreatedAt.UTC().Format(time.RFC3339))
+	}
+
+	for _, u := range unbacked {
+		id := u.Snapshot.ID
+		if u.Since.After(cutoff) {
+			// Hide first, delete later: the directory is out of every listing
+			// and every offsite pass from now on, and the grace gives a run that
+			// was declared dead by a safety net (rather than by its own report)
+			// the same benefit of the doubt a marked directory gets.
+			log.Printf("lifecycle: client %d (%s): snapshot %s is not a backup (%s) — hidden from the listing and from offsite; reclaiming after %s",
+				c.ID, c.Name, id, u.Reason, DefaultIncompleteAge)
+			continue
+		}
+		if delErr := sm.DeleteSnapshot(ctx, clientDir, id); delErr != nil {
+			log.Printf("lifecycle: client %d (%s): remove incomplete snapshot %s (run %d never reached ok): %v",
+				c.ID, c.Name, id, u.RunID, delErr)
+			continue
+		}
+		log.Printf("lifecycle: client %d (%s): removed incomplete snapshot %s left by a run that never reached ok (%s)",
+			c.ID, c.Name, id, u.Reason)
 	}
 }
 
@@ -952,6 +1004,12 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	snaps, err := sm.List(ctx, clientDir)
 	if err != nil {
 		return fmt.Errorf("list snapshots: %w", err)
+	}
+	// Same rule as uploadClient: an adhoc "Backup now" must not upload a
+	// directory the run history says is not a backup either.
+	snaps, _, err = VisibleSnapshots(ctx, d.Store, c, sm, snaps)
+	if err != nil {
+		return fmt.Errorf("verify snapshots against the run history: %w", err)
 	}
 	mode.SortNewestFirst(snaps)
 
