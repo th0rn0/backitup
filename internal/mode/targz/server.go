@@ -74,6 +74,14 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 	return out, nil
 }
 
+// ListIncomplete returns nothing: a tar.gz snapshot is named by backitup-recv
+// only after its rename from .part, so a snapshot this mode lists is always a
+// complete archive. An interrupted upload leaves a .tar.gz.part file, which the
+// lifecycle reclaims separately (prunePartOrphans).
+func (Server) ListIncomplete(ctx context.Context, clientDir string) ([]mode.Snapshot, error) {
+	return nil, nil
+}
+
 // PrepareOffsite returns the archive itself — it is already an immutable object
 // (D8). Nothing to build, nothing to clean up.
 func (Server) PrepareOffsite(ctx context.Context, clientDir string, snap mode.Snapshot) (string, error) {

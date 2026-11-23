@@ -28,6 +28,11 @@ func snapshotsDir(clientDir string) string { return filepath.Join(clientDir, "sn
 // first. os.ReadDir hands entries back in filename order, which for `<ts>` names
 // is oldest first, so the ordering Callers rely on (snaps[0] is the newest) has
 // to be applied here rather than assumed.
+//
+// A directory that carries the incomplete marker is NOT returned: a failed run
+// leaves one, and every consumer of this listing (the offsite worker, retention,
+// the dashboard) would otherwise treat a half-copied tree as a backup. Their
+// absence from this listing is the whole mechanism; see incomplete.go.
 func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, error) {
 	dir := snapshotsDir(clientDir)
 	entries, err := os.ReadDir(dir)
@@ -41,6 +46,14 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 	for _, e := range entries {
 		if e.Name() == "latest" || !e.IsDir() {
 			continue // skip the latest symlink and any stray files
+		}
+		// A directory a failed run left behind is not a snapshot. It holds
+		// whatever rsync had copied when it stopped (four zero-byte files, in
+		// the case that produced this), so handing it to the offsite worker
+		// uploads an empty "backup" — and a listing that says the client is
+		// covered is worse than no listing at all. See incomplete.go.
+		if _, incomplete := incompleteReason(filepath.Join(dir, e.Name())); incomplete {
+			continue
 		}
 		info, err := e.Info()
 		if err != nil {
@@ -58,6 +71,41 @@ func (Server) List(ctx context.Context, clientDir string) ([]mode.Snapshot, erro
 		// hardlinks and can be very large; a full WalkDir blocks the caller.
 		// Size is reported as 0 (displayed as "—" in the UI).
 		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: createdAt, Bytes: 0})
+	}
+	mode.SortNewestFirst(out)
+	return out, nil
+}
+
+// ListIncomplete returns the snapshot directories a failed run left behind —
+// exactly the ones List refuses to hand out — so the lifecycle can reclaim them
+// instead of leaving a half-copied tree on the backup volume forever.
+//
+// CreatedAt is the marker's mtime: when the failure was recorded. That is the
+// age the caller should measure a grace period against, not the directory's own
+// mtime (rsync -a preserves the source's) and not the id (a run's start).
+func (Server) ListIncomplete(ctx context.Context, clientDir string) ([]mode.Snapshot, error) {
+	dir := snapshotsDir(clientDir)
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []mode.Snapshot
+	for _, e := range entries {
+		if e.Name() == "latest" || !e.IsDir() {
+			continue
+		}
+		snapPath := filepath.Join(dir, e.Name())
+		if _, incomplete := incompleteReason(snapPath); !incomplete {
+			continue
+		}
+		at, ok := incompleteSince(snapPath)
+		if !ok {
+			at = time.Time{}
+		}
+		out = append(out, mode.Snapshot{ID: e.Name(), CreatedAt: at, Bytes: 0})
 	}
 	mode.SortNewestFirst(out)
 	return out, nil
@@ -118,6 +166,12 @@ func (Server) PrepareOffsite(ctx context.Context, clientDir string, snap mode.Sn
 // refuses to do — a hardlinked tree can be huge and this runs on every pass).
 func (Server) VerifySnapshot(ctx context.Context, clientDir string, snap mode.Snapshot) error {
 	snapDir := filepath.Join(snapshotsDir(clientDir), snap.ID)
+	// The directory a failed run left behind is not a snapshot, and naming that
+	// is more use than the shape test below — "present, at least one entry" —
+	// which four zero-byte files satisfy.
+	if reason, incomplete := incompleteReason(snapDir); incomplete {
+		return fmt.Errorf("snapshot %s is incomplete: %s", snapDir, reason)
+	}
 	entries, err := os.ReadDir(snapDir)
 	switch {
 	case os.IsNotExist(err):
@@ -127,6 +181,9 @@ func (Server) VerifySnapshot(ctx context.Context, clientDir string, snap mode.Sn
 	case len(entries) == 0:
 		return fmt.Errorf("snapshot directory %s is empty", snapDir)
 	}
+	if err := sampleHasContent(snapDir, entries); err != nil {
+		return err
+	}
 	// `latest` is the base the client's next run hardlinks against
 	// (--link-dest=/snapshots/latest). A dangling one does not fail that run —
 	// rsync simply has no base and copies everything again — so nothing else
@@ -135,6 +192,59 @@ func (Server) VerifySnapshot(ctx context.Context, clientDir string, snap mode.Sn
 		return fmt.Errorf("`latest` does not point at an existing snapshot (%v): the next run has no hardlink base", err)
 	}
 	return nil
+}
+
+// zeroByteSample bounds how many entries sampleHasContent stats. A snapshot with
+// more top-level regular files than this is not judged: the check exists to
+// recognise the total-failure shape, and a real snapshot of thousands of files
+// must never be held responsible for one stat per file on a check that runs
+// every pass.
+const zeroByteSample = 64
+
+// sampleHasContent rejects the shape a wholly failed transfer leaves: regular
+// files, and every one of them 0 bytes.
+//
+// It is a sample by construction, and deliberately biased towards silence:
+//
+//   - A snapshot whose top level holds any directory is not judged at all. The
+//     content may be inside it, and finding out would be a WalkDir, which this
+//     mode's checks must never do (a hardlinked tree can be very large).
+//   - More than zeroByteSample top-level files, or any file that cannot be
+//     stat'ed: not judged.
+//   - An empty directory is the "is empty" case above, not this one. A source
+//     directory that really is empty produces one, and it stays a legitimate
+//     snapshot — this check must not turn "the source was empty" into a failure.
+//
+// So a snapshot is only called contentless when everything visible at its top
+// level is a zero-byte regular file, which no real backup of a non-empty source
+// looks like. The reported case — four root-owned .qcow2 files rsync could not
+// read — is exactly that shape.
+func sampleHasContent(snapDir string, entries []os.DirEntry) error {
+	files := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			return nil // content may be below this; judging it costs a WalkDir
+		}
+		if !e.Type().IsRegular() {
+			continue // symlinks, sockets, devices: not content we can size
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil
+		}
+		if info.Size() > 0 {
+			return nil // something has content: this is a snapshot with data
+		}
+		files++
+		if files > zeroByteSample {
+			return nil
+		}
+	}
+	if files == 0 {
+		return nil // nothing to judge (the empty case was handled above)
+	}
+	return fmt.Errorf("snapshot %s holds %d file(s) and every one is 0 bytes: "+
+		"the shape a transfer leaves when nothing could be copied", snapDir, files)
 }
 
 // DeleteSnapshot removes one snapshot dir, refusing the one `latest` points at

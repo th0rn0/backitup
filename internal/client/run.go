@@ -95,6 +95,13 @@ func buildStatus(res mode.BackupResult, backupErr error) StatusReq {
 	}
 	if backupErr != nil {
 		s.Status = string(model.StatusFailed)
+		// A failed run stored nothing this client can restore from, whatever the
+		// mode managed to count before it gave up. rsync --stats reports the
+		// file list it *intended* to copy ("Number of files: 5" above four
+		// unreadable .qcow2 files), and reporting that as the run's size would
+		// put a plausible "synced 5 files" on the dashboard for a backup that
+		// does not exist.
+		s.Bytes, s.Files = 0, 0
 	}
 	if s.FinishedAt.IsZero() {
 		now := time.Now().UTC()

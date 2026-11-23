@@ -92,7 +92,21 @@ type Snapshot struct {
 type ServerMode interface {
 	Mode() model.Mode
 	// List returns the snapshots currently on the hot store for a client dir.
+	//
+	// It MUST NOT return a snapshot the mode knows to be unfinished: everything
+	// downstream — the offsite worker above all — treats a listed snapshot as a
+	// real backup. A mode whose failed runs leave something behind marks it and
+	// hides it here (see ListIncomplete).
 	List(ctx context.Context, clientDir string) ([]Snapshot, error)
+	// ListIncomplete returns the snapshots on the hot store that the mode knows
+	// to be unfinished: present on disk, but not a backup. List never returns
+	// them; this exists so the lifecycle can reclaim them (a half-copied tree
+	// that nothing lists is otherwise also a tree nothing ever deletes).
+	//
+	// Snapshot.CreatedAt is when the failure was recorded, which is the age a
+	// caller's grace period should be measured against. A mode that cannot leave
+	// a partial snapshot behind returns nothing.
+	ListIncomplete(ctx context.Context, clientDir string) ([]Snapshot, error)
 	// VerifySnapshot checks that the snapshot described by snap is still a usable
 	// backup on the hot store, and says in operator terms what is wrong with it
 	// when it is not; nil means nothing was found wrong.
