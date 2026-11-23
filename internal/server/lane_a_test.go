@@ -60,12 +60,17 @@ func TestAddClientFlow(t *testing.T) {
 	for _, want := range []string{
 		"created", "OPENSSH PRIVATE KEY", "BACKITUP_TOKEN=",
 		"BACKITUP_SERVER=backup.test:2222", "BACKITUP_API=",
-		"BACKITUP_INSECURE=1", "BACKITUP_KNOWN_HOSTS=",
-		"cannot be retrieved later",
+		"BACKITUP_INSECURE=1", "cannot be retrieved later",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("created page missing %q", want)
 		}
+	}
+	// This server has no BACKITUP_SSH_HOST_KEY, so it has no known_hosts file to
+	// hand over: a command mounting one would be a dead end (see
+	// client_created_page_test.go), so the page must not render it at all.
+	if strings.Contains(html, "BACKITUP_KNOWN_HOSTS") {
+		t.Errorf("created page references BACKITUP_KNOWN_HOSTS without a host key on the server:\n%s", html)
 	}
 
 	// Client persisted with a public key + token hash.
@@ -207,7 +212,7 @@ func TestRotateClientFlow(t *testing.T) {
 	html := string(body)
 	for _, want := range []string{
 		"Credentials rotated", "OPENSSH PRIVATE KEY", "BACKITUP_TOKEN=",
-		"old credentials are now invalid", "BACKITUP_SERVER=",
+		"stopped working immediately", "BACKITUP_SERVER=",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rotated page missing %q", want)
@@ -474,4 +479,3 @@ func TestDeleteClientRequiresAuth(t *testing.T) {
 		t.Fatalf("unauth delete = %d -> %q; want 303 -> /login", r.StatusCode, r.Header.Get("Location"))
 	}
 }
-

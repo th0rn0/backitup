@@ -37,6 +37,9 @@ func (s *Server) getNewClient(w http.ResponseWriter, r *http.Request) {
 		"PublicHost":  s.publicHost,
 		"PublicAPI":   s.publicAPI,
 		"ClientImage": s.clientImage,
+		// The preview must not advertise a known_hosts mount the created page
+		// cannot hand over, so it follows the same rule the created page does.
+		"HasHostKey": knownHostsLine(s.publicHost, s.sshHostKeyPath) != "",
 	})
 }
 
@@ -138,9 +141,14 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
-	backupPath := r.PostFormValue("backup_path")
-	secretsPath := r.PostFormValue("secrets_path")
-	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, backupPath, secretsPath)
+	// The page names ONE secrets directory (step 1) and the command mounts that
+	// same path, so the operator never has to work out that a placeholder and a
+	// real path are the same thing. The source mount is named for what it is:
+	// the directory being backed up, read-only.
+	secrets := secretsDir(name, r.PostFormValue("secrets_path"))
+	source, sourcePrefilled := sourceMount(r.PostFormValue("backup_path"), r.PostFormValue("source_label"))
+	kh := knownHostsLine(s.publicHost, s.sshHostKeyPath)
+	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, source, secrets, kh != "")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
 		"Username":          usernameFromContext(r.Context()),
@@ -150,10 +158,15 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		"Token":             token,
 		"Server":            s.publicHost,
 		"APIBase":           apiBase,
-		"KnownHostsLine":    knownHostsLine(s.publicHost, s.sshHostKeyPath),
+		"SecretsDir":        secrets,
+		"SourcePath":        source,
+		"SourcePrefilled":   sourcePrefilled,
+		"APIHint":           s.apiPlaceholderHint(),
+		"KnownHostsLine":    kh,
 		"DockerRunKnown":    dockerKnown,
 		"DockerRunInsecure": dockerInsecure,
-		"PathsPrefilled":    backupPath != "" || secretsPath != "",
+		"CronKnown":         cronEntry(defaultCronSchedule, dockerKnown),
+		"CronInsecure":      cronEntry(defaultCronSchedule, dockerInsecure),
 	})
 }
 
@@ -431,7 +444,10 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
-	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, "", "")
+	secrets := secretsDir(c.Name, r.PostFormValue("secrets_path"))
+	source, sourcePrefilled := sourceMount(r.PostFormValue("backup_path"), c.SourceLabel)
+	kh := knownHostsLine(s.publicHost, s.sshHostKeyPath)
+	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, source, secrets, kh != "")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
 		"Username":          usernameFromContext(r.Context()),
@@ -441,9 +457,15 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 		"Token":             token,
 		"Server":            s.publicHost,
 		"APIBase":           apiBase,
-		"KnownHostsLine":    knownHostsLine(s.publicHost, s.sshHostKeyPath),
+		"SecretsDir":        secrets,
+		"SourcePath":        source,
+		"SourcePrefilled":   sourcePrefilled,
+		"APIHint":           s.apiPlaceholderHint(),
+		"KnownHostsLine":    kh,
 		"DockerRunKnown":    dockerKnown,
 		"DockerRunInsecure": dockerInsecure,
+		"CronKnown":         cronEntry(defaultCronSchedule, dockerKnown),
+		"CronInsecure":      cronEntry(defaultCronSchedule, dockerInsecure),
 		"Rotated":           true,
 		"AuthKeysFailed":    authKeysFailed,
 	})
@@ -826,10 +848,11 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 // apiBase returns the control-channel base URL for use in generated docker
 // commands. If BACKITUP_PUBLIC_API is set it is used as-is; otherwise the
 // scheme is derived from apiScheme ("http"/"https") and a placeholder host is
-// returned. The placeholder deliberately carries no comment: it is substituted
-// into a `-e BACKITUP_API=…` line that ends in a line-continuation backslash,
-// and an inline `#` there would comment the backslash out, breaking the
-// command at the next line. The hint lives in dockerCmds instead.
+// returned. The placeholder deliberately carries no comment: the value is
+// substituted into `-e BACKITUP_API=…`, and a `#` there would comment out the
+// rest of the line. The operator-facing note is apiPlaceholderHint, which the
+// page renders as prose so the generated command and the crontab entry stay
+// free of comments.
 func (s *Server) apiBase(apiScheme string) string {
 	if s.publicAPI != "" {
 		return s.publicAPI
@@ -840,44 +863,106 @@ func (s *Server) apiBase(apiScheme string) string {
 	return apiScheme + "://YOUR-SERVER:8080"
 }
 
-// dockerCmds returns two ready-to-run docker commands for a client:
-//   - known: mounts /secrets with BACKITUP_KNOWN_HOSTS (recommended)
-//   - insecure: adds BACKITUP_INSECURE=1, no host-key verification
+// apiPlaceholderHint is the note shown above the generated command when
+// BACKITUP_PUBLIC_API is unset: its BACKITUP_API value is a placeholder then.
+// Returns "" when the server knows its own API address.
+func (s *Server) apiPlaceholderHint() string {
+	if s.publicAPI != "" {
+		return ""
+	}
+	return "BACKITUP_PUBLIC_API is not set on this server, so the BACKITUP_API value in the " +
+		"command below is a placeholder. Replace YOUR-SERVER with this server's control-channel " +
+		"address, or set BACKITUP_PUBLIC_API and issue the client again."
+}
+
+// defaultCronSchedule is the schedule the generated crontab entry carries. The
+// page says it is the field to edit, so the entry is a complete, working line
+// rather than a note to the operator.
+const defaultCronSchedule = "30 2 * * *"
+
+// sourcePlaceholder stands in for the directory being backed up when neither
+// the create form nor the client's source label names one. It deliberately
+// does not say BACKUP: the path is mounted read-only as the source, and calling
+// it BACKUP reads like the destination.
+const sourcePlaceholder = "/path/to/source"
+
+// looksLikePath reports whether a source label names a filesystem path rather
+// than describing one. "~/Documents on my laptop" is a description (it has
+// spaces); "/mnt/photos" and "~/photos" are paths.
+func looksLikePath(label string) bool {
+	l := strings.TrimSpace(label)
+	if l == "" || strings.ContainsAny(l, " 	") {
+		return false
+	}
+	return strings.HasPrefix(l, "/") || strings.HasPrefix(l, "~") ||
+		strings.HasPrefix(l, "./") || strings.HasPrefix(l, "../")
+}
+
+// secretsDir returns the host directory that holds a client's credentials: the
+// path from the form when the operator gave one, otherwise the conventional
+// /etc/backitup/<name>. The page names exactly this directory in its first step
+// and the generated command mounts exactly this directory, so the two can never
+// disagree.
+func secretsDir(name, formPath string) string {
+	if p := strings.TrimSpace(formPath); p != "" {
+		return p
+	}
+	return "/etc/backitup/" + name
+}
+
+// sourceMount returns the host directory mounted read-only as the backup
+// source: the path from the form, else the client's source label when that
+// looks like a path, else sourcePlaceholder. prefilled reports whether the
+// value is real, so the page knows whether to ask for a replacement.
+func sourceMount(formPath, sourceLabel string) (mount string, prefilled bool) {
+	if p := strings.TrimSpace(formPath); p != "" {
+		return p, true
+	}
+	if looksLikePath(sourceLabel) {
+		return strings.TrimSpace(sourceLabel), true
+	}
+	return sourcePlaceholder, false
+}
+
+// cronEntry turns a generated command into a complete crontab entry: the
+// schedule, then the whole command with its line continuations intact. Cron
+// accepts continuation lines in a crontab file, so the operator pastes this
+// verbatim instead of assembling a line out of two boxes.
+func cronEntry(schedule, cmd string) string {
+	if cmd == "" {
+		return ""
+	}
+	return schedule + " " + cmd
+}
+
+// dockerCmds returns the ready-to-run docker commands for a client:
+//   - known: mounts /secrets with BACKITUP_KNOWN_HOSTS (recommended). Empty when
+//     the server has no host key, because it would then verify against a
+//     known_hosts file the page never handed over.
+//   - insecure: adds BACKITUP_INSECURE=1 and skips host-key verification.
 //
-// backupPath and secretsPath are the user-supplied host paths; empty values
-// fall back to the /PATH/TO/… placeholders.
-func (s *Server) dockerCmds(token, apiBase, backupPath, secretsPath string) (known, insecure string) {
-	if backupPath == "" {
-		backupPath = "/PATH/TO/BACKUP"
-	}
-	if secretsPath == "" {
-		secretsPath = "/PATH/TO/SECRETS"
-	}
+// sourcePath and secretsPath are the concrete host paths; the caller resolves
+// them with sourceMount and secretsDir so the page and the command agree.
+func (s *Server) dockerCmds(token, apiBase, sourcePath, secretsPath string, withKnownHosts bool) (known, insecure string) {
 	base := []string{
 		"docker run --rm \\",
 		"  --user $(id -u):$(id -g) \\",
-		fmt.Sprintf("  --mount type=bind,src=%s,dst=/source,readonly \\", backupPath),
+		fmt.Sprintf("  --mount type=bind,src=%s,dst=/source,readonly \\", sourcePath),
 		fmt.Sprintf("  -v %s:/secrets:ro \\", secretsPath),
 		fmt.Sprintf("  -e BACKITUP_API=%s \\", apiBase),
 		fmt.Sprintf("  -e BACKITUP_SERVER=%s \\", s.publicHost),
 		fmt.Sprintf("  -e BACKITUP_TOKEN=%s \\", token),
 		"  -e BACKITUP_SSH_KEY=/secrets/id \\",
 	}
-	// Hint on its own comment line, never appended to a value: the command is
-	// pasted into a shell verbatim, so the placeholder must stay a bare URL.
-	hint := ""
-	if s.publicAPI == "" {
-		hint = "# BACKITUP_PUBLIC_API is not set on this server, so the BACKITUP_API\n" +
-			"# value below is a placeholder - replace YOUR-SERVER with this server's\n" +
-			"# control-channel address (or set BACKITUP_PUBLIC_API and re-issue).\n"
-	}
 	join := func(extra ...string) string {
 		parts := append(append([]string{}, base...), extra...)
 		parts = append(parts, "  "+s.clientImage)
-		return hint + strings.Join(parts, "\n")
+		return strings.Join(parts, "\n")
 	}
-	known = join("  -e BACKITUP_KNOWN_HOSTS=/secrets/known_hosts \\")
 	insecure = join("  -e BACKITUP_INSECURE=1 \\")
+	if withKnownHosts {
+		known = join("  -e BACKITUP_KNOWN_HOSTS=/secrets/known_hosts \\")
+	}
 	return
 }
 
