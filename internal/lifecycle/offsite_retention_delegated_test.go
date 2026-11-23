@@ -42,6 +42,17 @@ func TestRunOnceDeletesNoOffsiteObjectWhateverItsAge(t *testing.T) {
 	mkArchive(t, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*24*time.Hour))
 	mkArchive(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-time.Hour))
 
+	// The two hot snapshots as the offsite worker recorded them, so the hot
+	// pruner has something it is allowed to delete (offsite-first). The fake
+	// remote holds exactly these two objects: the lifecycle pass reconciles the
+	// records with what the remote reports *before* it prunes, so a row whose
+	// object is not there is (correctly) not permission to delete the hot copy.
+	// The seeded rows above describe a differently aged narrative and are not
+	// expected to be found.
+	off := &fakeOffsite{up: map[string]int64{
+		"c/backup-20260509T000000Z-000.tar.gz": 1,
+		"c/backup-20260618T000000Z-000.tar.gz": 1,
+	}}
 	for _, o := range []model.OffsiteObject{
 		{ClientID: id, SnapshotID: "year-old", Remote: "local", UploadedAt: now.Add(-400 * 24 * time.Hour)},
 		{ClientID: id, SnapshotID: "past-any-horizon", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour)},
@@ -76,7 +87,6 @@ func TestRunOnceDeletesNoOffsiteObjectWhateverItsAge(t *testing.T) {
 		t.Fatalf("seeded %d offsite rows, want 8: %v", len(before), before)
 	}
 
-	off := &fakeOffsite{}
 	if err := RunOnce(ctx, Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}

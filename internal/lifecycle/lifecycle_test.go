@@ -58,10 +58,27 @@ func mkArchive(t *testing.T, path string, mtime time.Time) {
 	mkArchiveContent(t, path, mtime, "payload")
 }
 
+// mkArchiveContent writes a tar.gz archive of a one-file tree with the given
+// content and sets the archive's own mtime (which is what a snapshot's age is
+// read from).
+//
+// The source file's mtime is pinned before archiving because tar records it in
+// the header: an archive built from a file created "now" is only byte-identical
+// to another archive of the same content if both were built inside the same
+// second. Two tests depend on identical content meaning identical bytes — the
+// dedupe path in TestRunOnceOffsiteAndPrune and the expiry tests — and without
+// the pin they were a race against the clock.
 func mkArchiveContent(t *testing.T, path string, mtime time.Time, content string) {
 	t.Helper()
 	src := t.TempDir()
-	_ = os.WriteFile(filepath.Join(src, "f.txt"), []byte(content), 0o644)
+	srcFile := filepath.Join(src, "f.txt")
+	if err := os.WriteFile(srcFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pinned := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(srcFile, pinned, pinned); err != nil {
+		t.Fatal(err)
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
