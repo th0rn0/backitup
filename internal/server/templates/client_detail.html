@@ -70,7 +70,6 @@
         <div class="client-stat">
           <div class="client-stat-label">Hot retention</div>
           <div class="client-stat-value">{{.Client.RetentionDays}} days</div>
-          {{if .Client.OffsiteRemote}}<div class="client-stat-sub">{{.Client.OffsiteRetentionDays}}d offsite</div>{{end}}
         </div>
         {{if .ExpectedIntervalStr}}
         <div class="client-stat">
@@ -290,11 +289,7 @@
             <form method="POST" action="/clients/{{.Client.Slug}}/retention" class="form" style="margin-top:0">
               <label for="retention_days">Hot retention (days)</label>
               <input type="number" id="retention_days" name="retention_days" min="1" value="{{.Client.RetentionDays}}" required>
-              <div class="field-hint">Local snapshots older than this are deleted once safely in offsite (or if offsite is disabled).</div>
-
-              <label for="offsite_retention_days">Offsite retention (days)</label>
-              <input type="number" id="offsite_retention_days" name="offsite_retention_days" min="0" value="{{.Client.OffsiteRetentionDays}}">
-              <div class="field-hint">Offsite objects older than this are deleted from cold storage. 0 = keep forever. Ignored if offsite pruning is disabled below.</div>
+              <div class="field-hint">Local snapshots older than this are deleted once safely in offsite (or if offsite is disabled). Offsite objects are not deleted by backitup at all — that is the B2 bucket's lifecycle rule.</div>
 
               <label for="expected_interval_secs">Expected interval (seconds)</label>
               <input type="number" id="expected_interval_secs" name="expected_interval_secs" min="0" value="{{.Client.ExpectedIntervalSecs}}">
@@ -338,10 +333,7 @@
               </div>
               <div class="field-hint">All: every local snapshot is mirrored offsite. Latest: only the newest snapshot is kept in cold storage.</div>
 
-              <label class="checkbox-label mt-16" style="margin-top:16px">
-                <input type="checkbox" name="disable_offsite_pruning" value="1"{{if .Client.DisableOffsitePruning}} checked{{end}}>
-                <span>Disable offsite pruning<span class="hint">backitup will not delete any offsite objects. Use this when you want to manage retention via a lifecycle policy on the storage provider (e.g. B2 lifecycle rules).</span></span>
-              </label>
+              <div class="field-hint">Deleting offsite objects is not scheduled here. Retention in cold storage is the B2 bucket's lifecycle rule; the life of an object is decided there, per bucket, not per client.</div>
 
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>

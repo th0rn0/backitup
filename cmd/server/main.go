@@ -76,9 +76,14 @@ func main() {
 		cancel()
 	}
 
-	// Lifecycle worker: offsite tiering + retention + integrity, on the server's
-	// own schedule (D1/D8/D9). Per-client OffsiteRemote gates whether a client
-	// is tiered; rclone is only invoked for clients that opt in.
+	// Lifecycle worker: hot retention + verification + integrity, on the
+	// server's own schedule (D1/D9). Per-client OffsiteRemote gates whether a
+	// client is tiered; rclone is only invoked for clients that opt in.
+	//
+	// Offsite retention is not in here: cold storage is B2 and the bucket's
+	// lifecycle rule expires objects. Say so once, so an operator asking why the
+	// bucket is not shrinking reads an answer instead of hunting for a setting.
+	lifecycle.LogOffsiteRetentionDelegated()
 	lcDeps := lifecycle.Deps{
 		Store:            st,
 		Offsite:          lifecycle.NewRclone(getenv("BACKITUP_RCLONE_CONFIG", "/data/rclone.conf")),

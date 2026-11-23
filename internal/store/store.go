@@ -292,12 +292,12 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 	c.Slug = slug
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO clients (name, slug, mode, source_label, excludes, retention_days,
-			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
+			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, skip_symlinks,
 			offsite_upload_mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Name, c.Slug, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
-		c.OffsiteRetentionDays, c.ExpectedIntervalSecs, c.OffsiteRemote, c.OffsiteDir,
+		c.ExpectedIntervalSecs, c.OffsiteRemote, c.OffsiteDir,
 		c.OffsiteCron, c.SSHPubKey, c.TokenHash, c.TokenPrefix, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
 		b2i(c.SkipSymlinks), c.OffsiteUploadMode)
 	if err != nil {
@@ -317,9 +317,9 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, slug, mode, source_label, excludes, retention_days,
-			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
+			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode, disable_offsite_pruning
+			offsite_upload_mode
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -345,9 +345,9 @@ func (s *Store) GetClientBySlug(ctx context.Context, slug string) (*model.Client
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, slug, mode, source_label, excludes, retention_days,
-			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
+			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode, disable_offsite_pruning
+			offsite_upload_mode
 		FROM clients WHERE slug = ?`, slug)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -363,9 +363,9 @@ func (s *Store) GetClientBySlug(ctx context.Context, slug string) (*model.Client
 func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, slug, mode, source_label, excludes, retention_days,
-			offsite_retention_days, expected_interval_secs, offsite_remote, offsite_dir,
+			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode, disable_offsite_pruning
+			offsite_upload_mode
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -1010,13 +1010,13 @@ func (s *Store) DeleteRemote(ctx context.Context, name string) error {
 
 // UpdateClientOffsite changes the offsite destination settings for a client.
 // An empty remote disables offsite tiering for this client.
-func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir, cronExpr, uploadMode string, disablePruning bool) error {
+func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir, cronExpr, uploadMode string) error {
 	if uploadMode == "" {
 		uploadMode = "all"
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_cron=?, offsite_upload_mode=?, disable_offsite_pruning=? WHERE id=?`,
-		remote, dir, cronExpr, uploadMode, b2i(disablePruning), id)
+		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_cron=?, offsite_upload_mode=? WHERE id=?`,
+		remote, dir, cronExpr, uploadMode, id)
 	if err != nil {
 		return fmt.Errorf("update offsite remote: %w", err)
 	}
@@ -1027,12 +1027,13 @@ func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir, 
 	return nil
 }
 
-// UpdateClientRetention changes the hot/offsite retention horizons and the
-// expected backup interval used for health-status derivation.
-func (s *Store) UpdateClientRetention(ctx context.Context, id int64, hotDays, offsiteDays, expectedIntervalSecs int) error {
+// UpdateClientRetention changes the hot retention horizon and the expected
+// backup interval used for health-status derivation. There is no offsite horizon
+// to set: offsite retention is the B2 bucket's lifecycle rule.
+func (s *Store) UpdateClientRetention(ctx context.Context, id int64, hotDays, expectedIntervalSecs int) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET retention_days=?, offsite_retention_days=?, expected_interval_secs=? WHERE id=?`,
-		hotDays, offsiteDays, expectedIntervalSecs, id)
+		`UPDATE clients SET retention_days=?, expected_interval_secs=? WHERE id=?`,
+		hotDays, expectedIntervalSecs, id)
 	if err != nil {
 		return fmt.Errorf("update retention: %w", err)
 	}
@@ -1175,17 +1176,16 @@ type scanner interface{ Scan(...any) error }
 func scanClient(sc scanner) (model.Client, error) {
 	var c model.Client
 	var mode, excludes, createdAt string
-	var enabled, skipSymlinks, disableOffsitePruning int
+	var enabled, skipSymlinks int
 	if err := sc.Scan(&c.ID, &c.Name, &c.Slug, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
-		&c.OffsiteRetentionDays, &c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
+		&c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
 		&c.OffsiteCron, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks,
-		&c.OffsiteUploadMode, &disableOffsitePruning); err != nil {
+		&c.OffsiteUploadMode); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)
 	c.Enabled = enabled != 0
 	c.SkipSymlinks = skipSymlinks != 0
-	c.DisableOffsitePruning = disableOffsitePruning != 0
 	if excludes != "" {
 		_ = json.Unmarshal([]byte(excludes), &c.Excludes)
 	}

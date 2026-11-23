@@ -22,8 +22,7 @@ CREATE TABLE IF NOT EXISTS clients (
     mode                    TEXT    NOT NULL CHECK (mode IN ('targz','rsync')),
     source_label            TEXT    NOT NULL DEFAULT '',
     excludes                TEXT    NOT NULL DEFAULT '[]',  -- JSON array of globs
-    retention_days          INTEGER NOT NULL DEFAULT 14,    -- hot store horizon
-    offsite_retention_days  INTEGER NOT NULL DEFAULT 90,    -- cold horizon, independent (D8)
+    retention_days          INTEGER NOT NULL DEFAULT 14,    -- hot store horizon; offsite is the B2 rule's job
     expected_interval_secs  INTEGER NOT NULL DEFAULT 0,     -- advisory only (staleness; D1)
     offsite_remote          TEXT    NOT NULL DEFAULT '',    -- rclone remote; '' = no offsite
     offsite_dir             TEXT    NOT NULL DEFAULT '',    -- subdir within remote; '' = client slug
@@ -36,8 +35,7 @@ CREATE TABLE IF NOT EXISTS clients (
     created_at              TEXT    NOT NULL,
     version                 INTEGER NOT NULL DEFAULT 1,  -- CAS guard for credential rotation
     skip_symlinks           INTEGER NOT NULL DEFAULT 0,  -- omit symlinks from backup
-    offsite_upload_mode     TEXT    NOT NULL DEFAULT 'all',  -- 'all' or 'latest': which snapshots to push
-    disable_offsite_pruning INTEGER NOT NULL DEFAULT 0   -- keep the operator's remote objects in place
+    offsite_upload_mode     TEXT    NOT NULL DEFAULT 'all'   -- 'all' or 'latest': which snapshots to push
 );
 
 CREATE TABLE IF NOT EXISTS runs (

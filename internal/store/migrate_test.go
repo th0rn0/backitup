@@ -344,11 +344,12 @@ func TestInterruptedRebuildKeepsRunHistory(t *testing.T) {
 	if n := scalarInt(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='runs__canonical'`); n != 0 {
 		t.Errorf("half-built table runs__canonical survived the interrupted migration")
 	}
-	if v := scalarInt(t, db, `PRAGMA user_version`); v != schemaVersion-1 {
-		// Step 1 (create the missing tables) committed; step 2, the interrupted
-		// one, must not have advanced the version. Non-contiguous versions are
-		// rejected by TestSchemaVersionMatchesLastStep, so "one short" is precise.
-		t.Errorf("interrupted migration recorded user_version %d, want %d (the last completed step)", v, schemaVersion-1)
+	if v := scalarInt(t, db, `PRAGMA user_version`); v != 1 {
+		// The fault fires inside step 2 (the canonical rebuild, the only step that
+		// rebuilds `runs`), so only step 1 may stand: the interrupted step must not
+		// have advanced the version, and a version stamped for work that rolled back
+		// would make the next start skip it.
+		t.Errorf("interrupted migration recorded user_version %d, want 1 (the last completed step)", v)
 	}
 	// The pre-migration client shape is intact too, index included.
 	if n := scalarInt(t, db, `SELECT COUNT(*) FROM pragma_table_info('clients') WHERE name='slug'`); n != 0 {

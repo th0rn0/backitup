@@ -109,19 +109,20 @@ type Client struct {
 	Excludes     []string // glob excludes (rsync --exclude / tar --exclude)
 	SkipSymlinks bool     // omit symlinks from the backup (BACKITUP_SKIP_SYMLINKS)
 
-	// Retention (D7/D8). Hot and offsite are INDEPENDENT horizons.
-	RetentionDays        int // hot store: prune snapshots/archives older than this
-	OffsiteRetentionDays int // offsite: prune offsite objects older than this (usually larger)
+	// Retention (D7/D8). Hot retention is ours: the disk the server owns. There
+	// is no offsite horizon any more — cold storage is Backblaze B2 and its
+	// bucket lifecycle rule owns offsite retention (see lifecycle.go), because a
+	// rule living there cannot be doubled up, missed or argued with by backitup.
+	RetentionDays int // hot store: prune snapshots/archives older than this
 
 	// Advisory cadence (D-folded). The server does NOT enforce schedule (host cron
 	// owns WHEN); this is only used to compute the "stale" dashboard state.
 	ExpectedIntervalSecs int
 
-	OffsiteRemote         string // rclone remote name selecting this client's cold target; "" = no offsite
-	OffsiteDir            string // subdirectory within the remote; "" = use the client's slug
-	OffsiteCron           string // standard 5-field cron expression for upload schedule; "" = every lifecycle pass
-	OffsiteUploadMode     string // "all" (default) or "latest" — which snapshots to push offsite
-	DisableOffsitePruning bool   // skip lifecycle pruning; let the storage provider's lifecycle policy manage deletion
+	OffsiteRemote     string // rclone remote name selecting this client's cold target; "" = no offsite
+	OffsiteDir        string // subdirectory within the remote; "" = use the client's slug
+	OffsiteCron       string // standard 5-field cron expression for upload schedule; "" = every lifecycle pass
+	OffsiteUploadMode string // "all" (default) or "latest" — which snapshots to push offsite
 
 	// Auth. The private SSH key is shown once at creation and NOT retained (D4);
 	// only the public key and a hash of the token live here.
@@ -148,8 +149,9 @@ type Run struct {
 }
 
 // OffsiteObject tracks what has been pushed to cold storage, so the lifecycle
-// worker can (a) never prune un-offsited data and (b) prune offsite independently
-// by OffsiteRetentionDays (D8).
+// worker can (a) never prune un-offsited data and (b) verify that what it
+// believes is on the remote is really there. It is bookkeeping, not a retention
+// horizon: the B2 bucket's lifecycle rule decides when an object expires.
 type OffsiteObject struct {
 	ID         int64
 	ClientID   int64
