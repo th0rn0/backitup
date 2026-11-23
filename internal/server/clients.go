@@ -19,8 +19,8 @@ import (
 	"github.com/th0rn0/backitup/internal/auth"
 	"github.com/th0rn0/backitup/internal/authkeys"
 	"github.com/th0rn0/backitup/internal/keys"
-	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/mode"
+	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/store"
 )
 
@@ -82,12 +82,11 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		Mode:                 mode,
 		SourceLabel:          r.PostFormValue("source_label"),
 		RetentionDays:        atoiDefault(r.PostFormValue("retention_days"), 14),
-		OffsiteRetentionDays: atoiDefault(r.PostFormValue("offsite_retention_days"), 90),
 		ExpectedIntervalSecs: atoiDefault(r.PostFormValue("expected_interval_secs"), 0),
-		OffsiteRemote: r.PostFormValue("offsite_remote"),
-		OffsiteDir:    strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/")),
-		OffsiteCron:   strings.TrimSpace(r.PostFormValue("offsite_cron")),
-		SkipSymlinks:  r.PostFormValue("skip_symlinks") == "1",
+		OffsiteRemote:        r.PostFormValue("offsite_remote"),
+		OffsiteDir:           strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/")),
+		OffsiteCron:          strings.TrimSpace(r.PostFormValue("offsite_cron")),
+		SkipSymlinks:         r.PostFormValue("skip_symlinks") == "1",
 		SSHPubKey:            pubLine,
 		TokenHash:            tokenHash,
 		TokenPrefix:          tokenPrefix,
@@ -139,7 +138,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
-	backupPath  := r.PostFormValue("backup_path")
+	backupPath := r.PostFormValue("backup_path")
 	secretsPath := r.PostFormValue("secrets_path")
 	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, backupPath, secretsPath)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -450,20 +449,18 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// postUpdateClientRetention updates the hot and offsite retention horizons.
+// postUpdateClientRetention updates the hot retention horizon and the expected
+// backup interval. Offsite retention is not here: it belongs to the B2 bucket's
+// lifecycle rule, which backitup neither configures nor overrides.
 func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
 	hotDays := atoiDefault(r.PostFormValue("retention_days"), 14)
-	offsiteDays := atoiDefault(r.PostFormValue("offsite_retention_days"), 90)
 	expectedInterval := atoiDefault(r.PostFormValue("expected_interval_secs"), 0)
 	if hotDays < 1 {
 		hotDays = 1
-	}
-	if offsiteDays < 0 {
-		offsiteDays = 0
 	}
 	if expectedInterval < 0 {
 		expectedInterval = 0
@@ -483,7 +480,7 @@ func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.st.UpdateClientRetention(ctx, c.ID, hotDays, offsiteDays, expectedInterval); err != nil {
+	if err := s.st.UpdateClientRetention(ctx, c.ID, hotDays, expectedInterval); err != nil {
 		if s.storeFailure(w, ctx, fmt.Sprintf("retention: update client %d (%q)", c.ID, c.Name), err) {
 			return
 		}
@@ -535,7 +532,6 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	if uploadMode != "latest" {
 		uploadMode = "all"
 	}
-	disablePruning := r.PostFormValue("disable_offsite_pruning") == "1"
 
 	if cronExpr != "" {
 		if _, err := cron.ParseStandard(cronExpr); err != nil {
@@ -578,7 +574,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, cronExpr, uploadMode, disablePruning); err != nil {
+	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, cronExpr, uploadMode); err != nil {
 		if s.storeFailure(w, ctx, fmt.Sprintf("offsite: update client %d (%q)", c.ID, c.Name), err) {
 			return
 		}

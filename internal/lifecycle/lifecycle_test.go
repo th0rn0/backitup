@@ -95,14 +95,19 @@ func openStore(t *testing.T) *store.Store {
 	return st
 }
 
-// Happy path: offsite worker uploads all snapshots; lifecycle worker then
-// prunes hot (drops old+offsited, keeps newest and within-horizon).
+// Happy path: offsite worker uploads all snapshots, records a dedup row for an
+// unchanged tree, and the lifecycle worker then prunes hot (drops old+offsited,
+// keeps newest and within-horizon) without touching a single offsite object.
+//
+// The prune half of this test is the hot half only: offsite retention is the B2
+// bucket's lifecycle rule (see offsite_retention_delegated_test.go), so the
+// offsite worker uploads and records, and the lifecycle pass deletes locally.
 func TestRunOnceOffsiteAndPrune(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	id, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
-		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
+		RetentionDays: 14, Enabled: true,
 	})
 	mkArchiveContent(t, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*24*time.Hour), "payload-old")
 	mkArchiveContent(t, filepath.Join(dir, "backup-20260613T000000Z-000.tar.gz"), now.Add(-5*24*time.Hour), "payload-mid")
@@ -124,9 +129,36 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 		t.Fatalf("offsite records = %d, want 3", len(objs))
 	}
 
-	// Lifecycle worker then prunes.
+	// An unchanged tree must not upload again: the next pass records the content
+	// as deduplicated against the object that already holds it (0 bytes, no new
+	// object), which is what keeps an unchanged client from growing cold storage.
+	mkArchiveContent(t, filepath.Join(dir, "backup-20260618T120000Z-000.tar.gz"), now.Add(-1*time.Hour), "payload-new")
+	if err := RunOffsiteOnce(context.Background(), deps); err != nil {
+		t.Fatalf("RunOffsiteOnce (unchanged tree): %v", err)
+	}
+	if len(off.up) != 3 {
+		t.Fatalf("an unchanged tree must not upload again: uploads = %d, want still 3: %v", len(off.up), off.up)
+	}
+	objs, _ = st.ListOffsiteObjects(context.Background(), id)
+	if len(objs) != 4 {
+		t.Fatalf("offsite records = %d, want 4 (the new snapshot recorded as dedup)", len(objs))
+	}
+	var dedup model.OffsiteObject
+	for _, o := range objs {
+		if o.SnapshotID == "backup-20260618T120000Z-000.tar.gz" {
+			dedup = o
+		}
+	}
+	if dedup.DedupOf == "" || dedup.Bytes != 0 || dedup.Checksum == "" {
+		t.Fatalf("an unchanged tree must be recorded as dedup with 0 bytes: %+v", dedup)
+	}
+
+	// Lifecycle worker then prunes hot only.
 	if err := RunOnce(context.Background(), deps); err != nil {
 		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(off.del) != 0 {
+		t.Fatalf("the lifecycle pass deleted offsite objects %v; it must not delete any", off.del)
 	}
 	// Hot: old (>14d, offsited) pruned; mid + new kept.
 	left, _ := os.ReadDir(dir)
@@ -140,6 +172,10 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 	if !names["backup-20260613T000000Z-000.tar.gz"] || !names["backup-20260618T000000Z-000.tar.gz"] {
 		t.Errorf("mid/new should survive: %v", names)
 	}
+	// Nothing left the offsite side of the bookkeeping either.
+	if after, _ := st.ListOffsiteObjects(context.Background(), id); len(after) != 4 {
+		t.Fatalf("offsite records after the lifecycle pass = %d, want 4: %+v", len(after), after)
+	}
 }
 
 // Offsite-first: when the offsite worker's upload fails, nothing is recorded
@@ -149,7 +185,7 @@ func TestRunOnceOffsiteFirstProtectsHot(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	id, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
-		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
+		RetentionDays: 14, Enabled: true,
 	})
 	mkArchive(t, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*24*time.Hour))
 	mkArchive(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour))
@@ -191,31 +227,6 @@ func TestRunOnceNoOffsitePrunesByAge(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz")); err != nil {
 		t.Fatal("newest must be protected")
-	}
-}
-
-// Independent offsite retention: an old offsite object is pruned remotely on the
-// offsite horizon, keeping the newest.
-func TestRunOnceOffsiteRetention(t *testing.T) {
-	st := openStore(t)
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	id, base, _ := newClient(t, st, model.Client{
-		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
-		RetentionDays: 14, OffsiteRetentionDays: 7, Enabled: true,
-	})
-	// No hot snapshots; pre-seed two offsite objects (one stale, one fresh).
-	_ = st.RecordOffsiteObject(context.Background(), model.OffsiteObject{ClientID: id, SnapshotID: "stale", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour)})
-	_ = st.RecordOffsiteObject(context.Background(), model.OffsiteObject{ClientID: id, SnapshotID: "fresh", Remote: "local", UploadedAt: now.Add(-1 * time.Hour)})
-
-	off := &fakeOffsite{}
-	_ = RunOnce(context.Background(), Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }})
-
-	if len(off.del) != 1 || off.del[0] != objectPath(model.Slug("c"), model.ModeTarGz, "stale") {
-		t.Fatalf("expected stale offsite object deleted, got %v", off.del)
-	}
-	objs, _ := st.ListOffsiteObjects(context.Background(), id)
-	if len(objs) != 1 || objs[0].SnapshotID != "fresh" {
-		t.Fatalf("offsite retention should leave only fresh: %+v", objs)
 	}
 }
 

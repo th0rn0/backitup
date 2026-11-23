@@ -45,7 +45,7 @@ func TestDeduplicatedUploadIsRecordedSoHotPruneProceeds(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	id, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
-		RetentionDays: 1, OffsiteRetentionDays: 90, Enabled: true,
+		RetentionDays: 1, Enabled: true,
 	})
 
 	// Three snapshots of an unchanged tree: the newest inside the hot horizon,
@@ -134,10 +134,13 @@ func TestPruneHotSurfacesDeleteFailures(t *testing.T) {
 	}
 }
 
-// Item 3 (fail closed). Offsite pruning deletes anything older than the horizon.
-// A row whose uploaded_at cannot be parsed used to become year 1 — older than
-// any horizon — so a recent remote object with a corrupt timestamp was deleted.
-func TestPruneOffsiteKeepsObjectWithMalformedTimestamp(t *testing.T) {
+// Item 3 (fail closed), kept as a property rather than as a pruning rule: a row
+// whose uploaded_at cannot be parsed must never become an instruction to delete
+// something. It used to be read as year 1 — older than any horizon — and the
+// object deleted; offsite pruning is gone entirely now, so the assertion is the
+// simplest form of the same guarantee: the row survives, and so does the object it
+// names (no delete is issued at all).
+func TestOffsiteObjectWithMalformedTimestampIsNeverDeleted(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -148,25 +151,21 @@ func TestPruneOffsiteKeepsObjectWithMalformedTimestamp(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	id, base, _ := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
-		RetentionDays: 14, OffsiteRetentionDays: 7, Enabled: true,
+		RetentionDays: 14, Enabled: true,
 	})
 	ctx := context.Background()
 
-	// newest: protected by the never-prune-newest rule.
-	if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
-		ClientID: id, SnapshotID: "fresh", Remote: "local", UploadedAt: now.Add(-time.Hour),
-	}); err != nil {
-		t.Fatal(err)
+	for _, o := range []model.OffsiteObject{
+		{ClientID: id, SnapshotID: "fresh", Remote: "local", UploadedAt: now.Add(-time.Hour)},
+		{ClientID: id, SnapshotID: "stale", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour)},
+	} {
+		if err := st.RecordOffsiteObject(ctx, o); err != nil {
+			t.Fatal(err)
+		}
 	}
-	// genuinely past the 7-day horizon: must be pruned.
-	if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
-		ClientID: id, SnapshotID: "stale", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// 30 minutes old, but unparseable. Its text sorts after every valid
-	// timestamp, so it is NOT the protected newest row — pre-fix it is parsed as
-	// year 1 and deleted as "ancient".
+	// 30 minutes old, but unparseable: its text sorts after every valid
+	// timestamp, so pre-fix it was not the protected newest row and was parsed as
+	// year 1, i.e. deleted as "ancient".
 	raw, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
@@ -182,16 +181,15 @@ func TestPruneOffsiteKeepsObjectWithMalformedTimestamp(t *testing.T) {
 	if err := RunOnce(ctx, Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	want := objectPath(model.Slug("c"), model.ModeTarGz, "stale")
-	if len(off.del) != 1 || off.del[0] != want {
-		t.Fatalf("pruned %v, want only %q: a row with an unreadable timestamp must never look ancient", off.del, want)
+	if len(off.del) != 0 {
+		t.Fatalf("a pass deleted %v: no offsite object may be deleted, readable timestamp or not", off.del)
 	}
 	var rows int
 	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM offsite_objects`).Scan(&rows); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
-	if rows != 2 {
-		t.Fatalf("offsite rows = %d, want 2 (the unreadable row must be kept, not silently dropped)", rows)
+	if rows != 3 {
+		t.Fatalf("offsite rows = %d, want 3 (nothing deleted)", rows)
 	}
 }
 
@@ -212,7 +210,7 @@ func TestScheduledOffsiteUploadSurvivesCorruptTimestampRow(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	id, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
-		OffsiteCron: "*/5 * * * *", RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
+		OffsiteCron: "*/5 * * * *", RetentionDays: 14, Enabled: true,
 	})
 	ctx := context.Background()
 
@@ -301,7 +299,7 @@ func TestOffsiteStagingIsOnTheBackupVolumeAndRemovedInline(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	_, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeRsync, OffsiteRemote: "local",
-		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
+		RetentionDays: 14, Enabled: true,
 	})
 	mkRsyncSnapshots(t, dir, "20260618T080000Z", "20260618T100000Z", "20260618T110000Z")
 
@@ -336,7 +334,7 @@ func TestOffsiteStagingDirIsConfigurable(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	_, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeRsync, OffsiteRemote: "local",
-		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
+		RetentionDays: 14, Enabled: true,
 	})
 	mkRsyncSnapshots(t, dir, "20260618T110000Z")
 

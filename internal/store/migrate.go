@@ -11,7 +11,24 @@ import (
 
 // schemaVersion is the version this binary writes. It must equal the last entry
 // of migrations (asserted by TestSchemaVersionMatchesLastStep).
-const schemaVersion = 2
+const schemaVersion = 3
+
+// droppedColumns names, per table, the columns a migration is allowed to remove.
+//
+// canonicaliseTable rebuilds a table to schema.sql's definition and refuses to
+// drop any column the file does not declare — an unexpected column means this
+// database was written by something we do not know, and dropping it silently
+// would be data loss. A column the project deliberately retires is drained
+// through that same guard by name, so the rebuild that removes it is still the
+// only mechanism and the "unknown column" refusal stays armed for everything
+// else. An entry stays here forever: an old database may still carry the column,
+// and every step before the one that drops it compares against today's
+// schema.sql (there are no per-version snapshots of it).
+var droppedColumns = map[string][]string{
+	// v3: offsite retention belongs to the B2 bucket's lifecycle rule, so
+	// backitup no longer keeps a horizon or a "don't prune" flag of its own.
+	"clients": {"offsite_retention_days", "disable_offsite_pruning"},
+}
 
 // querier is the surface shared by *sql.DB and *sql.Tx, so the migration helpers
 // can run either inside a step's transaction or on the bare handle.
@@ -60,6 +77,7 @@ type migration struct {
 var migrations = []migration{
 	{version: 1, name: "create tables", apply: applyCreateTables},
 	{version: 2, name: "canonical table shape", fkOff: true, apply: applyCanonicalShape},
+	{version: 3, name: "drop offsite retention columns", fkOff: true, apply: applyCanonicalShape},
 }
 
 // migrationFault is a test seam. When set, it is called at each point inside a
@@ -88,6 +106,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("database schema version %d is newer than this backitup supports (%d): "+
 			"upgrade backitup instead of running an older one against it", version, schemaVersion)
 	}
+	var ran bool
 	for _, m := range migrations {
 		if version >= m.version {
 			continue
@@ -95,6 +114,14 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if err := runStep(ctx, db, m, sch); err != nil {
 			return fmt.Errorf("migrate to schema version %d (%s): %w", m.version, m.name, err)
 		}
+		ran = true
+	}
+	// Reported once for the migration as a whole, not once per rebuilt table: FKs
+	// were off while parent tables were dropped and recreated, so prove the
+	// children still point at real rows. A database that needed no step is not
+	// re-checked — a steady-state start must stay silent.
+	if ran {
+		return warnOrphanedRows(ctx, db)
 	}
 	return nil
 }
@@ -178,13 +205,6 @@ func applyCanonicalShape(ctx context.Context, tx *sql.Tx, sch schemaDef) error {
 		if _, err := tx.ExecContext(ctx, idx); err != nil {
 			return fmt.Errorf("create index: %w", err)
 		}
-	}
-	// Foreign keys were off while the parent tables were dropped and recreated, so
-	// prove the children still point at real rows. Rows that were already orphaned
-	// before the migration are reported, not fatal: refusing to start would leave
-	// the operator no way in to fix them.
-	if err := warnOrphanedRows(ctx, tx); err != nil {
-		return err
 	}
 	return nil
 }
@@ -403,14 +423,20 @@ func canonicaliseTable(ctx context.Context, tx querier, t schemaTable) error {
 	if err != nil {
 		return err
 	}
+	// A rebuild copies the columns both sides share, so a column that exists only
+	// in the database is dropped. That is data loss unless the project retired
+	// the column on purpose, so refuse — except for the columns named in
+	// droppedColumns, which is how a retirement is expressed.
+	retired := droppedColumns[t.name]
 	for _, c := range have {
-		if !contains(want, c) {
+		if !contains(want, c) && !contains(retired, c) {
 			// Dropping a column nobody asked us to drop is data loss. Refuse
 			// instead: this database was written by something we do not know.
 			return fmt.Errorf("table %s: existing column %q is not in the canonical schema; "+
 				"refusing to rebuild it and drop that data", t.name, c)
 		}
 	}
+
 	cols := sharedColumns(want, have)
 	if len(cols) == 0 {
 		return fmt.Errorf("table %s: no column in common with the canonical schema", t.name)

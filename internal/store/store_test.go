@@ -23,7 +23,6 @@ func TestClientAndRunRoundTrip(t *testing.T) {
 		Mode:                 model.ModeRsync,
 		Excludes:             []string{"*.tmp", "node_modules/"},
 		RetentionDays:        14,
-		OffsiteRetentionDays: 90,
 		ExpectedIntervalSecs: 3600,
 		OffsiteRemote:        "s3",
 		Enabled:              true,
@@ -40,7 +39,7 @@ func TestClientAndRunRoundTrip(t *testing.T) {
 		t.Fatalf("got %d clients, want 1", len(clients))
 	}
 	c := clients[0]
-	if c.Mode != model.ModeRsync || c.OffsiteRetentionDays != 90 || len(c.Excludes) != 2 {
+	if c.Mode != model.ModeRsync || c.RetentionDays != 14 || len(c.Excludes) != 2 {
 		t.Fatalf("client round-trip mismatch: %+v", c)
 	}
 

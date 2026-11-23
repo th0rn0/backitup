@@ -339,12 +339,14 @@ Offsite tiering is per-client: set a client's **offsite remote** in the webgui t
 rclone remote name. The remote must be defined in `rclone.conf` (pointed to by
 `BACKITUP_RCLONE_CONFIG`, default `/data/rclone.conf`).
 
-The maintenance worker runs on `BACKITUP_LIFECYCLE_INTERVAL`; it handles retention,
-remote verification, integrity checks, and stale-run alerts. A separate worker polls
-for offsite uploads on `BACKITUP_OFFSITE_POLL_INTERVAL` (default `5m`); each client's
-offsite cron schedule controls when it is due. Uploads precede hot pruning, so a hot
-snapshot is not pruned before it is confirmed offsite. Offsite pruning follows the
-client's independent `offsite_retention_days` horizon. tar.gz archives upload as-is;
+The maintenance worker runs on `BACKITUP_LIFECYCLE_INTERVAL`; it handles **hot**
+retention, remote verification, integrity checks, and stale-run alerts. A separate
+worker polls for offsite uploads on `BACKITUP_OFFSITE_POLL_INTERVAL` (default `5m`);
+each client's offsite cron schedule controls when it is due. Uploads precede hot
+pruning, so a hot snapshot is not pruned before it is confirmed offsite. backitup
+**never deletes an offsite object**: what expires in the bucket is the bucket's own
+lifecycle rule (see [Offsite retention is the bucket's lifecycle
+rule](#offsite-retention-is-the-buckets-lifecycle-rule)). tar.gz archives upload as-is;
 rsync snapshots are tarred into one object per snapshot.
 
 #### Setting up remotes via the webgui (recommended)
@@ -422,9 +424,12 @@ incremental snapshots on the hot store via hardlinks (only changed data costs sp
 
 ## Retention & offsite
 
-- **Hot retention** (`retention_days`) prunes snapshots on the server.
-- **Offsite retention** (`offsite_retention_days`) is **independent** — usually
-  longer, because cold storage is your long-horizon copy.
+- **Hot retention** (`retention_days`) prunes snapshots on the server. The disk is
+  ours, so this is backitup's decision.
+- **Offsite retention is not a backitup setting at all.** Cold storage is a B2 bucket,
+  and the bucket's lifecycle rule expires objects. backitup uploads, verifies, dedupes
+  and lists; it never deletes an offsite object on a schedule. See
+  [Offsite retention is the bucket's lifecycle rule](#offsite-retention-is-the-buckets-lifecycle-rule).
 - Offsite encryption is opt-in: configure an rclone **crypt** remote that wraps a
   plaintext provider remote, then select the crypt remote as the client's destination.
   Writes through that destination reach the provider as ciphertext. The crypt remote
@@ -434,6 +439,38 @@ incremental snapshots on the hot store via hardlinks (only changed data costs sp
   pruned before it is confirmed offsited. Offsite pushes **immutable per-snapshot
   objects** (no destructive sync), so corruption cannot be replicated over your only
   cold copy.
+- `remote_missing` is the check that tells you a bucket rule ate something it should
+  not have. The lifecycle verification pass lists each remote and flags an object the
+  database believes in but the bucket no longer holds; a snapshot flagged that way no
+  longer counts as safely offsite, so its hot copy is kept rather than pruned. With
+  deletion now happening outside backitup, this is the instrument, not just a
+  diagnostic.
+
+### Offsite retention is the bucket's lifecycle rule
+
+backitup **uploads and never expires**. Set the expiry rule in the Backblaze B2
+console, on the bucket, and treat it as the only place offsite retention is
+configured. Nothing in the webgui or the API sets it, and backitup will not delete an
+offsite object because of age, a flag or a horizon — an object leaves the bucket when
+the bucket's rule says so. (On startup the server logs one line saying exactly this:
+`lifecycle: offsite retention is delegated to the B2 bucket lifecycle rule; backitup
+will not delete offsite objects`.)
+
+Three things about B2 rules are worth knowing before you write one:
+
+- **A crypt remote stores objects under encrypted names and paths.** If you selected a
+  `crypt` remote (recommended — see the encryption note above), a rule that matches on
+  *filename* cannot see the snapshot timestamp, because the name on the bucket is
+  ciphertext. Use B2's **days since upload** (i.e. file age), not a name pattern. This
+  is the trap: a name-pattern rule looks right, matches nothing, and silently never
+  deletes anything.
+- **A lifecycle rule is per-bucket and prefix-scoped, not per-client.** Several clients
+  sharing one bucket share one retention horizon. Per-client retention needs a
+  per-client bucket, or a per-client path prefix with its own rule.
+- **Dedupe means an unchanged tree adds no object**, so age-based retention of
+  unchanged data is effectively unbounded: the one object that holds that content is
+  expired by age while every later run just points at it. That is expected, not a bug
+  — and it is why `remote_missing` matters (see above).
 
 ## Restore
 

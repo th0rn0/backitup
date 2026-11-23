@@ -35,10 +35,7 @@
           <div>
             <label for="retention_days">Hot retention (days)</label>
             <input id="retention_days" name="retention_days" type="number" min="1" value="14">
-          </div>
-          <div>
-            <label for="offsite_retention_days">Offsite retention (days)</label>
-            <input id="offsite_retention_days" name="offsite_retention_days" type="number" min="1" value="90">
+            <div class="field-hint">Offsite retention is the B2 bucket's lifecycle rule, not a client setting.</div>
           </div>
           <div>
             <label for="expected_interval_secs">Expected interval (s)</label>

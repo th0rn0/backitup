@@ -1,9 +1,13 @@
 // Package lifecycle is backitup's server-side maintenance worker (design doc
 // D1/D8/D9). Two independent workers run on separate schedules:
 //
-//   - Lifecycle worker (StartWorker / RunOnce): retention pruning, remote
-//     existence verification, integrity checks, stale alerts, run-log trimming.
-//     Never uploads; safe to run frequently without touching rclone.
+//   - Lifecycle worker (StartWorker / RunOnce): hot-store retention pruning,
+//     remote existence verification, integrity checks, stale alerts, run-log
+//     trimming. Never uploads and never deletes an offsite object: cold storage
+//     is Backblaze B2 and the bucket's lifecycle rule owns offsite retention, so
+//     an operator asking "why is B2 not shrinking" gets the answer from the
+//     startup line (LogOffsiteRetentionDelegated) rather than from a debugging
+//     session. Safe to run frequently without touching rclone.
 //
 //   - Offsite worker (StartOffsiteWorker / RunOffsiteOnce): uploads new
 //     snapshots to cold storage per client based on each client's own
@@ -22,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -42,6 +47,29 @@ const DefaultLogRetentionDays = 7
 // considered an abandoned upload and removed. An active upload continuously
 // updates the file's mtime, so anything older than this threshold is stale.
 const DefaultPartOrphanAge = 2 * time.Hour
+
+// OffsiteRetentionDelegatedMessage is the answer to "why is cold storage not
+// shrinking?", printed once at startup instead of being rediscovered.
+//
+// Offsite retention is not backitup's job: cold storage is Backblaze B2 and its
+// bucket lifecycle rule expires objects. Nothing in this package deletes an
+// offsite object on a schedule, so a fleet whose B2 bucket keeps growing is a
+// misconfigured rule — and the only useful thing the log can do about that is
+// say whose setting it is.
+const OffsiteRetentionDelegatedMessage = "lifecycle: offsite retention is delegated to the B2 bucket lifecycle rule; backitup will not delete offsite objects"
+
+// offsiteRetentionDelegatedOnce keeps that line to one per process: the server
+// starts two workers (lifecycle and offsite), and a line repeated per worker
+// would read as a recurring event rather than a statement about the build.
+var offsiteRetentionDelegatedOnce sync.Once
+
+// LogOffsiteRetentionDelegated prints the delegation line once per process.
+// Called at startup (cmd/server); the second and later calls say nothing.
+func LogOffsiteRetentionDelegated() {
+	offsiteRetentionDelegatedOnce.Do(func() {
+		log.Print(OffsiteRetentionDelegatedMessage)
+	})
+}
 
 // Offsite is the cold-storage backend (rclone crypt in production). objectName
 // is the path within the remote, e.g. "client-3/20260618T....tar.gz".
@@ -178,12 +206,10 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	prunePartOrphans(d, clientDir, c.Name)
 
 	// Uploads are handled exclusively by the offsite worker (RunOffsiteOnce /
-	// StartOffsiteWorker). The lifecycle worker only prunes and verifies.
-	if offsiteOn {
-		if err := pruneOffsite(ctx, d, c); err != nil {
-			return err
-		}
-	}
+	// StartOffsiteWorker). The lifecycle worker only prunes the hot store and
+	// verifies; it never deletes an offsite object, on any schedule. Offsite
+	// retention belongs to the B2 bucket's lifecycle rule (see
+	// LogOffsiteRetentionDelegated).
 	deleted, failed, pruneErr := pruneHot(ctx, d, c, sm, clientDir, snaps, offsiteOn, offsited)
 	if deleted > 0 || failed > 0 {
 		log.Printf("lifecycle: client %d (%s): hot prune: deleted=%d failed=%d", c.ID, c.Name, deleted, failed)
@@ -397,81 +423,6 @@ func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.Server
 	return bytes, true, nil
 }
 
-// offsiteRetentionDisabledReason names the setting that switched offsite
-// pruning off, and returns "" when pruning is on. The flag is named first, then
-// the horizon; both are reported when both apply, because the operator who set
-// them needs to know which one to change.
-func offsiteRetentionDisabledReason(c model.Client) string {
-	var reasons []string
-	if c.DisableOffsitePruning {
-		reasons = append(reasons, "offsite_pruning_disabled=true")
-	}
-	if c.OffsiteRetentionDays <= 0 {
-		reasons = append(reasons, fmt.Sprintf("offsite_retention_days=%d", c.OffsiteRetentionDays))
-	}
-	return strings.Join(reasons, ", ")
-}
-
-// pruneOffsite enforces the INDEPENDENT offsite retention horizon (D8), keeping
-// the newest offsite object regardless of age. Skipped when DisableOffsitePruning
-// is set so operators can delegate pruning to the storage provider's own lifecycle
-// policy (e.g. B2 lifecycle rules).
-//
-// A skipped pass says so, naming the setting responsible. Returning in silence
-// made "offsite retention is 0" indistinguishable from "nothing is old enough
-// yet" from the outside, which is exactly the question an operator asks when
-// cold storage keeps growing. One line per pass per client: that is the
-// granularity of a pass, it costs nothing per object, and it keeps the answer
-// visible in any window of the log rather than only since the process started.
-func pruneOffsite(ctx context.Context, d Deps, c model.Client) error {
-	if reason := offsiteRetentionDisabledReason(c); reason != "" {
-		log.Printf("lifecycle: offsite retention disabled for client %q (%s): no objects will be pruned", c.Name, reason)
-		return nil
-	}
-	objs, err := d.Store.ListOffsiteObjects(ctx, c.ID) // newest first
-	if err != nil {
-		return err
-	}
-	// Dedup rows name an object owned by another snapshot: there is nothing of
-	// their own to delete, and letting one count as the "newest" object would
-	// un-protect the real object of that content and delete a path that was never
-	// uploaded.
-	real := make([]model.OffsiteObject, 0, len(objs))
-	for _, o := range objs {
-		if o.DedupOf == "" {
-			real = append(real, o)
-		}
-	}
-	cutoff := d.now().Add(-time.Duration(c.OffsiteRetentionDays) * 24 * time.Hour)
-	for i, o := range real {
-		if i == 0 || !o.UploadedAt.Before(cutoff) {
-			continue // protect newest; keep anything within the horizon
-		}
-		if err := d.Offsite.Delete(ctx, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, o.SnapshotID)); err != nil {
-			return fmt.Errorf("offsite delete %s: %w", o.SnapshotID, err)
-		}
-		if d.Verbose {
-			log.Printf("offsite: client=%q remote=%s snapshot=%s pruned (exceeded %dd retention)", c.Name, c.OffsiteRemote, o.SnapshotID, c.OffsiteRetentionDays)
-		}
-		if d.DiscordWebhook != "" {
-			go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
-				"🗑️ **backitup** — `%s` offsite snapshot pruned\nRemote: %s | snapshot: %s (exceeded %dd retention)",
-				c.Name, c.OffsiteRemote, o.SnapshotID, c.OffsiteRetentionDays,
-			))
-		}
-		if err := d.Store.DeleteOffsiteObject(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
-			return err
-		}
-		// The dedup rows pointing at this object claimed the content was still
-		// retrievable; with the object gone they would be lying, and the snapshots
-		// they name become upload candidates again.
-		if err := d.Store.DeleteDedupRecords(ctx, c.ID, o.SnapshotID, c.OffsiteRemote); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // prunePartOrphans removes .tar.gz.part files older than PartOrphanAge from
 // clientDir. These are left by interrupted tar.gz uploads (backitup-recv writes
 // to a .part then renames on success). An in-progress upload continuously
@@ -527,8 +478,8 @@ func prunePartOrphans(d Deps, clientDir, clientName string) {
 // nothing at all indistinguishable from a pass with nothing to do — which is how
 // a permanently failing prune stayed invisible while the hot store filled up.
 //
-// A disabled hot horizon is reported for the same reason as a disabled offsite
-// one: no pruning every pass, forever, with no line explaining it.
+// A disabled hot horizon is reported because it means no pruning every pass,
+// forever, with no line explaining it.
 func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsiteOn bool, offsited map[string]bool) (deleted, failed int, err error) {
 	if c.RetentionDays <= 0 {
 		log.Printf("lifecycle: hot retention disabled for client %q (retention_days=%d): no snapshots will be pruned", c.Name, c.RetentionDays)

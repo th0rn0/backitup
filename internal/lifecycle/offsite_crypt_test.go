@@ -39,7 +39,7 @@ func TestOffsiteUploadRunsThroughCryptRemote(t *testing.T) {
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 	_, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "vault",
-		RetentionDays: 14, OffsiteRetentionDays: 90, Enabled: true,
+		RetentionDays: 14, Enabled: true,
 	})
 	archive := filepath.Join(dir, "snap.tar.gz")
 	mkArchive(t, archive, now.Add(-time.Hour))

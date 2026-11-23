@@ -168,7 +168,7 @@ func TestBulkDeleteOffsiteObjectsEndToEnd(t *testing.T) {
 	srv, c, ts := deleteStack(t)
 	client, _ := makeClient(t, srv, c, ts, "nas", model.ModeRsync)
 	ctx := context.Background()
-	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all", false); err != nil {
+	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all"); err != nil {
 		t.Fatalf("set offsite remote: %v", err)
 	}
 	for _, id := range []string{obj1, obj2} {
@@ -226,7 +226,7 @@ func TestBulkDeleteOffsiteFailureNamesIDsAndCount(t *testing.T) {
 	srv, c, ts := deleteStack(t)
 	client, _ := makeClient(t, srv, c, ts, "nas", model.ModeRsync)
 	ctx := context.Background()
-	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all", false); err != nil {
+	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all"); err != nil {
 		t.Fatalf("set offsite remote: %v", err)
 	}
 	for _, id := range []string{ok, bad} {
