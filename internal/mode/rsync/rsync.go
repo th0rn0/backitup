@@ -70,10 +70,15 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	logger.Printf("syncing %s → %s", o.SourceDir, target)
 	stdout, err := runRsync(ctx, logger, args)
 	if err != nil {
-		return mode.BackupResult{}, err
+		logFailedRun(logger, stdout, err)
+		return mode.BackupResult{}, failRun(ctx, o, host, sshArgs, snap, stdout, err)
 	}
 
 	if err := flipLatest(ctx, o, host, sshArgs, snap); err != nil {
+		// The tree itself transferred; only the pointer did not move. That is a
+		// complete, usable snapshot that is simply not `latest`, so it is
+		// deliberately NOT marked incomplete — the lifecycle must not reclaim
+		// real data over a failed symlink. The run is still reported failed.
 		return mode.BackupResult{}, fmt.Errorf("update latest pointer: %w", err)
 	}
 
@@ -103,6 +108,48 @@ func flipLatest(ctx context.Context, o mode.BackupOpts, host, sshArgs, snap stri
 	target := fmt.Sprintf("%s@%s:snapshots/", o.SSHUser, host)
 	_, err = runRsync(ctx, o.Log(), []string{"-a", "-e", sshArgs, link, target})
 	return err
+}
+
+// failRun marks the snapshot directory a failed run left on the server, and
+// returns the error the caller reports.
+//
+// Returning before flipLatest is what protects the previous good snapshot and
+// stays exactly as it was; what is new is that the half-written directory is now
+// declared unusable instead of surviving as a directory the listing, the shape
+// test and the offsite worker all accepted.
+//
+// If the marker cannot be written, the run fails harder, not quieter: the
+// directory is then still one List would report, and the error says so, because
+// the operator's next move (look at snapshots/<ts> on the server, delete it) is
+// different from "the backup failed".
+func failRun(ctx context.Context, o mode.BackupOpts, host, sshArgs, snap, stdout string, runErr error) error {
+	logger := o.Log()
+	reason := incompleteReasonText(stdout, runErr)
+	if err := markIncomplete(ctx, o, host, sshArgs, snap, reason); err != nil {
+		logger.Printf("INCOMPLETE SNAPSHOT NOT MARKED: snapshots/%s could not be marked as a failed run: %v", snap, err)
+		return fmt.Errorf("%w — snapshots/%s was left on the server and could NOT be marked incomplete (%v): it may be listed and offsited as a backup until it is removed by hand", runErr, snap, err)
+	}
+	logger.Printf("snapshots/%s marked incomplete: it is ignored by the listing, checks and offsite upload; `latest` still points at the previous good snapshot", snap)
+	return runErr
+}
+
+// logFailedRun says what a failed run actually did, in the run log, before the
+// error is reported.
+//
+// Without it the log of a failed run shows rsync's own "Number of files: 5"
+// immediately above the error, which reads like a synced snapshot — the shape
+// that let four zero-byte files pass as a backup. The counts are attributed to
+// rsync's file list and explicitly not to a backup; the reported run's
+// Files/Bytes are zero (mode.BackupResult is returned empty on error).
+func logFailedRun(logger *log.Logger, stdout string, err error) {
+	files, bytesN := parseStats(stdout)
+	if files > 0 || bytesN > 0 {
+		logger.Printf("failed run: rsync counted %d files / %s in the attempted snapshot — NOT a backup, nothing from it is stored",
+			files, mode.HumanBytes(bytesN))
+	} else {
+		logger.Printf("failed run: rsync reported no usable file list — NOT a backup")
+	}
+	logger.Printf("run failed: %v", err)
 }
 
 // lineLogger is an io.Writer that logs each complete line in real time.

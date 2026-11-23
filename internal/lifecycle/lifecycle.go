@@ -48,6 +48,16 @@ const DefaultLogRetentionDays = 7
 // updates the file's mtime, so anything older than this threshold is stale.
 const DefaultPartOrphanAge = 2 * time.Hour
 
+// DefaultIncompleteAge is how long a snapshot a failed run marked incomplete is
+// left on disk before the lifecycle reclaims it.
+//
+// A marked directory can never become a snapshot: a retry always writes a new
+// timestamp directory, and the marker is only written after rsync has exited.
+// The grace is therefore about the one case that is not a retry — a second run
+// that happened to start in the same second and is still writing into the same
+// directory — and it costs only the disk a failed run already paid for.
+const DefaultIncompleteAge = time.Hour
+
 // OffsiteRetentionDelegatedMessage is the answer to "why is cold storage not
 // shrinking?", printed once at startup instead of being rediscovered.
 //
@@ -221,6 +231,11 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	}
 	// Remove stale .part files left by interrupted uploads before any pruning.
 	prunePartOrphans(d, clientDir, c.Name)
+	// Reclaim the directories failed runs left behind. They are already
+	// invisible to the listing, so nothing else would ever remove them — and a
+	// half-copied 375 GB tree that no listing, check or retention rule can see
+	// is exactly how a backup volume fills up with nothing to show for it.
+	pruneIncomplete(ctx, d, c, sm, clientDir)
 
 	// The remote check runs BEFORE the prune, not after it. pruneHot deletes a
 	// hot snapshot because an offsite record says the content is elsewhere, so
@@ -561,6 +576,42 @@ func prunePartOrphans(d Deps, clientDir, clientName string) {
 			log.Printf("lifecycle: client=%q: removed stale part file %s (last modified %s ago)",
 				clientName, e.Name(), d.now().Sub(info.ModTime()).Round(time.Second))
 		}
+	}
+}
+
+// pruneIncomplete removes the snapshot directories a failed run left behind.
+//
+// What it must NOT do is trust the listing it already has: a marked snapshot is
+// deliberately absent from List, so iterating that would find nothing and leave
+// the directory on the volume forever. The mode is asked directly
+// (ServerMode.ListIncomplete), which is also why the interface has that method at
+// all.
+//
+// Every removal is logged with the failed run's own error, because "a directory
+// disappeared from the backup volume" is not something an operator should have
+// to reconstruct from the absence of a snapshot.
+func pruneIncomplete(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string) {
+	snaps, err := sm.ListIncomplete(ctx, clientDir)
+	if err != nil {
+		log.Printf("lifecycle: client %d (%s): list incomplete snapshots: %v", c.ID, c.Name, err)
+		return
+	}
+	if len(snaps) == 0 {
+		return
+	}
+	cutoff := d.now().Add(-DefaultIncompleteAge)
+	for _, s := range snaps {
+		if s.CreatedAt.After(cutoff) {
+			// Marked a moment ago: possibly a second run writing into the same
+			// second's directory. The next pass takes it.
+			continue
+		}
+		if delErr := sm.DeleteSnapshot(ctx, clientDir, s.ID); delErr != nil {
+			log.Printf("lifecycle: client %d (%s): remove incomplete snapshot %s: %v", c.ID, c.Name, s.ID, delErr)
+			continue
+		}
+		log.Printf("lifecycle: client %d (%s): removed incomplete snapshot %s left by a failed run on %s",
+			c.ID, c.Name, s.ID, s.CreatedAt.UTC().Format(time.RFC3339))
 	}
 }
 
