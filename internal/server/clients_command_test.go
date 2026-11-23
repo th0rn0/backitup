@@ -71,12 +71,12 @@ func TestAPIBasePlaceholderIsBareURL(t *testing.T) {
 func TestDockerCmdsPlaceholderIsPasteSafe(t *testing.T) {
 	s := &Server{publicHost: "backup.test:2222", clientImage: "th0rn0/backitup-client:dev"}
 	apiBase := s.apiBase("http")
-	known, insecure := s.dockerCmds("tok3n", apiBase, "", "")
+	known, insecure := s.dockerCmds("tok3n", apiBase, "/srv/photos", "/etc/backitup/nas", true)
 
 	for name, cmd := range map[string]string{"known": known, "insecure": insecure} {
 		assertPasteSafe(t, name, cmd)
-		if strings.Contains(cmd, "YOUR-SERVER:8080  #") {
-			t.Errorf("%s still appends the hint to the BACKITUP_API value:\n%s", name, cmd)
+		if strings.Contains(cmd, "#") {
+			t.Errorf("%s carries a comment, so the crontab entry built from it would too:\n%s", name, cmd)
 		}
 		if !strings.Contains(cmd, "-e BACKITUP_API=http://YOUR-SERVER:8080 \\\n") {
 			t.Errorf("%s does not carry a bare placeholder API value:\n%s", name, cmd)
@@ -109,18 +109,101 @@ func TestDockerCmdsPlaceholderIsPasteSafe(t *testing.T) {
 	}
 }
 
+// TestDockerCmdsWithoutHostKeyHasNoVerifiedVariant is the half of the dead end
+// that lives in Go: a verified command mounts a known_hosts file, so there is
+// one only when the server can hand that file over.
+func TestDockerCmdsWithoutHostKeyHasNoVerifiedVariant(t *testing.T) {
+	s := &Server{publicHost: "backup.test:2222", clientImage: "img"}
+	known, insecure := s.dockerCmds("tok3n", s.apiBase("http"), "/srv/photos", "/etc/backitup/nas", false)
+	if known != "" {
+		t.Errorf("no host key, yet a verified command was generated:\n%s", known)
+	}
+	if !strings.Contains(insecure, "-e BACKITUP_INSECURE=1 \\\n") {
+		t.Errorf("insecure command does not say what it gives up:\n%s", insecure)
+	}
+	if strings.Contains(insecure, "BACKITUP_KNOWN_HOSTS") {
+		t.Errorf("insecure command references a known_hosts file that does not exist:\n%s", insecure)
+	}
+}
+
 func TestDockerCmdsConfiguredAPICarriesNoHint(t *testing.T) {
 	s := &Server{publicHost: "backup.test:2222", publicAPI: "http://10.0.0.1:8080", clientImage: "img"}
-	known, _ := s.dockerCmds("tok3n", s.apiBase("http"), "/src", "/sec")
+	known, _ := s.dockerCmds("tok3n", s.apiBase("http"), "/src", "/sec", true)
 	assertPasteSafe(t, "known", known)
 	if strings.Contains(known, "#") {
 		t.Errorf("configured command should carry no hint comment:\n%s", known)
+	}
+	if s.apiPlaceholderHint() != "" {
+		t.Errorf("configured server still asks the operator to fix the API address: %q", s.apiPlaceholderHint())
 	}
 	if !strings.Contains(known, "-e BACKITUP_API=http://10.0.0.1:8080 \\\n") {
 		t.Errorf("configured command does not use BACKITUP_PUBLIC_API:\n%s", known)
 	}
 	if !containsArg(runWithFakeDocker(t, known), "BACKITUP_API=http://10.0.0.1:8080") {
 		t.Error("docker never received the configured BACKITUP_API value")
+	}
+}
+
+// TestCronEntryIsACompleteCrontabLine is the unit-level guard for the fourth
+// defect: the operator was handed a schedule and a comment where a runnable
+// entry was promised. The entry must carry the schedule and the whole command,
+// and the command part must reach docker intact once cron's continuation
+// handling (a shell here) has joined the lines.
+func TestCronEntryIsACompleteCrontabLine(t *testing.T) {
+	s := &Server{publicHost: "backup.test:2222", clientImage: "img"}
+	_, insecure := s.dockerCmds("tok3n", s.apiBase("http"), "/srv/photos", "/etc/backitup/nas", false)
+	entry := cronEntry(defaultCronSchedule, insecure)
+
+	if strings.Contains(entry, "#") {
+		t.Errorf("cron entry carries a '#'; a crontab would read the rest of the line as a comment:\n%s", entry)
+	}
+	first, _, _ := strings.Cut(entry, "\n")
+	if first != defaultCronSchedule+" docker run --rm \\" {
+		t.Errorf("first line = %q, want the schedule followed by the command", first)
+	}
+	// The text a crontab holds is what runs, minus the schedule fields; prove the
+	// command body is intact.
+	args := runWithFakeDocker(t, strings.TrimPrefix(entry, defaultCronSchedule+" "))
+	if !containsArg(args, "BACKITUP_TOKEN=tok3n") {
+		t.Errorf("docker never received the token from the cron entry (argv=%q)", args)
+	}
+	if got := lastArg(args); got != s.clientImage {
+		t.Errorf("last docker arg = %q, want the image %q", got, s.clientImage)
+	}
+}
+
+// TestSecretsDirIsOneNameAndSourceIsNotBACKUP covers the two naming defects at
+// the source: the directory named in step 1 and the directory mounted by the
+// command come from the same function, and the source mount is only called a
+// BACKUP when the operator's own label says so.
+func TestSecretsDirIsOneNameAndSourceIsNotBACKUP(t *testing.T) {
+	if got := secretsDir("nas-photos", ""); got != "/etc/backitup/nas-photos" {
+		t.Errorf("default secrets dir = %q", got)
+	}
+	if got := secretsDir("nas-photos", " /srv/keys/nas "); got != "/srv/keys/nas" {
+		t.Errorf("form secrets dir = %q, want the trimmed form value", got)
+	}
+
+	cases := []struct {
+		form, label string
+		want        string
+		prefilled   bool
+	}{
+		{"", "/mnt/photos", "/mnt/photos", true},
+		{"", "~/photos", "~/photos", true},
+		{"", "photos on the NAS", sourcePlaceholder, false},
+		{"", "", sourcePlaceholder, false},
+		{"/srv/camera", "photos on the NAS", "/srv/camera", true},
+	}
+	for _, tc := range cases {
+		got, prefilled := sourceMount(tc.form, tc.label)
+		if got != tc.want || prefilled != tc.prefilled {
+			t.Errorf("sourceMount(%q, %q) = (%q, %v), want (%q, %v)",
+				tc.form, tc.label, got, prefilled, tc.want, tc.prefilled)
+		}
+		if strings.Contains(got, "BACKUP") {
+			t.Errorf("source mount %q names the source BACKUP", got)
+		}
 	}
 }
 

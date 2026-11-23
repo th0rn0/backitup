@@ -9,6 +9,9 @@
   var publicAPI   = meta.getAttribute('data-public-api')   || '';
   var publicHost  = meta.getAttribute('data-public-host')  || 'YOUR-SERVER:2222';
   var clientImage = meta.getAttribute('data-client-image') || 'th0rn0/backitup-client:latest';
+  // Only a server with BACKITUP_SSH_HOST_KEY can hand over a known_hosts file,
+  // and the created page reflects that. The preview must match it.
+  var hasHostKey  = meta.getAttribute('data-has-host-key') === '1';
 
   function apiBase() {
     if (publicAPI) return publicAPI;
@@ -26,7 +29,7 @@
 
   function buildCmd(backupPath, secretsPath) {
     var api = apiBase();
-    return [
+    var lines = [
       'docker run --rm \\',
       '  --user $(id -u):$(id -g) \\',
       '  --mount type=bind,src=' + backupPath + ',dst=/source,readonly \\',
@@ -35,15 +38,20 @@
       '  -e BACKITUP_SERVER=' + publicHost + ' \\',
       '  -e BACKITUP_TOKEN=<YOUR_TOKEN> \\',
       '  -e BACKITUP_SSH_KEY=/secrets/id \\',
-      '  -e BACKITUP_KNOWN_HOSTS=/secrets/known_hosts \\',
-      '  ' + clientImage,
-    ].join('\n');
+    ];
+    if (hasHostKey) {
+      lines.push('  -e BACKITUP_KNOWN_HOSTS=/secrets/known_hosts \\');
+    } else {
+      lines.push('  -e BACKITUP_INSECURE=1 \\');
+    }
+    lines.push('  ' + clientImage);
+    return lines.join('\n');
   }
 
   function update() {
     var nameEl     = document.getElementById('name');
     var clientName = (nameEl && nameEl.value.trim()) ? nameEl.value.trim() : 'client-name';
-    var backupPath  = val('backup_path',  '/PATH/TO/BACKUP');
+    var backupPath  = val('backup_path',  '/path/to/source');
     var secretsPath = val('secrets_path', '/etc/backitup/' + clientName);
     var preview = document.getElementById('docker-preview');
     if (preview) preview.value = buildCmd(backupPath, secretsPath);

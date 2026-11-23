@@ -345,7 +345,7 @@
             <div class="settings-group-title">Danger zone</div>
             <div class="danger-row">
               <div>
-                <p class="section-hint">Issues a new SSH key and bearer token. The old credentials stop working immediately — redeploy the cron line on the host after rotating.</p>
+                <p class="section-hint">Issues a new SSH key and bearer token. The old key and token stop working immediately, so update the token in the host's cron line after rotating: the next run fails with 401 until you do.</p>
                 <form method="POST" action="/clients/{{.Client.Slug}}/rotate">
                   <label class="checkbox-label">
                     <input type="checkbox" name="confirm" value="1" required>
