@@ -219,13 +219,28 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 		}
 		root = remoteRoot
 	}
-	offsited, err := d.offsitedSet(ctx, c.ID)
-	if err != nil {
-		return err
-	}
-
 	// Remove stale .part files left by interrupted uploads before any pruning.
 	prunePartOrphans(d, clientDir, c.Name)
+
+	// The remote check runs BEFORE the prune, not after it. pruneHot deletes a
+	// hot snapshot because an offsite record says the content is elsewhere, so
+	// the listing that answers "is it still?" has to be part of this pass: run
+	// after the prune, a pass could delete the last copy of a snapshot whose
+	// object the bucket's lifecycle rule expired minutes earlier, and only then
+	// notice it had. force is set when a delete is about to be justified by a
+	// dedupe claim, the one record that goes stale without anything here doing
+	// it (see pruneLeansOnDedupe).
+	objs, err := d.Store.ListOffsiteObjects(ctx, c.ID)
+	if err != nil {
+		return fmt.Errorf("list offsite objects: %w", err)
+	}
+	if verify {
+		verifyOffsiteObjects(ctx, d, c, root, pruneLeansOnDedupe(c, snaps, objs, d.now()))
+		if objs, err = d.Store.ListOffsiteObjects(ctx, c.ID); err != nil {
+			return fmt.Errorf("list offsite objects: %w", err)
+		}
+	}
+	offsited := offsitedSetFrom(objs)
 
 	// Uploads are handled exclusively by the offsite worker (RunOffsiteOnce /
 	// StartOffsiteWorker). The lifecycle worker only prunes the hot store and
@@ -235,9 +250,6 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	deleted, failed, pruneErr := pruneHot(ctx, d, c, sm, clientDir, snaps, offsiteOn, offsited)
 	if deleted > 0 || failed > 0 {
 		log.Printf("lifecycle: client %d (%s): hot prune: deleted=%d failed=%d", c.ID, c.Name, deleted, failed)
-	}
-	if verify {
-		verifyOffsiteObjects(ctx, d, c, root)
 	}
 	verifyLatest(ctx, c, sm, clientDir, snaps)
 	checkStaleAlert(ctx, d, c)
@@ -321,6 +333,15 @@ func uploadClient(ctx context.Context, d Deps, c model.Client, root string) erro
 	}
 	mode.SortNewestFirst(snaps)
 
+	// Look at the remote before deciding anything is already there. The dedupe
+	// below asks the database whether identical content is on the remote, and the
+	// database only knows what the last check saw; this pass is already talking
+	// to rclone and is about to *create* that claim, so an answer from the last
+	// hour is not enough. Unforced, an object the bucket's lifecycle rule expired
+	// would be deduplicated into a hole — a second false "offsited" record
+	// pointing at nothing, which is the failure this whole path exists to avoid.
+	verifyOffsiteObjects(ctx, d, c, root, true)
+
 	offsited, err := d.offsitedSet(ctx, c.ID)
 	if err != nil {
 		return err
@@ -347,6 +368,12 @@ func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool,
 	if err != nil {
 		return nil, err
 	}
+	return offsitedSetFrom(objs), nil
+}
+
+// offsitedSetFrom is offsitedSet's answer for records already loaded, so a pass
+// that had to re-read them after verification does not query twice.
+func offsitedSetFrom(objs []model.OffsiteObject) map[string]bool {
 	present := make(map[string]bool, len(objs))
 	for _, o := range objs {
 		if o.DedupOf == "" && !o.RemoteMissing {
@@ -365,7 +392,47 @@ func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool,
 			set[o.SnapshotID] = true
 		}
 	}
-	return set, nil
+	return set
+}
+
+// pruneLeansOnDedupe reports whether this pass would delete a hot snapshot on
+// the strength of a dedupe claim.
+//
+// Every other offsite record names an object this build uploaded itself, so it
+// only goes stale when someone else acts. A dedupe record is an inference —
+// "my content lives in that object" — and the B2 bucket's lifecycle rule can
+// make it false without backitup hearing about it. The hourly verification
+// throttle exists so that an idle fleet does not talk to rclone on every pass;
+// when such a claim is about to justify deleting a hot copy, an answer from the
+// previous hour is not good enough and the caller must look now.
+func pruneLeansOnDedupe(c model.Client, snaps []mode.Snapshot, objs []model.OffsiteObject, now time.Time) bool {
+	if c.RetentionDays <= 0 || len(snaps) <= 1 {
+		return false
+	}
+	dedupBacked := make(map[string]bool, len(objs))
+	for _, o := range objs {
+		if o.DedupOf != "" {
+			dedupBacked[o.SnapshotID] = true
+		}
+	}
+	if len(dedupBacked) == 0 {
+		return false
+	}
+	cutoff := now.Add(-time.Duration(c.RetentionDays) * 24 * time.Hour)
+	newest, ok := newestSnapshot(snaps)
+	if !ok {
+		return false
+	}
+	offsited := offsitedSetFrom(objs)
+	for _, s := range snaps {
+		if s.ID == newest.ID || !s.CreatedAt.Before(cutoff) {
+			continue
+		}
+		if dedupBacked[s.ID] && offsited[s.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 // offsiteNewSnapshots uploads snapshots not yet in cold storage.
@@ -671,9 +738,14 @@ func logUnsupportedRemote(worker string, c model.Client) {
 
 // verifyOffsiteObjects calls rclone lsf for the client's remote directory and
 // updates the remote_missing / remote_verified_at fields on each offsite_objects
-// row. Throttled to once per hour per client: if the oldest verified_at is
-// within the last hour, the check is skipped.
-func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root string) {
+// row, then reconciles the dedupe records against what that listing showed.
+//
+// Throttled to once per hour per client: if the oldest verified_at is within the
+// last hour, the check is skipped. force bypasses the throttle for the callers
+// that are about to *act* on the answer — the hot pruner (which deletes on the
+// strength of "there is a copy elsewhere") and the uploader (which skips an
+// upload on the strength of the same claim).
+func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root string, force bool) {
 	all, err := d.Store.ListOffsiteObjects(ctx, c.ID)
 	if err != nil {
 		return
@@ -692,18 +764,20 @@ func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root stri
 	}
 
 	// Skip if all objects have been checked within the last hour.
-	oldestVerified := time.Time{}
-	for _, o := range objects {
-		if o.RemoteVerifiedAt.IsZero() {
-			oldestVerified = time.Time{} // force run
-			break
+	if !force {
+		oldestVerified := time.Time{}
+		for _, o := range objects {
+			if o.RemoteVerifiedAt.IsZero() {
+				oldestVerified = time.Time{} // force run
+				break
+			}
+			if oldestVerified.IsZero() || o.RemoteVerifiedAt.Before(oldestVerified) {
+				oldestVerified = o.RemoteVerifiedAt
+			}
 		}
-		if oldestVerified.IsZero() || o.RemoteVerifiedAt.Before(oldestVerified) {
-			oldestVerified = o.RemoteVerifiedAt
+		if !oldestVerified.IsZero() && d.now().Sub(oldestVerified) < time.Hour {
+			return
 		}
-	}
-	if !oldestVerified.IsZero() && d.now().Sub(oldestVerified) < time.Hour {
-		return
 	}
 
 	dir := offsiteDir(c)
@@ -721,19 +795,64 @@ func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root stri
 	}
 
 	now := d.now().UTC()
+	missingOwners := make(map[string]bool, len(objects))
 	for _, o := range objects {
-		expectedName := o.SnapshotID
-		if c.Mode == model.ModeRsync {
-			expectedName += ".tar.gz"
-		}
-		missing := !fileSet[expectedName]
+		missing := !fileSet[objectName(c.Mode, o.SnapshotID)]
 		if err := d.Store.UpdateOffsiteRemoteStatus(ctx, o.ID, missing, now); err != nil {
 			log.Printf("lifecycle: offsite verify: update: %v", err)
+			continue
 		}
 		if missing {
+			missingOwners[o.SnapshotID] = true
 			log.Printf("lifecycle: offsite verify: client=%s snap=%s missing from %s", c.Name, o.SnapshotID, c.OffsiteRemote)
 		}
 	}
+	flagGoneDedupOwners(ctx, d, c, all, missingOwners, now)
+}
+
+// flagGoneDedupOwners marks the dedupe rows whose owner object the listing just
+// reported gone, which is what stops them claiming an offsite copy that does not
+// exist.
+//
+// A dedupe row says "my content lives in that object". Once the bucket's
+// lifecycle rule expires that object the claim is false, and it is the dangerous
+// kind of false: offsitedSet reads it as "a copy exists elsewhere", so pruneHot
+// deletes the hot snapshot that is now the only one. Marking the dependent row
+// missing makes the claim untrue in the same place both the pruner and the
+// uploader read it: the next upload pass sees an un-offsited snapshot and
+// re-uploads it (a re-upload writes a real object of its own, which clears the
+// flag — see store.RecordOffsiteObject).
+//
+// The line is emitted once per client per pass, and only on the transition: an
+// unchanged tree can have dozens of rows pointing at one expired object, and a
+// re-upload that cannot happen (the client was removed, the directory is gone)
+// must not re-announce itself every pass. In that case the hot copy simply
+// stays — the only-copy rule wins over retention.
+func flagGoneDedupOwners(ctx context.Context, d Deps, c model.Client, all []model.OffsiteObject, missingOwners map[string]bool, now time.Time) {
+	if len(missingOwners) == 0 {
+		return
+	}
+	var gone []model.OffsiteObject
+	for _, o := range all {
+		if o.DedupOf == "" || o.RemoteMissing || !missingOwners[o.DedupOf] {
+			continue
+		}
+		if err := d.Store.UpdateOffsiteRemoteStatus(ctx, o.ID, true, now); err != nil {
+			log.Printf("lifecycle: offsite verify: flag %s as needing a re-upload: %v", o.SnapshotID, err)
+			continue
+		}
+		gone = append(gone, o)
+	}
+	if len(gone) == 0 {
+		return
+	}
+	first := gone[0]
+	more := ""
+	if n := len(gone) - 1; n > 0 {
+		more = fmt.Sprintf(" (and %d more run(s) deduplicated against the same object)", n)
+	}
+	log.Printf("lifecycle: offsite object %s referenced by run %s is gone (expired by the bucket lifecycle rule): re-uploading%s",
+		objectName(c.Mode, first.DedupOf), objectName(c.Mode, first.SnapshotID), more)
 }
 
 // offsiteDue returns true when the client's cron schedule has a tick between
@@ -784,6 +903,10 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 		return fmt.Errorf("list snapshots: %w", err)
 	}
 	mode.SortNewestFirst(snaps)
+
+	// Same reason as uploadClient: this pass is about to decide what is already
+	// on the remote, so it looks now rather than trusting the last hour's answer.
+	verifyOffsiteObjects(ctx, d, c, root, true)
 
 	offsited, err := d.offsitedSet(ctx, c.ID)
 	if err != nil {
@@ -862,15 +985,22 @@ func remoteDir(root, dir string) string {
 	return p
 }
 
+// objectName is the filename one snapshot has inside the remote directory: an
+// rsync snapshot is a directory and goes up as a single archive, a tar.gz
+// snapshot is already the archive.
+func objectName(m model.Mode, snapshotID string) string {
+	if m == model.ModeRsync {
+		return snapshotID + ".tar.gz"
+	}
+	return snapshotID
+}
+
 // objectPath returns the path of one snapshot's offsite object:
 // "<root>/<dir>/<file>", where root is the bucket (and optional prefix) the
 // remote was configured with — "" for a remote backitup has no row for, which
 // keeps the old path.
 func objectPath(root, dir string, m model.Mode, snapshotID string) string {
-	name := snapshotID
-	if m == model.ModeRsync {
-		name = snapshotID + ".tar.gz" // rsync snapshot dir -> one offsite archive
-	}
+	name := objectName(m, snapshotID)
 	if d := remoteDir(root, dir); d != "" {
 		return d + "/" + name
 	}

@@ -35,8 +35,13 @@ func newClientIn(t *testing.T, st *store.Store, base string, c model.Client) (in
 // intact. Once the verification pass reports the owner's object missing, the
 // content is nowhere — so the hot copy of the duplicate must be kept, and the real
 // object of another client with an intact record must still be pruned.
+//
+// The two cases run as separate passes with separate remotes on purpose: the pass
+// reconciles each client's records against what its remote reports before it
+// prunes, so "intact" has to mean an object the remote really holds and "missing"
+// a remote that really does not have it. One fake shared by both would have to
+// report the same filename as present and absent at once.
 func TestDedupRecordOnlyProtectsWhileOwnerObjectExists(t *testing.T) {
-	st := openStore(t)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	ctx := context.Background()
 
@@ -53,51 +58,58 @@ func TestDedupRecordOnlyProtectsWhileOwnerObjectExists(t *testing.T) {
 		{"owner-missing", true, want{pruned: nil, kept: []string{"backup-20260617T000000Z-000.tar.gz", "backup-20260616T000000Z-000.tar.gz", "backup-20260618T000000Z-000.tar.gz"}}},
 	}
 
-	base := t.TempDir()
-	off := &fakeOffsite{}
 	for _, tc := range cases {
-		id, _, dir := newClientIn(t, st, base, model.Client{
-			Name: tc.name, Mode: model.ModeTarGz, OffsiteRemote: "local",
-			RetentionDays: 1, Enabled: true,
-		})
-		mkArchiveContent(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour), tc.name+"-new")
-		mkArchiveContent(t, filepath.Join(dir, "backup-20260616T000000Z-000.tar.gz"), now.Add(-40*time.Hour), tc.name+"-content")
-		mkArchiveContent(t, filepath.Join(dir, "backup-20260617T000000Z-000.tar.gz"), now.Add(-30*time.Hour), tc.name+"-content")
+		t.Run(tc.name, func(t *testing.T) {
+			st := openStore(t)
+			base := t.TempDir()
+			id, _, dir := newClientIn(t, st, base, model.Client{
+				Name: tc.name, Mode: model.ModeTarGz, OffsiteRemote: "local",
+				RetentionDays: 1, Enabled: true,
+			})
+			mkArchiveContent(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour), tc.name+"-new")
+			mkArchiveContent(t, filepath.Join(dir, "backup-20260616T000000Z-000.tar.gz"), now.Add(-40*time.Hour), tc.name+"-content")
+			mkArchiveContent(t, filepath.Join(dir, "backup-20260617T000000Z-000.tar.gz"), now.Add(-30*time.Hour), tc.name+"-content")
 
-		if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
-			ClientID: id, SnapshotID: "backup-20260616T000000Z-000.tar.gz", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour),
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
-			ClientID: id, SnapshotID: "backup-20260617T000000Z-000.tar.gz", Remote: "local", DedupOf: "backup-20260616T000000Z-000.tar.gz",
-			UploadedAt: now.Add(-30 * 24 * time.Hour),
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if tc.missing {
-			if err := st.UpdateOffsiteRemoteStatus(ctx, offsiteRowID(t, st, id, "backup-20260616T000000Z-000.tar.gz"), true, now); err != nil {
+			if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
+				ClientID: id, SnapshotID: "backup-20260616T000000Z-000.tar.gz", Remote: "local", UploadedAt: now.Add(-40 * 24 * time.Hour),
+			}); err != nil {
 				t.Fatal(err)
 			}
-		}
-	}
+			if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{
+				ClientID: id, SnapshotID: "backup-20260617T000000Z-000.tar.gz", Remote: "local", DedupOf: "backup-20260616T000000Z-000.tar.gz",
+				UploadedAt: now.Add(-30 * 24 * time.Hour),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.missing {
+				if err := st.UpdateOffsiteRemoteStatus(ctx, offsiteRowID(t, st, id, "backup-20260616T000000Z-000.tar.gz"), true, now); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	deps := Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}
-	if err := RunOnce(ctx, deps); err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	for _, tc := range cases {
-		dir := filepath.Join(base, model.Slug(tc.name))
-		for _, name := range tc.wantKill.pruned {
-			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-				t.Errorf("%s: %s should have been pruned", tc.name, name)
+			// The remote holds the owner's object exactly when the claim is true.
+			off := &fakeOffsite{}
+			if !tc.missing {
+				off.up = map[string]int64{
+					objectPath("", model.Slug(tc.name), model.ModeTarGz, "backup-20260616T000000Z-000.tar.gz"): 1,
+				}
 			}
-		}
-		for _, name := range tc.wantKill.kept {
-			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-				t.Errorf("%s: %s must survive: %v", tc.name, name, err)
+
+			deps := Deps{Store: st, Offsite: off, BackupBaseDir: base, Now: func() time.Time { return now }}
+			if err := RunOnce(ctx, deps); err != nil {
+				t.Fatalf("RunOnce: %v", err)
 			}
-		}
+			for _, name := range tc.wantKill.pruned {
+				if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+					t.Errorf("%s: %s should have been pruned", tc.name, name)
+				}
+			}
+			for _, name := range tc.wantKill.kept {
+				if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+					t.Errorf("%s: %s must survive: %v", tc.name, name, err)
+				}
+			}
+		})
 	}
 }
 

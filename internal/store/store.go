@@ -655,6 +655,13 @@ func (s *Store) GetAdmin(ctx context.Context) (*model.Admin, error) {
 // on client+snapshot+remote). A deduplicated upload sets DedupOf to the snapshot
 // id that owns the remote object; such a row carries Bytes=0 because nothing was
 // transferred and the content is already counted against the owner.
+//
+// The verification columns are cleared, always: this row is being written
+// because the content was just put on the remote (or found there), so a
+// remote_missing flag from an earlier pass describes an object that no longer
+// describes this row. Leaving it set would make a re-uploaded snapshot
+// permanently un-offsited — the hot copy would never be pruned and every pass
+// would upload it again.
 func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) error {
 	uploaded := o.UploadedAt
 	if uploaded.IsZero() {
@@ -663,7 +670,7 @@ func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at, checksum, dedup_of)
 		VALUES (?,?,?,?,?,?,?)
-		ON CONFLICT(client_id, snapshot_id, remote) DO UPDATE SET bytes=excluded.bytes, uploaded_at=excluded.uploaded_at, checksum=excluded.checksum, dedup_of=excluded.dedup_of`,
+		ON CONFLICT(client_id, snapshot_id, remote) DO UPDATE SET bytes=excluded.bytes, uploaded_at=excluded.uploaded_at, checksum=excluded.checksum, dedup_of=excluded.dedup_of, remote_missing=0, remote_verified_at=''`,
 		o.ClientID, o.SnapshotID, o.Remote, o.Bytes, uploaded.UTC().Format(rfc3339), o.Checksum, o.DedupOf)
 	if err != nil {
 		return fmt.Errorf("record offsite object: %w", err)

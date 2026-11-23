@@ -53,6 +53,66 @@ func TestOffsiteObjects(t *testing.T) {
 	}
 }
 
+func TestRecordOffsiteObjectClearsAVerificationFinding(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	id, _ := st.CreateClient(ctx, model.Client{Name: "c", Mode: model.ModeTarGz, Enabled: true})
+
+	// A row the verification pass reported missing.
+	if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s", Remote: "r", Bytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+	verifiedAt := time.Now().UTC().Truncate(time.Second)
+	if err := st.UpdateOffsiteRemoteStatus(ctx, offsiteRowIDFor(t, st, id, "s"), true, verifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	if o := onlyOffsiteObject(t, st, id); !o.RemoteMissing || o.RemoteVerifiedAt.IsZero() {
+		t.Fatalf("the finding was not recorded: %+v", o)
+	}
+
+	// Re-recording means the content was just put on the remote (a re-upload, or a
+	// dedupe whose owner is present now). The old finding describes an object this
+	// row no longer describes, and leaving it set would make the snapshot
+	// permanently un-offsited: never prunable, re-uploaded every pass.
+	if err := st.RecordOffsiteObject(ctx, model.OffsiteObject{ClientID: id, SnapshotID: "s", Remote: "r", Bytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if o := onlyOffsiteObject(t, st, id); o.RemoteMissing || !o.RemoteVerifiedAt.IsZero() {
+		t.Fatalf("a re-recorded object still carries the previous verification finding: %+v", o)
+	}
+}
+
+func offsiteRowIDFor(t *testing.T, st *Store, clientID int64, snapshotID string) int64 {
+	t.Helper()
+	objs, err := st.ListOffsiteObjects(context.Background(), clientID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range objs {
+		if o.SnapshotID == snapshotID {
+			return o.ID
+		}
+	}
+	t.Fatalf("no offsite row for %s", snapshotID)
+	return 0
+}
+
+func onlyOffsiteObject(t *testing.T, st *Store, clientID int64) model.OffsiteObject {
+	t.Helper()
+	objs, err := st.ListOffsiteObjects(context.Background(), clientID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 1 {
+		t.Fatalf("offsite rows = %d, want 1: %+v", len(objs), objs)
+	}
+	return objs[0]
+}
+
 func TestPruneRuns(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
