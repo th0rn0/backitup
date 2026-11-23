@@ -31,9 +31,19 @@ func (s *Server) writeRcloneConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A crypt section has to name the path inside its plaintext parent (the
+	// parent's bucket and prefix), so the writer resolves parents by name.
+	byName := make(map[string]model.Remote, len(remotes))
+	for _, r := range remotes {
+		byName[r.Name] = r
+	}
+	parent := func(name string) (model.Remote, bool) {
+		r, ok := byName[name]
+		return r, ok
+	}
 	sections := make([]string, 0, len(remotes))
 	for _, r := range remotes {
-		sections = append(sections, r.RcloneSection())
+		sections = append(sections, r.RcloneSectionFor(parent))
 	}
 	existing, err := readFileIfExists(s.rcloneConfig)
 	if err != nil {
@@ -82,10 +92,12 @@ func (s *Server) getRemotes(w http.ResponseWriter, r *http.Request) {
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "remotes",
 		"Remotes":    remotes,
-		"Backends":   model.Backends,
-		"Flash":      flash,
-		"Error":      errMsg,
-		"NoRclone":   s.rcloneConfig == "",
+		// The create form is B2-only (there is no type selector) plus the
+		// optional crypt wrapper, whose field list still comes from the model.
+		"Crypt":    model.FindBackend(model.BackendCrypt),
+		"Flash":    flash,
+		"Error":    errMsg,
+		"NoRclone": s.rcloneConfig == "",
 	})
 }
 
@@ -98,7 +110,17 @@ func (s *Server) postCreateRemote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	backend := model.RemoteBackend(r.PostFormValue("backend"))
+	backend, refusal := submittedBackend(r)
+
+	if refusal != "" {
+		// 400, not a redirect with a flash: this endpoint is the API as well as
+		// the form, and a caller that asked for a provider this build does not
+		// support must be told which value was refused — not left guessing why
+		// nothing was created. The form itself cannot send one (there is no
+		// type selector any more); only a hand-rolled request can.
+		http.Error(w, refusal, http.StatusBadRequest)
+		return
+	}
 
 	if name == "" {
 		http.Redirect(w, r, "/settings/remotes?err=Remote+name+is+required", http.StatusSeeOther)
@@ -216,11 +238,10 @@ func (s *Server) getEditRemote(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// A remote whose backend this build dropped cannot be edited: there is no
+	// field list to render and nothing here could produce a config that works.
+	// The page says so and the operator recreates it as B2 (or deletes it).
 	def := model.FindBackend(remote.Backend)
-	if def == nil {
-		http.NotFound(w, r)
-		return
-	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "remote_edit.html", map[string]any{
@@ -255,7 +276,12 @@ func (s *Server) postEditRemote(w http.ResponseWriter, r *http.Request) {
 	}
 	def := model.FindBackend(existing.Backend)
 	if def == nil {
-		http.NotFound(w, r)
+		// The row is kept so the operator can still see it, but this build
+		// cannot produce a config for its backend: say what to do instead of
+		// accepting an edit that could never work.
+		http.Redirect(w, r, "/settings/remotes?err="+url.QueryEscape(
+			"Remote \""+name+"\" has unsupported remote type \""+string(existing.Backend)+
+				"\" — recreate it as Backblaze B2 (delete it and add a B2 remote)"), http.StatusSeeOther)
 		return
 	}
 
@@ -431,6 +457,75 @@ func validRemoteName(name string) bool {
 	return true
 }
 
+// submittedBackend resolves the remote type a create request asked for, and
+// returns the refusal message when it is one this build does not support.
+//
+// Backblaze B2 is the only offsite provider, and a crypt remote is the optional
+// client-side encryption wrapper around one — the form no longer offers a
+// choice, so an absent type means b2. Everything else the old builds offered
+// (s3, s3-compat, drive, sftp, webdav, azureblob, ftp), rclone's `local` (kept
+// for the end-to-end test only) and any typo is refused with the offending
+// value named — no silent fallback and no 500, in the same spirit as the slug
+// and snapshot-id checks. `type` is accepted as a synonym for `backend`
+// (rclone.conf calls it `type`), so neither spelling can slip past the check.
+func submittedBackend(r *http.Request) (model.RemoteBackend, string) {
+	raw := strings.TrimSpace(r.PostFormValue("backend"))
+	if t := strings.TrimSpace(r.PostFormValue("type")); t != "" {
+		if raw != "" && raw != t {
+			return "", fmt.Sprintf("unsupported remote type %q: the request named two different types (%q and %q); "+
+				"the only offsite destination backitup supports is Backblaze B2 (type %q), optionally wrapped in a crypt remote",
+				t, raw, t, model.BackendB2)
+		}
+		raw = t
+	}
+	switch model.RemoteBackend(raw) {
+	case "":
+		return model.BackendB2, ""
+	case model.BackendB2:
+		return model.BackendB2, ""
+	case model.BackendCrypt:
+		return model.BackendCrypt, ""
+	}
+	return "", fmt.Sprintf("unsupported remote type %q: the only offsite destination backitup supports is "+
+		"Backblaze B2 (type %q), optionally wrapped in a crypt remote", raw, model.BackendB2)
+}
+
+// validB2Bucket reports whether s is a Backblaze B2 bucket name: 6 to 50
+// characters of lowercase letters, digits and hyphens. An existing deployment
+// may still carry its bucket inside the client's offsite directory; this only
+// constrains the bucket a remote is configured with.
+func validB2Bucket(s string) bool {
+	if len(s) < 6 || len(s) > 50 {
+		return false
+	}
+	if strings.HasPrefix(s, "-") || strings.HasSuffix(s, "-") {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// invalidObjectPrefix returns why a remote's optional path prefix cannot be
+// used inside an rclone path, or "" when it is fine. It is a relative path of
+// object-name segments: absolute (rclone would address a directory outside the
+// bucket) and ".." both have to go, and an empty segment would produce "//".
+func invalidObjectPrefix(s string) string {
+	if strings.HasPrefix(s, "/") {
+		return "must be relative to the bucket — drop the leading \"/\""
+	}
+	if strings.Contains(s, "..") {
+		return "must not contain \"..\""
+	}
+	if strings.Contains(s, "//") || strings.HasSuffix(s, "/") {
+		return "must not contain empty segments"
+	}
+	return ""
+}
+
 // validateRemoteConfig applies the checks that the field list alone cannot
 // make: values that must come from a fixed vocabulary, and a crypt remote's
 // reference to the plaintext remote it wraps. It returns an operator-facing
@@ -449,6 +544,24 @@ func (s *Server) validateRemoteConfig(ctx context.Context, name string, def *mod
 		if !f.AllowsValue(v) {
 			return f.Label + " is not one of the allowed choices", nil
 		}
+	}
+	if def.ID == model.BackendB2 {
+		// bucket and path are not rclone options — backitup prepends them to
+		// every object path (model.Remote.RootPath) — so they are checked here
+		// rather than trusted: a slash or a ".." in either would address a path
+		// the operator did not choose, outside the bucket it names.
+		if bucket := cfg["bucket"]; bucket != "" {
+			if !validB2Bucket(bucket) {
+				return fmt.Sprintf("Bucket %q is not a Backblaze B2 bucket name — 6 to 50 characters of "+
+					"lowercase letters, digits and hyphens, and no path separators", bucket), nil
+			}
+		}
+		if prefix := cfg["path"]; prefix != "" {
+			if reason := invalidObjectPrefix(prefix); reason != "" {
+				return "Path prefix " + reason, nil
+			}
+		}
+		return "", nil
 	}
 	if def.ID != model.BackendCrypt {
 		return "", nil

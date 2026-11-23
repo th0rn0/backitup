@@ -19,16 +19,25 @@ import (
 // rcloneStack builds a server+store with a rclone config path configured.
 func rcloneStack(t *testing.T) (*store.Store, *httptest.Server) {
 	t.Helper()
+	st, ts, _ := rcloneStackWithConf(t)
+	return st, ts
+}
+
+// rcloneStackWithConf also hands back the rclone.conf path, so a test can read
+// what the app actually wrote there.
+func rcloneStackWithConf(t *testing.T) (*store.Store, *httptest.Server, string) {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	srv := New(st, false)
-	srv.ConfigureRclone(filepath.Join(t.TempDir(), "rclone.conf"))
+	confPath := filepath.Join(t.TempDir(), "rclone.conf")
+	srv.ConfigureRclone(confPath)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return st, ts
+	return st, ts, confPath
 }
 
 // readBody drains and closes a response body.
@@ -144,12 +153,23 @@ func TestRemotesPageWithRclone(t *testing.T) {
 	if !strings.Contains(body, "Add remote") {
 		t.Error("add-remote section missing when rclone is configured")
 	}
-	// Backend options should be present in the dropdown.
-	if !strings.Contains(body, "Amazon S3") {
-		t.Error("Amazon S3 backend option missing")
+	// The create form asks for what B2 needs and offers no provider choice:
+	// offsite storage is Backblaze B2 only (Thorno, 2026-11-19).
+	if !strings.Contains(body, "Backblaze B2 only") {
+		t.Error("the page does not say B2 is the only supported destination")
 	}
-	if !strings.Contains(body, "Google Drive") {
-		t.Error("Google Drive backend option missing")
+	for _, field := range []string{`name="account"`, `name="key"`, `name="bucket"`, `name="path"`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("B2 form field %s missing from the page", field)
+		}
+	}
+	if strings.Contains(body, `id="add-remote-backend"`) || strings.Contains(body, `name="backend" value="b2"`) {
+		t.Error("the page still offers a provider type selector")
+	}
+	for _, gone := range []string{"Amazon S3", "Google Drive", "SFTP", "WebDAV", "Azure Blob", "FTP"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the page still offers the dropped backend %q", gone)
+		}
 	}
 }
 
@@ -159,8 +179,8 @@ func TestRemotesPageShowsConfiguredRemotes(t *testing.T) {
 
 	// Insert a remote directly into the store.
 	if err := st.CreateRemote(t.Context(), model.Remote{
-		Name: "my-s3", Backend: model.BackendS3,
-		Config:    map[string]string{"access_key_id": "key", "secret_access_key": "sec", "region": "us-east-1"},
+		Name: "my-b2", Backend: model.BackendB2,
+		Config:    map[string]string{"account": "key", "key": "sec", "bucket": "my-backups"},
 		CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("create remote: %v", err)
@@ -171,10 +191,10 @@ func TestRemotesPageShowsConfiguredRemotes(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	body := readBody(t, resp)
-	if !strings.Contains(body, "my-s3") {
+	if !strings.Contains(body, "my-b2") {
 		t.Error("configured remote name not shown in table")
 	}
-	if !strings.Contains(body, "Amazon S3") {
+	if !strings.Contains(body, "Backblaze B2") {
 		t.Error("backend label not shown in table")
 	}
 }
@@ -202,7 +222,7 @@ func TestCreateRemoteRequiresLogin(t *testing.T) {
 	_, ts := testStack(t)
 	c := noRedirectClient()
 	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name": {"s3"}, "backend": {"s3"}, "access_key_id": {"k"}, "secret_access_key": {"s"},
+		"name": {"b2"}, "account": {"k"}, "key": {"s"}, "bucket": {"my-bucket"},
 	})
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -219,7 +239,7 @@ func TestCreateRemoteMissingName(t *testing.T) {
 	c := loggedInClient(t, st, ts)
 
 	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name": {""}, "backend": {"s3"}, "access_key_id": {"k"}, "secret_access_key": {"s"},
+		"name": {""}, "account": {"k"}, "key": {"s"}, "bucket": {"my-bucket"},
 	})
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -235,7 +255,7 @@ func TestCreateRemoteInvalidName(t *testing.T) {
 	c := loggedInClient(t, st, ts)
 
 	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name": {"bad name!"}, "backend": {"s3"}, "access_key_id": {"k"}, "secret_access_key": {"s"},
+		"name": {"bad name!"}, "account": {"k"}, "key": {"s"}, "bucket": {"my-bucket"},
 	})
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -246,29 +266,65 @@ func TestCreateRemoteInvalidName(t *testing.T) {
 	}
 }
 
-func TestCreateRemoteUnknownBackend(t *testing.T) {
+// The type is not a choice any more. A request that names one this build does
+// not support is refused at the boundary with 400 and the offending value in
+// the message — not a silent fallback to b2, and not a 500.
+func TestCreateRemoteRefusesUnsupportedType(t *testing.T) {
 	st, ts := rcloneStack(t)
 	c := loggedInClient(t, st, ts)
 
-	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name": {"r"}, "backend": {"badbackend"},
-	})
-	if err != nil {
-		t.Fatalf("post: %v", err)
+	cases := []struct{ field, value string }{
+		{"backend", "s3"},
+		{"backend", "s3-compat"},
+		{"backend", "drive"},
+		{"backend", "sftp"},
+		{"backend", "webdav"},
+		{"backend", "azureblob"},
+		{"backend", "ftp"},
+		{"backend", "local"}, // the end-to-end test's backend: never configurable
+		{"backend", "badbackend"},
+		// `type` is rclone's own spelling for the same knob; it must not be a
+		// way round the check.
+		{"type", "s3"},
 	}
-	body := readBody(t, resp)
-	if !strings.Contains(body, "Unknown") {
-		t.Errorf("unknown-backend error not in body; got:\n%s", body[:min(len(body), 500)])
+	for _, tc := range cases {
+		form := url.Values{
+			"name": {"r"}, "account": {"k"}, "key": {"s"}, "bucket": {"my-bucket"},
+			tc.field: {tc.value},
+		}
+		resp, err := c.PostForm(ts.URL+"/settings/remotes", form)
+		if err != nil {
+			t.Fatalf("post %s=%s: %v", tc.field, tc.value, err)
+		}
+		body := readBody(t, resp)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s=%s: status = %d, want 400 (body: %s)", tc.field, tc.value, resp.StatusCode, body[:min(len(body), 300)])
+		}
+		if !strings.Contains(body, tc.value) {
+			t.Errorf("%s=%s: refusal does not name the offending value; got: %s", tc.field, tc.value, body)
+		}
+		if !strings.Contains(body, "b2") {
+			t.Errorf("%s=%s: refusal does not say what is supported; got: %s", tc.field, tc.value, body)
+		}
+	}
+	// Nothing was stored by any of the refusals.
+	remotes, err := st.ListRemotes(t.Context())
+	if err != nil {
+		t.Fatalf("list remotes: %v", err)
+	}
+	if len(remotes) != 0 {
+		t.Fatalf("a refused create stored %d remote(s): %+v", len(remotes), remotes)
 	}
 }
 
-func TestCreateS3RemoteMissingFields(t *testing.T) {
+func TestCreateB2RemoteMissingFields(t *testing.T) {
 	st, ts := rcloneStack(t)
 	c := loggedInClient(t, st, ts)
 
 	cases := []url.Values{
-		{"name": {"s3"}, "backend": {"s3"}, "access_key_id": {""}, "secret_access_key": {"s"}},
-		{"name": {"s3"}, "backend": {"s3"}, "access_key_id": {"k"}, "secret_access_key": {""}},
+		{"name": {"b2"}, "account": {""}, "key": {"s"}, "bucket": {"my-bucket"}},
+		{"name": {"b2"}, "account": {"k"}, "key": {""}, "bucket": {"my-bucket"}},
+		{"name": {"b2"}, "account": {"k"}, "key": {"s"}, "bucket": {""}},
 	}
 	for _, form := range cases {
 		resp, err := c.PostForm(ts.URL+"/settings/remotes", form)
@@ -282,100 +338,88 @@ func TestCreateS3RemoteMissingFields(t *testing.T) {
 	}
 }
 
-func TestCreateS3RemoteSuccess(t *testing.T) {
-	st, ts := rcloneStack(t)
+// A B2 remote is created from what B2 needs — name, keyID, applicationKey,
+// bucket — and the managed block in rclone.conf carries type = b2 plus those
+// values. The form sends no backend at all now, so this is also the check that
+// an absent type means b2.
+func TestCreateB2RemoteSuccess(t *testing.T) {
+	st, ts, confPath := rcloneStackWithConf(t)
 	c := loggedInClient(t, st, ts)
 
 	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name":              {"my-s3"},
-		"backend":           {"s3"},
-		"access_key_id":     {"AKIAIOSFODNN7EXAMPLE"},
-		"secret_access_key": {"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
-		"region":            {"us-east-1"},
+		"name":    {"b2-offsite"},
+		"account": {"004appkeyid"},
+		"key":     {"K004applicationkey"},
+		"bucket":  {"my-backups"},
+		"path":    {"clients"},
 	})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
 	body := readBody(t, resp)
-	if !strings.Contains(body, "my-s3") {
+	if !strings.Contains(body, "b2-offsite") {
 		t.Errorf("success flash missing remote name; got:\n%s", body[:min(len(body), 500)])
 	}
-}
 
-func TestCreateS3CompatRemoteSuccess(t *testing.T) {
-	st, ts := rcloneStack(t)
-	c := loggedInClient(t, st, ts)
+	remote, err := st.GetRemoteByName(t.Context(), "b2-offsite")
+	if err != nil || remote == nil {
+		t.Fatalf("remote not stored: %v (remote=%v)", err, remote)
+	}
+	if remote.Backend != model.BackendB2 {
+		t.Fatalf("stored backend = %q, want %q", remote.Backend, model.BackendB2)
+	}
+	if remote.Unsupported {
+		t.Fatal("a remote created by this build is marked unsupported")
+	}
 
-	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name":              {"r2"},
-		"backend":           {"s3-compat"},
-		"access_key_id":     {"key"},
-		"secret_access_key": {"secret"},
-		"endpoint":          {"https://account.r2.cloudflarestorage.com"},
-	})
+	confBytes, err := os.ReadFile(confPath)
 	if err != nil {
-		t.Fatalf("post: %v", err)
+		t.Fatalf("read rclone.conf: %v", err)
 	}
-	body := readBody(t, resp)
-	if !strings.Contains(body, "r2") {
-		t.Errorf("success flash missing remote name; got:\n%s", body[:min(len(body), 500)])
+	conf := string(confBytes)
+	wantIn := func(want ...string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(conf, w) {
+				t.Fatalf("rclone.conf does not contain %q:\n%s", w, conf)
+			}
+		}
 	}
-}
-
-func TestCreateGDriveRemoteMissingCreds(t *testing.T) {
-	st, ts := rcloneStack(t)
-	c := loggedInClient(t, st, ts)
-
-	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name": {"gdrive"}, "backend": {"drive"}, "service_account_credentials": {""},
-		"team_drive": {"0ABCxyz"},
-	})
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	body := readBody(t, resp)
-	if !strings.Contains(body, "required") {
-		t.Errorf("missing-creds error not in body; got:\n%s", body[:min(len(body), 500)])
+	wantIn("[b2-offsite]", "type = b2", "account = 004appkeyid", "bucket = my-backups", "path = clients")
+	if !strings.Contains(conf, rcloneManagedBegin) {
+		t.Fatalf("the remote was not written inside the managed block:\n%s", conf)
 	}
 }
 
-func TestCreateGDriveRemoteMissingTeamDrive(t *testing.T) {
+// A bucket that is not a bucket name is refused with the value named: it
+// becomes part of every rclone path, so a slash or ".." in it would address a
+// path the operator did not choose.
+func TestCreateB2RemoteRefusesBadBucketAndPrefix(t *testing.T) {
 	st, ts := rcloneStack(t)
 	c := loggedInClient(t, st, ts)
 
-	cred := `{"type":"service_account","project_id":"proj","private_key_id":"kid","private_key":"key","client_email":"svc@proj.iam.gserviceaccount.com","client_id":"1","auth_uri":"u","token_uri":"u"}`
-	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name":                        {"gdrive"},
-		"backend":                     {"drive"},
-		"service_account_credentials": {cred},
-		// team_drive intentionally omitted
-	})
-	if err != nil {
-		t.Fatalf("post: %v", err)
+	cases := []struct{ bucket, prefix, want string }{
+		{"my/bucket", "", "my/bucket"},
+		{"../escape", "", "../escape"},
+		{"My-Bucket", "", "My-Bucket"},
+		{"my-backups", "/abs", "Path prefix"},
+		{"my-backups", "a/../b", "Path prefix"},
 	}
-	body := readBody(t, resp)
-	if !strings.Contains(body, "required") {
-		t.Errorf("missing team_drive error not in body; got:\n%s", body[:min(len(body), 500)])
+	for _, tc := range cases {
+		resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
+			"name": {"b2"}, "account": {"k"}, "key": {"s"},
+			"bucket": {tc.bucket}, "path": {tc.prefix},
+		})
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		body := readBody(t, resp)
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("bucket=%q prefix=%q: refusal does not mention %q; got:\n%s", tc.bucket, tc.prefix, tc.want, body[:min(len(body), 400)])
+		}
 	}
-}
-
-func TestCreateGDriveRemoteSuccess(t *testing.T) {
-	st, ts := rcloneStack(t)
-	c := loggedInClient(t, st, ts)
-
-	cred := `{"type":"service_account","project_id":"proj","private_key_id":"kid","private_key":"key","client_email":"svc@proj.iam.gserviceaccount.com","client_id":"1","auth_uri":"u","token_uri":"u"}`
-	resp, err := c.PostForm(ts.URL+"/settings/remotes", url.Values{
-		"name":                        {"gdrive"},
-		"backend":                     {"drive"},
-		"service_account_credentials": {cred},
-		"team_drive":                  {"0ABCxyzSharedDriveID"},
-	})
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	body := readBody(t, resp)
-	if !strings.Contains(body, "gdrive") {
-		t.Errorf("success flash missing remote name; got:\n%s", body[:min(len(body), 500)])
+	if remotes, err := st.ListRemotes(t.Context()); err != nil || len(remotes) != 0 {
+		t.Fatalf("a refused create stored remotes: %+v (err=%v)", remotes, err)
 	}
 }
 
@@ -385,9 +429,9 @@ func TestCreateRemoteDuplicateName(t *testing.T) {
 
 	form := url.Values{
 		"name":    {"dup"},
-		"backend": {"b2"},
 		"account": {"appkeyid"},
 		"key":     {"appkey"},
+		"bucket":  {"my-backups"},
 	}
 	// First POST creates the remote.
 	if _, err := c.PostForm(ts.URL+"/settings/remotes", form); err != nil {
@@ -498,8 +542,8 @@ func TestRcloneConfigWriteFailureKeepsOldFile(t *testing.T) {
 	srv.ConfigureRclone(confPath)
 
 	if err := st.CreateRemote(t.Context(), model.Remote{
-		Name: "old-s3", Backend: model.BackendS3,
-		Config:    map[string]string{"access_key_id": "key", "secret_access_key": "sec", "region": "us-east-1"},
+		Name: "old-b2", Backend: model.BackendB2,
+		Config:    map[string]string{"account": "acct", "key": "k", "bucket": "my-backups"},
 		CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("create remote: %v", err)
@@ -511,15 +555,15 @@ func TestRcloneConfigWriteFailureKeepsOldFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seeded config: %v", err)
 	}
-	if !strings.Contains(string(before), "[old-s3]") {
-		t.Fatalf("seeded config missing old-s3 section: %q", before)
+	if !strings.Contains(string(before), "[old-b2]") {
+		t.Fatalf("seeded config missing old-b2 section: %q", before)
 	}
 
 	// A second remote makes the regenerated content different from the file on
 	// disk, so a truncating write would be visible.
 	if err := st.CreateRemote(t.Context(), model.Remote{
 		Name: "new-b2", Backend: model.BackendB2,
-		Config:    map[string]string{"account": "acct", "key": "k"},
+		Config:    map[string]string{"account": "acct2", "key": "k2", "bucket": "my-backups"},
 		CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("create second remote: %v", err)
@@ -542,7 +586,7 @@ func TestRcloneConfigWriteFailureKeepsOldFile(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("failed write changed rclone.conf:\n got: %q\nwant: %q", after, before)
 	}
-	if !strings.Contains(string(after), "[old-s3]") || !strings.Contains(string(after), "type = s3") {
+	if !strings.Contains(string(after), "[old-b2]") || !strings.Contains(string(after), "type = b2") {
 		t.Fatalf("rclone.conf is not the complete old config: %q", after)
 	}
 	if strings.Contains(string(after), "new-b2") {

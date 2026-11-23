@@ -145,6 +145,7 @@ func createPlaintextRemote(t *testing.T, c *http.Client, base, name string) {
 	t.Helper()
 	body := postForm(t, c, base+"/settings/remotes", url.Values{
 		"name": {name}, "backend": {"b2"}, "account": {name + "-account"}, "key": {name + "-key"},
+		"bucket": {name + "-bucket"},
 	})
 	wantIn(t, "create plaintext remote "+name, body, "created")
 }
@@ -211,7 +212,7 @@ func TestHandWrittenRcloneSectionSurvivesEveryWrite(t *testing.T) {
 		t.Fatalf("create crypt remote: flash missing %q:\n%s", "created", body)
 	}
 	got = check("after POST /settings/remotes (crypt remote)")
-	wantIn(t, "after crypt create", got, "[vault]", "type = crypt", "remote = provider:")
+	wantIn(t, "after crypt create", got, "[vault]", "type = crypt", "remote = provider:provider-bucket/")
 	if n := strings.Count(got, rcloneManagedEnd); n != 1 {
 		t.Fatalf("after crypt create: %d managed blocks in rclone.conf, want 1:\n%s", n, got)
 	}
@@ -271,7 +272,10 @@ func TestCreateCryptRemoteThroughAPI(t *testing.T) {
 	wantIn(t, "generated rclone.conf", conf,
 		"[vault]",
 		"type = crypt",
-		"remote = provider:", // references the plaintext remote rclone talks to
+		// The reference carries the parent's own root path: the bucket lives on
+		// the parent remote now, so a bare `provider:` would make rclone write
+		// at the top of the account.
+		"remote = provider:provider-bucket/", // references the plaintext remote rclone talks to
 		"filename_encryption = standard",
 		"[provider]",
 	)
@@ -529,7 +533,7 @@ func TestCreateRemoteRefusesNameTakenByHandWrittenSection(t *testing.T) {
 	}
 
 	loc := postNoRedirect(t, nc, ts.URL+"/settings/remotes", url.Values{
-		"name": {"crypt"}, "backend": {"b2"}, "account": {"acct"}, "key": {"key"},
+		"name": {"crypt"}, "backend": {"b2"}, "account": {"acct"}, "key": {"key"}, "bucket": {"some-bucket"},
 	})
 	if !strings.Contains(loc, "err=") || !strings.Contains(loc, `section named "crypt"`) {
 		t.Fatalf("create over a hand-written section = %q; want a refusal naming the section", loc)

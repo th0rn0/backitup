@@ -197,6 +197,28 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	mode.SortNewestFirst(snaps)
 
 	offsiteOn := d.Offsite != nil && c.OffsiteRemote != ""
+	verify := offsiteOn
+	root := ""
+	if c.OffsiteRemote != "" {
+		remoteRoot, unsupported, tErr := offsiteTarget(ctx, d, c)
+		if tErr != nil {
+			return fmt.Errorf("resolve offsite remote: %w", tErr)
+		}
+		if unsupported {
+			// The remote is one this build dropped: do not verify against it —
+			// a check that ran against a provider the project no longer
+			// supports would report on objects nothing is maintaining.
+			//
+			// offsiteOn deliberately STAYS true for the pruner: what it gates is
+			// "do not delete a hot copy that has no offsite copy", and with an
+			// unusable remote nothing is offsited. Treating the client as
+			// offsite-less here would prune the only copies of the data while
+			// the operator still believes they are tiered.
+			logUnsupportedRemote("lifecycle", c)
+			verify = false
+		}
+		root = remoteRoot
+	}
 	offsited, err := d.offsitedSet(ctx, c.ID)
 	if err != nil {
 		return err
@@ -214,8 +236,8 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	if deleted > 0 || failed > 0 {
 		log.Printf("lifecycle: client %d (%s): hot prune: deleted=%d failed=%d", c.ID, c.Name, deleted, failed)
 	}
-	if offsiteOn {
-		verifyOffsiteObjects(ctx, d, c)
+	if verify {
+		verifyOffsiteObjects(ctx, d, c, root)
 	}
 	verifyLatest(ctx, c, sm, clientDir, snaps)
 	checkStaleAlert(ctx, d, c)
@@ -248,6 +270,20 @@ func RunOffsiteOnce(ctx context.Context, d Deps) error {
 		if !c.Enabled || c.OffsiteRemote == "" {
 			continue
 		}
+		root, unsupported, err := offsiteTarget(ctx, d, c)
+		if err != nil {
+			// A store blip is not a reason to upload somewhere else: leave this
+			// client for the next pass rather than guessing its path.
+			log.Printf("offsite worker: client %d (%s): resolve remote: %v", c.ID, c.Name, err)
+			continue
+		}
+		if unsupported {
+			// Never upload through a remote this build does not support. The row
+			// is kept (the operator's configuration is theirs) and the UI says
+			// to recreate it as B2; until they do, this client is not tiered.
+			logUnsupportedRemote("offsite worker", c)
+			continue
+		}
 		if c.OffsiteCron != "" {
 			due, err := offsiteDue(ctx, d, c)
 			if err != nil {
@@ -258,7 +294,7 @@ func RunOffsiteOnce(ctx context.Context, d Deps) error {
 				continue
 			}
 		}
-		if err := uploadClient(ctx, d, c); err != nil {
+		if err := uploadClient(ctx, d, c, root); err != nil {
 			log.Printf("offsite worker: client %d (%s): %v", c.ID, c.Name, err)
 			if firstErr == nil {
 				firstErr = err
@@ -269,7 +305,8 @@ func RunOffsiteOnce(ctx context.Context, d Deps) error {
 }
 
 // uploadClient runs one upload pass for a single client and records the run.
-func uploadClient(ctx context.Context, d Deps, c model.Client) error {
+// root is the path prefix inside the client's remote (see offsiteTarget).
+func uploadClient(ctx context.Context, d Deps, c model.Client, root string) error {
 	sm, ok := mode.Server(c.Mode)
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
@@ -290,7 +327,7 @@ func uploadClient(ctx context.Context, d Deps, c model.Client) error {
 	}
 
 	start := d.now()
-	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited)
+	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited, root)
 	if snapsUploaded > 0 || uploadErr != nil {
 		recordOffsiteRun(ctx, d, c, "scheduled", start, snapsUploaded, bytesUploaded, uploadErr)
 	}
@@ -336,7 +373,7 @@ func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool,
 // is uploaded (snaps must be sorted newest-first). Otherwise all are uploaded.
 // Returns the number of snapshots uploaded and total bytes transferred;
 // deduplicated snapshots are recorded but not counted as uploads.
-func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsited map[string]bool) (int, int64, error) {
+func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsited map[string]bool, root string) (int, int64, error) {
 	var totalSnaps int
 	var totalBytes int64
 	latestOnly := c.OffsiteUploadMode == "latest"
@@ -347,7 +384,7 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		if latestOnly && totalSnaps > 0 {
 			break
 		}
-		bytes, uploaded, err := offsiteSnapshot(ctx, d, c, sm, clientDir, s, offsited)
+		bytes, uploaded, err := offsiteSnapshot(ctx, d, c, sm, clientDir, s, offsited, root)
 		if err != nil {
 			return totalSnaps, totalBytes, err
 		}
@@ -364,7 +401,7 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 // exactly as long as this call: a deferred remove in the caller's loop kept one
 // copy of every snapshot on disk until the whole pass ended (N × snapshot size
 // of scratch, on the system temp dir rather than the backup volume).
-func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, s mode.Snapshot, offsited map[string]bool) (int64, bool, error) {
+func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, s mode.Snapshot, offsited map[string]bool, root string) (int64, bool, error) {
 	obj, err := sm.PrepareOffsite(ctx, clientDir, s)
 	if err != nil {
 		return 0, false, fmt.Errorf("prepare offsite %s: %w", s.ID, err)
@@ -401,7 +438,7 @@ func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.Server
 		return 0, false, nil
 	}
 
-	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(offsiteDir(c), c.Mode, s.ID))
+	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(root, offsiteDir(c), c.Mode, s.ID))
 	if err != nil {
 		return 0, false, fmt.Errorf("offsite upload %s: %w", s.ID, err)
 	}
@@ -596,11 +633,47 @@ func offsiteDir(c model.Client) string {
 	return c.Slug
 }
 
+// offsiteTarget resolves where a client's offsite objects live, and whether the
+// remote may be used at all.
+//
+// root is the path prefix inside the remote — the B2 bucket plus the remote's
+// optional prefix (model.Remote.RootPath). A client whose remote has no row (a
+// section the operator wrote in rclone.conf by hand) keeps root "" and the path
+// it had before buckets moved onto the remote.
+//
+// unsupported is true for a remote an older backitup configured with a backend
+// this build dropped (s3, drive, sftp, …). Those rows are kept so the operator's
+// configuration is not deleted behind their back, but nothing uses them: the
+// lifecycle skips the client and the UI says to recreate the remote as B2.
+func offsiteTarget(ctx context.Context, d Deps, c model.Client) (root string, unsupported bool, err error) {
+	if c.OffsiteRemote == "" {
+		return "", false, nil
+	}
+	r, err := d.Store.GetRemoteByName(ctx, c.OffsiteRemote)
+	if err != nil {
+		return "", false, err
+	}
+	if r == nil {
+		return "", false, nil
+	}
+	return r.RootPath(), r.Unsupported, nil
+}
+
+// logUnsupportedRemote is the one line an operator gets when a client still
+// points at a remote this build dropped. It names both the client and the
+// remote, because the fix is per-remote (recreate it as B2, then repoint the
+// client) and the log is where an operator looks when offsite stops happening.
+func logUnsupportedRemote(worker string, c model.Client) {
+	log.Printf("%s: client %d (%s): offsite remote %q has an unsupported remote type — "+
+		"offsite storage is Backblaze B2 only; recreate the remote as B2 and skip this client until then",
+		worker, c.ID, c.Name, c.OffsiteRemote)
+}
+
 // verifyOffsiteObjects calls rclone lsf for the client's remote directory and
 // updates the remote_missing / remote_verified_at fields on each offsite_objects
 // row. Throttled to once per hour per client: if the oldest verified_at is
 // within the last hour, the check is skipped.
-func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client) {
+func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root string) {
 	all, err := d.Store.ListOffsiteObjects(ctx, c.ID)
 	if err != nil {
 		return
@@ -635,7 +708,7 @@ func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client) {
 
 	dir := offsiteDir(c)
 	lsfCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	files, err := d.Offsite.Lsf(lsfCtx, c.OffsiteRemote, dir)
+	files, err := d.Offsite.Lsf(lsfCtx, c.OffsiteRemote, remoteDir(root, dir))
 	cancel()
 	if err != nil {
 		log.Printf("lifecycle: offsite verify: client=%s: lsf: %v", c.Name, err)
@@ -689,6 +762,15 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	if d.Offsite == nil || c.OffsiteRemote == "" {
 		return fmt.Errorf("client %q has no offsite remote configured", c.Name)
 	}
+	root, unsupported, err := offsiteTarget(ctx, d, c)
+	if err != nil {
+		return fmt.Errorf("resolve offsite remote: %w", err)
+	}
+	if unsupported {
+		logUnsupportedRemote("offsite run", c)
+		return fmt.Errorf("offsite remote %q has an unsupported remote type — "+
+			"offsite storage is Backblaze B2 only; recreate it as B2 first", c.OffsiteRemote)
+	}
 	sm, ok := mode.Server(c.Mode)
 	if !ok {
 		return fmt.Errorf("no server mode for %q", c.Mode)
@@ -711,7 +793,7 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	// Insert a "running" row immediately so the dashboard can show progress.
 	// Pruning is the lifecycle worker's job; the adhoc trigger only uploads.
 	runID, startErr := d.Store.StartOffsiteRun(ctx, c.ID, "adhoc", d.now())
-	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited)
+	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited, root)
 	if startErr == nil {
 		status, errText := "ok", ""
 		if uploadErr != nil {
@@ -762,12 +844,37 @@ func recordOffsiteRun(ctx context.Context, d Deps, c model.Client, triggeredBy s
 	}
 }
 
-func objectPath(dir string, m model.Mode, snapshotID string) string {
+// remoteDir returns the directory inside a remote that holds a client's
+// objects: "<root>/<dir>", each part omitted when empty. It is what verify
+// lists with rclone lsf. An absolute root (a test-only local remote addresses a
+// directory) keeps its leading slash.
+func remoteDir(root, dir string) string {
+	parts := make([]string, 0, 2)
+	for _, p := range []string{root, dir} {
+		if p = strings.Trim(p, "/"); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	p := strings.Join(parts, "/")
+	if strings.HasPrefix(root, "/") && p != "" {
+		p = "/" + p
+	}
+	return p
+}
+
+// objectPath returns the path of one snapshot's offsite object:
+// "<root>/<dir>/<file>", where root is the bucket (and optional prefix) the
+// remote was configured with — "" for a remote backitup has no row for, which
+// keeps the old path.
+func objectPath(root, dir string, m model.Mode, snapshotID string) string {
 	name := snapshotID
 	if m == model.ModeRsync {
 		name = snapshotID + ".tar.gz" // rsync snapshot dir -> one offsite archive
 	}
-	return dir + "/" + name
+	if d := remoteDir(root, dir); d != "" {
+		return d + "/" + name
+	}
+	return name
 }
 
 // fileChecksum returns the SHA-256 hex digest of the file at path.

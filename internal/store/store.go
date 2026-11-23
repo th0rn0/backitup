@@ -941,53 +941,57 @@ func (s *Store) CreateRemote(ctx context.Context, r model.Remote) error {
 		return fmt.Errorf("marshal remote config: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO remotes (name, backend, config, created_at) VALUES (?, ?, ?, ?)`,
-		r.Name, string(r.Backend), string(cfg), r.CreatedAt.UTC().Format(rfc3339))
+		`INSERT INTO remotes (name, backend, config, created_at, unsupported) VALUES (?, ?, ?, ?, ?)`,
+		r.Name, string(r.Backend), string(cfg), r.CreatedAt.UTC().Format(rfc3339), b2i(r.Unsupported))
 	return err
 }
 
 // ListRemotes returns all remotes ordered by name.
 func (s *Store) ListRemotes(ctx context.Context) ([]model.Remote, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, backend, config, created_at FROM remotes ORDER BY name`)
+		`SELECT id, name, backend, config, created_at, unsupported FROM remotes ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []model.Remote
 	for rows.Next() {
-		var r model.Remote
-		var backend, cfgJSON, createdStr string
-		if err := rows.Scan(&r.ID, &r.Name, &backend, &cfgJSON, &createdStr); err != nil {
+		r, err := scanRemote(rows.Scan)
+		if err != nil {
 			return nil, err
-		}
-		r.Backend = model.RemoteBackend(backend)
-		r.CreatedAt = displayTime("remotes.created_at", createdStr)
-		if err := json.Unmarshal([]byte(cfgJSON), &r.Config); err != nil {
-			r.Config = map[string]string{}
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-// GetRemoteByName returns the remote with the given name, or nil if not found.
-func (s *Store) GetRemoteByName(ctx context.Context, name string) (*model.Remote, error) {
+// scanRemote reads one remotes row. The scan function is passed in so
+// ListRemotes and GetRemoteByName cannot drift apart.
+func scanRemote(scan func(dest ...any) error) (model.Remote, error) {
 	var r model.Remote
 	var backend, cfgJSON, createdStr string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, backend, config, created_at FROM remotes WHERE name=?`, name).
-		Scan(&r.ID, &r.Name, &backend, &cfgJSON, &createdStr)
+	var unsupported int
+	if err := scan(&r.ID, &r.Name, &backend, &cfgJSON, &createdStr, &unsupported); err != nil {
+		return model.Remote{}, err
+	}
+	r.Backend = model.RemoteBackend(backend)
+	r.CreatedAt = displayTime("remotes.created_at", createdStr)
+	r.Unsupported = unsupported != 0
+	if err := json.Unmarshal([]byte(cfgJSON), &r.Config); err != nil {
+		r.Config = map[string]string{}
+	}
+	return r, nil
+}
+
+// GetRemoteByName returns the remote with the given name, or nil if not found.
+func (s *Store) GetRemoteByName(ctx context.Context, name string) (*model.Remote, error) {
+	r, err := scanRemote(s.db.QueryRowContext(ctx,
+		`SELECT id, name, backend, config, created_at, unsupported FROM remotes WHERE name=?`, name).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
-	}
-	r.Backend = model.RemoteBackend(backend)
-	r.CreatedAt = displayTime("remotes.created_at", createdStr)
-	if err := json.Unmarshal([]byte(cfgJSON), &r.Config); err != nil {
-		r.Config = map[string]string{}
 	}
 	return &r, nil
 }

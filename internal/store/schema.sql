@@ -71,7 +71,11 @@ CREATE TABLE IF NOT EXISTS remotes (
     name       TEXT NOT NULL UNIQUE,
     backend    TEXT NOT NULL,
     config     TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- 1 = a backend this build no longer supports (s3, drive, sftp, …): the row
+    -- is kept so an operator's configured remote is not deleted behind their
+    -- back, but the lifecycle skips it and the UI says to recreate it as B2.
+    unsupported INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS offsite_runs (

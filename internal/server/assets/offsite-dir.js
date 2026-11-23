@@ -2,16 +2,11 @@
 // the selected remote's backend type (read from data-backend on the option).
 // Loaded by clients_new.html and client_detail.html.
 (function () {
-  // Hints keyed by rclone backend type.
+  // Hints keyed by rclone backend type. Offsite storage is B2 only; anything
+  // else here (a remote an older backitup configured) falls through to the
+  // generic label, and the remote page tells the operator to recreate it.
   var HINTS = {
-    s3:         { label: 'Bucket / path (optional)',    placeholder: 'my-bucket/clients',           hint: 'Bucket name and optional prefix. Leave empty to use the client name.' },
-    's3-compat':{ label: 'Bucket / path (optional)',    placeholder: 'my-bucket/clients',           hint: 'Bucket name and optional prefix. Leave empty to use the client name.' },
-    b2:         { label: 'Bucket / path (optional)',    placeholder: 'my-bucket',                  hint: 'Bucket name. Leave empty to use the client name.' },
-    drive:      { label: 'Folder path (optional)',      placeholder: '',                            hint: 'Path inside Drive relative to the root folder. Leave empty to write to the root.' },
-    sftp:       { label: 'Remote path (optional)',      placeholder: '/srv/backups/clients',        hint: 'Absolute path on the server. Leave empty to use the client name.' },
-    webdav:     { label: 'Remote path (optional)',      placeholder: 'backups/clients',             hint: 'Path on the WebDAV server. Leave empty to use the client name.' },
-    azureblob:  { label: 'Container / path (optional)', placeholder: 'backups',                    hint: 'Container name and optional path. Leave empty to use the client name.' },
-    ftp:        { label: 'Remote path (optional)',      placeholder: '/backups/clients',            hint: 'Path on the FTP server. Leave empty to use the client name.' },
+    b2:         { label: 'Path inside the bucket (optional)', placeholder: 'clients', hint: 'Path below the remote\'s bucket — and below its prefix, if it has one. Leave empty to use the client name.' },
     crypt:      { label: 'Encrypted path (optional)',   placeholder: 'clients',                     hint: 'Path inside the encrypted remote. Leave empty to store the client name as an encrypted directory. Everything under it — names included — reaches the provider as ciphertext.' },
   };
 
