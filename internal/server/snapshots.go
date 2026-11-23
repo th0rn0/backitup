@@ -130,13 +130,11 @@ func (s *Server) getOffsiteDownload(w http.ResponseWriter, r *http.Request) {
 	if offsiteDir == "" {
 		offsiteDir = c.Slug
 	}
-	var objectName, objectPath string
-	if c.Mode == model.ModeRsync {
-		objectPath = offsiteDir + "/" + snapshotID + ".tar.gz"
-		objectName = snapshotID + ".tar.gz"
-	} else {
-		objectPath = offsiteDir + "/" + snapshotID
-		objectName = snapshotID
+	objectPath, objectName, err := s.offsiteObjectPath(ctx, c, offsiteDir, snapshotID)
+	if err != nil {
+		log.Printf("offsite download: client=%s snap=%s: resolve path: %v", c.Name, snapshotID, err)
+		http.Error(w, "could not resolve the remote path", http.StatusInternalServerError)
+		return
 	}
 
 	inline := r.URL.Query().Get("view") == "1"
@@ -175,11 +173,11 @@ func (s *Server) postOffsiteObjectDelete(w http.ResponseWriter, r *http.Request)
 	if offsiteDir == "" {
 		offsiteDir = c.Slug
 	}
-	var objectPath string
-	if c.Mode == model.ModeRsync {
-		objectPath = offsiteDir + "/" + snapshotID + ".tar.gz"
-	} else {
-		objectPath = offsiteDir + "/" + snapshotID
+	objectPath, _, err := s.offsiteObjectPath(ctx, c, offsiteDir, snapshotID)
+	if err != nil {
+		log.Printf("offsite object delete: client=%s snap=%s: resolve path: %v", c.Name, snapshotID, err)
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", "offsite delete failed: "+err.Error()), http.StatusSeeOther)
+		return
 	}
 
 	rclone := lifecycle.NewRclone(s.rcloneConfig)
@@ -192,6 +190,44 @@ func (s *Server) postOffsiteObjectDelete(w http.ResponseWriter, r *http.Request)
 		log.Printf("offsite object delete: db record: %v", err)
 	}
 	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=offsite+object+deleted", http.StatusSeeOther)
+}
+
+// offsiteObjectPath returns the rclone path of one snapshot's offsite object —
+// "<bucket>/<prefix>/<client dir>/<file>" — and the file name alone (used for
+// the download's Content-Disposition).
+//
+// The bucket and prefix belong to the remote (model.Remote.RootPath); a remote
+// configured directly in rclone.conf has no row and therefore no root, which
+// keeps the path exactly as it was before buckets moved onto the remote.
+func (s *Server) offsiteObjectPath(ctx context.Context, c *model.Client, offsiteDir, snapshotID string) (objectPath, objectName string, err error) {
+	root := ""
+	if c.OffsiteRemote != "" {
+		r, rErr := s.st.GetRemoteByName(ctx, c.OffsiteRemote)
+		if rErr != nil {
+			return "", "", rErr
+		}
+		if r != nil {
+			root = r.RootPath()
+		}
+	}
+	objectName = snapshotID
+	if c.Mode == model.ModeRsync {
+		objectName += ".tar.gz"
+	}
+	parts := make([]string, 0, 3)
+	abs := strings.HasPrefix(root, "/") // a test-only local remote addresses a directory
+	if root = strings.Trim(root, "/"); root != "" {
+		parts = append(parts, root)
+	}
+	if dir := strings.Trim(offsiteDir, "/"); dir != "" {
+		parts = append(parts, dir)
+	}
+	parts = append(parts, objectName)
+	objectPath = strings.Join(parts, "/")
+	if abs {
+		objectPath = "/" + objectPath
+	}
+	return objectPath, objectName, nil
 }
 
 // resolveClientAndMode loads the client and its ServerMode for snapshot operations.
@@ -370,10 +406,14 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 			continue
 		}
 		var objectPath string
-		if c.Mode == model.ModeRsync {
-			objectPath = offsiteDir + "/" + id + ".tar.gz"
-		} else {
-			objectPath = offsiteDir + "/" + id
+		objectPath, _, pathErr := s.offsiteObjectPath(ctx, c, offsiteDir, id)
+		if pathErr != nil {
+			log.Printf("bulk offsite delete: client=%s snap=%s: resolve path: %v", c.Name, id, pathErr)
+			failed = append(failed, fmt.Sprintf("%q", id))
+			if firstErr == nil {
+				firstErr = pathErr
+			}
+			continue
 		}
 		if err := rclone.Delete(ctx, c.OffsiteRemote, objectPath); err != nil {
 			log.Printf("bulk offsite delete: client=%s snap=%s: %v", c.Name, id, err)

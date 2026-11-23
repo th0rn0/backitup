@@ -11,7 +11,7 @@ import (
 
 // schemaVersion is the version this binary writes. It must equal the last entry
 // of migrations (asserted by TestSchemaVersionMatchesLastStep).
-const schemaVersion = 3
+const schemaVersion = 4
 
 // droppedColumns names, per table, the columns a migration is allowed to remove.
 //
@@ -78,6 +78,7 @@ var migrations = []migration{
 	{version: 1, name: "create tables", apply: applyCreateTables},
 	{version: 2, name: "canonical table shape", fkOff: true, apply: applyCanonicalShape},
 	{version: 3, name: "drop offsite retention columns", fkOff: true, apply: applyCanonicalShape},
+	{version: 4, name: "mark unsupported remote backends", fkOff: true, apply: applyRemoteBackendsSupported},
 }
 
 // migrationFault is a test seam. When set, it is called at each point inside a
@@ -205,6 +206,28 @@ func applyCanonicalShape(ctx context.Context, tx *sql.Tx, sch schemaDef) error {
 		if _, err := tx.ExecContext(ctx, idx); err != nil {
 			return fmt.Errorf("create index: %w", err)
 		}
+	}
+	return nil
+}
+
+// applyRemoteBackendsSupported brings the remotes table to its canonical shape
+// (which adds `unsupported` with its default of 0) and then marks every row this
+// build cannot use.
+//
+// The rows are kept, not deleted: an operator's configured remote is their
+// configuration, and a migration that quietly drops it would be indistinguishable
+// from a bug that lost it. What changes is that nothing uses an unsupported
+// remote any more — the lifecycle skips it and the UI says to recreate it as B2 —
+// so leaving the row behind cannot keep a non-B2 destination in service.
+func applyRemoteBackendsSupported(ctx context.Context, tx *sql.Tx, sch schemaDef) error {
+	if err := applyCanonicalShape(ctx, tx, sch); err != nil {
+		return err
+	}
+	// b2 is the only provider; crypt is the client-side encryption wrapper
+	// around one, and stays supported (see model.Backends).
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE remotes SET unsupported = 1 WHERE backend NOT IN ('b2', 'crypt')`); err != nil {
+		return fmt.Errorf("mark unsupported remotes: %w", err)
 	}
 	return nil
 }

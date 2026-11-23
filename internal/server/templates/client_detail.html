@@ -309,7 +309,7 @@
               <select id="offsite_remote" name="offsite_remote">
                 <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None (disabled)</option>
                 {{range .Remotes}}
-                <option value="{{.Name}}" data-backend="{{.Backend}}"{{if eq $.Client.OffsiteRemote .Name}} selected{{end}}>{{.Name}} — {{.BackendLabel}}</option>
+                <option value="{{.Name}}" data-backend="{{.Backend}}"{{if eq $.Client.OffsiteRemote .Name}} selected{{end}}>{{.Name}} — {{.BackendLabel}}{{if .Unsupported}} (unsupported — recreate as B2){{end}}</option>
                 {{end}}
               </select>
               {{if not .Remotes}}<div class="field-hint">No remotes configured yet. <a href="/settings/remotes">Add one</a> to enable offsite backups.</div>{{end}}

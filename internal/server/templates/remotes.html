@@ -34,12 +34,25 @@
             {{range .Remotes}}
             <tr>
               <td class="mono">{{.Name}}</td>
-              <td><span class="badge">{{.BackendLabel}}</span></td>
+              <td>
+                <span class="badge">{{.BackendLabel}}</span>
+                {{if .Unsupported}}
+                <div class="alert alert-warn" role="alert">
+                  <strong>Unsupported remote type — recreate as B2.</strong>
+                  This remote was configured as <code>{{.Backend}}</code>, which backitup no longer supports:
+                  offsite storage is Backblaze B2 only. Nothing uses it — the lifecycle skips it — and its
+                  <code>rclone.conf</code> section is left in place. Delete it here and add the B2 bucket it
+                  pointed at.
+                </div>
+                {{end}}
+              </td>
               <td class="flex-row-sm">
+                {{if not .Unsupported}}
                 <form method="POST" action="/settings/remotes/{{.Name}}/test" class="d-inline">
                   <button type="submit" class="btn btn-ghost btn-sm">Test</button>
                 </form>
                 <a href="/settings/remotes/{{.Name}}/edit" class="btn btn-ghost btn-sm">Edit</a>
+                {{end}}
                 <form method="POST" action="/settings/remotes/{{.Name}}/delete" class="d-inline"
                       data-confirm="Delete remote {{.Name}}? No data is removed from the destination.">
                   <button type="submit" class="btn btn-danger btn-sm">Delete</button>
@@ -52,75 +65,87 @@
       </div>
       {{end}}
 
-      <!-- ── Add remote form ── -->
+      <!-- ── Add remote: Backblaze B2 is the only provider, so there is no
+             type selector — the form asks for exactly what B2 needs. ── -->
       <div class="section">
         <h2>Add remote</h2>
         <p class="section-hint">
-          Configure an rclone backend. backitup generates the sections for the remotes listed here;
-          anything else you add to <code>rclone.conf</code> by hand is preserved on every change.
+          Offsite storage is Backblaze B2 only. backitup writes the remote into the managed block of
+          <code>rclone.conf</code>; anything else you add to that file by hand is preserved on every change.
         </p>
 
         <form method="POST" action="/settings/remotes" class="form" autocomplete="off">
           <label for="remote-name">Remote name</label>
-          <input id="remote-name" name="name" required placeholder="my-s3" autocomplete="off">
+          <input id="remote-name" name="name" required placeholder="b2-offsite" autocomplete="off">
           <div class="field-hint">Used to identify this remote in client offsite settings. Letters, digits, hyphens, underscores, and dots only.</div>
 
-          <label for="add-remote-backend">Backend</label>
-          <select id="add-remote-backend" name="backend">
-            <option value="">— choose a backend —</option>
-            {{range .Backends}}
-            <option value="{{.ID}}">{{.Label}}</option>
-            {{end}}
+          <label for="remote-account">Application Key ID (keyID)</label>
+          <input id="remote-account" name="account" required autocomplete="off">
+          <div class="field-hint">B2 console → Application Keys. Give the key access to this one bucket only.</div>
+
+          <label for="remote-key">Application Key (applicationKey)</label>
+          <input id="remote-key" name="key" type="password" required autocomplete="new-password">
+          <div class="field-hint">Shown once when the application key is created; it cannot be read back out of B2.</div>
+
+          <label for="remote-bucket">Bucket</label>
+          <input id="remote-bucket" name="bucket" required placeholder="my-backups" autocomplete="off">
+          <div class="field-hint">The B2 bucket that receives the backups. Every client on this remote writes under it.</div>
+
+          <label for="remote-path">Path prefix <span class="label-optional">(optional)</span></label>
+          <input id="remote-path" name="path" placeholder="backups" autocomplete="off">
+          <div class="field-hint">Prefix inside the bucket — useful when several backitup servers share one bucket.</div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn">Add remote</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- ── Client-side encryption: a crypt remote wrapping one of the B2
+             remotes above. Recommended, not required: B2 server-side
+             encryption does not protect the backup from the provider. ── -->
+      <div class="section">
+        <h2>Add client-side encryption (recommended)</h2>
+        <p class="section-hint">
+          A <code>crypt</code> remote encrypts everything written through it before it reaches B2, so the
+          provider only ever stores ciphertext — file and directory names included. Create the B2 remote
+          first, then wrap it here and point the client's offsite destination at the encrypted remote.
+        </p>
+
+        <form method="POST" action="/settings/remotes" class="form" autocomplete="off">
+          <input type="hidden" name="backend" value="crypt">
+
+          <label for="crypt-name">Remote name</label>
+          <input id="crypt-name" name="name" required placeholder="b2-offsite-enc" autocomplete="off">
+          <div class="field-hint">Letters, digits, hyphens, underscores, and dots only.</div>
+
+          {{range .Crypt.Fields}}
+          <label for="crypt-{{.Key}}">
+            {{.Label}}{{if not .Required}} <span class="label-optional">(optional)</span>{{end}}
+          </label>
+          {{if eq .Type "select"}}
+          <select id="crypt-{{.Key}}" name="{{.Key}}">
+            {{range .Options}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
           </select>
-
-          <!-- ── per-backend warnings ── -->
-          <div data-backend-warning="drive" class="alert alert-warn hidden" role="alert">
-            <strong>Google Workspace required.</strong>
-            Service accounts have no personal storage quota, so uploads to My Drive always fail.
-            The Shared Drive ID field below is required — but Shared Drives only exist on
-            <strong>paid Google Workspace accounts</strong> (not personal @gmail.com accounts).
-            If you're on a personal account, use a different backend such as Backblaze B2 instead.
-          </div>
-
-          <!-- ── per-backend field groups ── -->
-          {{range .Backends}}
-          <div data-backend-fields="{{.ID}}" class="hidden">
-            {{range .Fields}}
-            <label>
-              {{.Label}}{{if not .Required}} <span class="label-optional">(optional)</span>{{end}}
-            </label>
-            {{if eq .Type "textarea"}}
-            <textarea name="{{.Key}}" rows="8" disabled
-                      class="textarea-code"
-                      placeholder="{{.Default}}" autocomplete="off"></textarea>
-            {{else if eq .Type "select"}}
-            <select name="{{.Key}}" disabled>
-              {{range .Options}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
-            </select>
-            {{else if eq .Type "password"}}
-            <input name="{{.Key}}" type="password" disabled
-                   placeholder="{{.Default}}" autocomplete="new-password">
-            {{else if eq .Key "remote"}}
-            <input name="{{.Key}}" type="text" list="remote-names" disabled
-                   placeholder="{{.Default}}" autocomplete="off">
-            {{else}}
-            <input name="{{.Key}}" type="text" disabled
-                   placeholder="{{.Default}}" autocomplete="off">
-            {{end}}
-            {{if .Hint}}<div class="field-hint">{{.Hint}}</div>{{end}}
-            {{end}}
-          </div>
+          {{else if eq .Type "password"}}
+          <input id="crypt-{{.Key}}" name="{{.Key}}" type="password" required autocomplete="new-password">
+          {{else if eq .Key "remote"}}
+          <input id="crypt-{{.Key}}" name="{{.Key}}" type="text" list="remote-names" required
+                 placeholder="{{.Default}}" autocomplete="off">
+          {{else}}
+          <input id="crypt-{{.Key}}" name="{{.Key}}" type="text" placeholder="{{.Default}}" autocomplete="off">
+          {{end}}
+          {{if .Hint}}<div class="field-hint">{{.Hint}}</div>{{end}}
           {{end}}
 
           {{if .Remotes}}
-          <!-- Suggests the plaintext remotes an encrypted remote can wrap. -->
           <datalist id="remote-names">
             {{range .Remotes}}<option value="{{.Name}}"></option>{{end}}
           </datalist>
           {{end}}
 
           <div class="form-actions">
-            <button type="submit" id="add-remote-submit" class="btn hidden">Add remote</button>
+            <button type="submit" class="btn">Add encrypted remote</button>
           </div>
         </form>
       </div>
@@ -128,7 +153,6 @@
       {{end}}
     </main>
   </div>
-  <script src="/static/remote-form.js"></script>
   <script src="/static/backup-files.js"></script>
 </body>
 </html>

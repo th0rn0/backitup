@@ -19,6 +19,17 @@
       {{if .Flash}}<div class="alert alert-ok" role="status">{{.Flash}}</div>{{end}}
       {{if .Error}}<div class="alert alert-error" role="alert">{{.Error}}</div>{{end}}
 
+      {{if not .Def}}
+      <div class="section">
+        <div class="alert alert-warn" role="alert">
+          <strong>Unsupported remote type — recreate as B2.</strong>
+          This remote is configured as <code>{{.Remote.Backend}}</code>, which backitup no longer supports:
+          offsite storage is Backblaze B2 only. It cannot be edited — its
+          <code>rclone.conf</code> section is untouched and the lifecycle skips it. Delete it and add the
+          B2 bucket it pointed at on the <a href="/settings/remotes">remote storage page</a>.
+        </div>
+      </div>
+      {{else}}
       <div class="section">
         <p class="section-hint">
           Backend: <span class="badge">{{.Remote.BackendLabel}}</span> &nbsp;
@@ -55,6 +66,7 @@
           </div>
         </form>
       </div>
+      {{end}}
     </main>
   </div>
 </body>

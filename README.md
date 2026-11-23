@@ -3,7 +3,7 @@
 Self-hosted, centralized **fleet backup** for Linux + macOS. A clean control plane
 on top of proven tools (rsync, OpenSSH, rclone): one server, one webgui, many dumb
 cron-triggered clients, with hot backups on the server and optional rclone offsite
-tiering to configured providers. Encryption is available when the offsite destination
+tiering to a Backblaze B2 bucket. Encryption is available when the offsite destination
 is an rclone `crypt` remote you configure.
 
 Add a machine by issuing a key in the webgui, paste one cron line on the host, and
@@ -336,8 +336,10 @@ would least expect.
 ### Offsite (cold storage)
 
 Offsite tiering is per-client: set a client's **offsite remote** in the webgui to an
-rclone remote name. The remote must be defined in `rclone.conf` (pointed to by
-`BACKITUP_RCLONE_CONFIG`, default `/data/rclone.conf`).
+rclone remote name. Every offsite destination is a **Backblaze B2** bucket — the
+remote stores its bucket (and an optional prefix), so the client's path is
+relative to that bucket. The remote must be defined in `rclone.conf` (pointed to by
+`BACKITUP_RCLONE_CONFIG`, default `/data/rclone.conf`); the webgui writes it for you.
 
 The maintenance worker runs on `BACKITUP_LIFECYCLE_INTERVAL`; it handles **hot**
 retention, remote verification, integrity checks, and stale-run alerts. A separate
@@ -349,39 +351,45 @@ lifecycle rule (see [Offsite retention is the bucket's lifecycle
 rule](#offsite-retention-is-the-buckets-lifecycle-rule)). tar.gz archives upload as-is;
 rsync snapshots are tarred into one object per snapshot.
 
-#### Setting up remotes via the webgui (recommended)
+#### Setting up the offsite destination (Backblaze B2)
 
-Open **Remote storage** in the sidebar. Select a backend from the dropdown and fill
-in the required fields — the app writes `rclone.conf` immediately and the remote
-appears in every client's **Offsite destination** selector.
+Offsite storage is **Backblaze B2 and nothing else**. Open **Remote storage** in
+the sidebar, fill in the four things B2 needs, and the app writes `rclone.conf`
+immediately; the remote then appears in every client's **Offsite destination**
+selector. There is no provider dropdown — B2 is the only choice, and the API
+refuses any other type with a `400` naming the value it got.
 
-Supported backends:
+1. In the B2 console create (or pick) a **bucket**, private, with object
+   versioning off when `hard_delete` is in use (backitup sets it, so a delete
+   really removes the object instead of leaving a hidden version).
+2. Create an **application key** restricted to that bucket: **Application Keys →
+   Add a New Application Key**. Copy the **keyID** and the **applicationKey** —
+   the applicationKey is shown once.
+3. In backitup's **Add remote** form enter the **remote name**, the
+   **Application Key ID (keyID)**, the **Application Key**, the **bucket** and,
+   optionally, a **path prefix** inside the bucket. Save.
+4. Point each client's **Offsite destination** at that remote and set its
+   **Bucket path** (blank = the client's slug).
 
-| Backend | Notes |
-|---------|-------|
-| **Amazon S3** | Access key + secret + region + bucket |
-| **S3-compatible** | Same fields + custom endpoint; covers Cloudflare R2, Wasabi, MinIO, etc. |
-| **Backblaze B2** | Account ID + application key + bucket |
-| **Google Drive** | Service account JSON + optional folder path. Uses a service account (no OAuth browser redirect, no token expiry). |
-| **SFTP** | Host, port, username, private key path |
-| **WebDAV** | URL, username, password |
-| **Azure Blob** | Account, SAS URL or key, container |
-| **FTP** | Host, port, username, password |
-
-> **Google Drive service account setup:**
-> 1. Enable the **Google Drive API** in Google Cloud Console → APIs & Services → Library.
-> 2. Create a service account (IAM & Admin → Service Accounts → Create Service Account).
-> 3. Create a JSON key for it (Keys → Add Key → JSON) and download it.
-> 4. In Google Drive, create a **Shared Drive** (Team Drive) and share it with the service
->    account email (`client_email` from the JSON). Copy the Shared Drive ID from its URL.
-> 5. Paste the JSON and the Shared Drive ID into the webgui form.
->
-> A Shared Drive is required — service accounts have zero personal quota, so uploads to
-> My Drive always fail with `storageQuotaExceeded`.
+Then, and recommended for every installation: add a **crypt** remote wrapping
+the B2 one (the second form on the same page) and give clients the *encrypted*
+remote as their destination. A crypt section encrypts contents and names before
+they leave the host, so the provider only ever stores ciphertext — B2's
+server-side encryption does not protect the backup from B2, so client-side
+encryption is the default recommendation, not an extra. Losing the crypt
+password loses the offsite copies.
 
 The app writes its managed remotes into a managed block in `rclone.conf`, regenerating
 that block on startup and after remote changes while preserving content outside the
 block. Do not place your own config inside the managed block.
+
+> **Upgrading from an older backitup:** remotes of other types (S3, Drive, SFTP,
+> WebDAV, Azure, FTP) are kept but marked unsupported. Nothing uses them, they
+> are skipped by the lifecycle, and the UI says *unsupported remote type —
+> recreate as B2*. Create the B2 remote, point the client at it, then delete the
+> old row. The bucket used to live in the client's offsite path; it is now a
+> field on the remote, so a client whose path still starts with the bucket name
+> needs that prefix removed.
 
 > Set `BACKITUP_ADMIN_USER` + `BACKITUP_ADMIN_PASSWORD` to create the webgui login.
 > Set `BACKITUP_TLS_CERT` + `BACKITUP_TLS_KEY` to serve HTTPS (required in production —

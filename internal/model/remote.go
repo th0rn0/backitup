@@ -1,7 +1,6 @@
 package model
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,16 +10,23 @@ import (
 // RemoteBackend is the rclone backend type for a configured remote.
 type RemoteBackend string
 
+// Offsite storage is Backblaze B2 and nothing else (Thorno, 2026-11-19). The
+// generic rclone providers (s3, s3-compat, drive, sftp, webdav, azureblob, ftp)
+// are gone from this build: a second provider is a second set of credentials,
+// endpoints and failure modes to support, and the project supports one.
 const (
-	BackendS3       RemoteBackend = "s3"        // Amazon S3
-	BackendS3Compat RemoteBackend = "s3-compat"  // S3-compatible (Wasabi, MinIO, R2, …)
-	BackendB2       RemoteBackend = "b2"         // Backblaze B2
-	BackendGDrive   RemoteBackend = "drive"      // Google Drive (service account)
-	BackendSFTP     RemoteBackend = "sftp"       // SFTP
-	BackendWebDAV   RemoteBackend = "webdav"     // WebDAV
-	BackendAzure    RemoteBackend = "azureblob"  // Azure Blob Storage
-	BackendFTP      RemoteBackend = "ftp"        // FTP
-	BackendCrypt    RemoteBackend = "crypt"      // rclone crypt (encrypts another remote)
+	// BackendB2 is the only supported offsite destination.
+	BackendB2 RemoteBackend = "b2"
+	// BackendCrypt encrypts another remote's contents on the way out. It is not
+	// a provider — it wraps a B2 remote — and stays because B2 server-side
+	// encryption does not protect the backup from the provider.
+	BackendCrypt RemoteBackend = "crypt"
+	// BackendLocal is rclone's `local` backend, kept for tests only: it is what
+	// the end-to-end offsite proof writes to, so the upload → dedupe → verify →
+	// decrypt path can run without a provider account. It is deliberately NOT in
+	// Backends (so no form offers it) and the create handler refuses it (so the
+	// API cannot configure one). A remote carrying it only ever exists in a test.
+	BackendLocal RemoteBackend = "local"
 )
 
 type RemoteFieldType string
@@ -43,9 +49,9 @@ type RemoteField struct {
 	Required bool
 	Hint     string
 	Default  string
-	// Obscure is true for SFTP/FTP/WebDAV pass fields that rclone requires
-	// to be scrambled with `rclone obscure`. The stored value is already
-	// obscured; the raw password is never persisted.
+	// Obscure is true for pass fields that rclone requires to be scrambled with
+	// `rclone obscure` (the crypt remote's password/password2). The stored value
+	// is already obscured; the raw password is never persisted.
 	Obscure bool
 }
 
@@ -67,29 +73,33 @@ func (f RemoteField) AllowsValue(v string) bool {
 
 // BackendDef describes a supported rclone backend and all its config fields.
 type BackendDef struct {
-	ID       RemoteBackend
-	Label    string
-	Fields   []RemoteField
+	ID     RemoteBackend
+	Label  string
+	Fields []RemoteField
 	// PathHint is shown as the per-client offsite_dir field hint.
 	PathHint string
 	// PathLabel overrides the default "Backup path" label in the client form.
 	PathLabel string
 }
 
-// Backends is the ordered list of all supported rclone backends.
+// Backends is the ordered list of backends a remote can be created as. It has
+// exactly two entries and neither is a provider choice: B2 is the provider,
+// crypt is the optional client-side encryption wrapper. Anything else is
+// refused at the boundary (see server.postCreateRemote), and BackendLocal is
+// intentionally absent — it exists for tests only.
 var Backends = []BackendDef{
 	{
 		// crypt encrypts another remote's contents on the way out, so it is
 		// listed first: "the provider only ever sees ciphertext" is the
 		// posture the README promises, and this is the backend that delivers
-		// it. It needs a plaintext remote to wrap, created first.
+		// it. It needs a B2 remote to wrap, created first.
 		ID: BackendCrypt, Label: "Encrypted (rclone crypt) — recommended",
 		PathHint:  "Path inside the encrypted remote — e.g. clients. Directory and file names are encrypted too.",
 		PathLabel: "Encrypted path",
 		Fields: []RemoteField{
 			{
 				Key: "remote", Label: "Plaintext remote", Type: FieldText, Required: true,
-				Hint: "Name of an existing remote that this one wraps — create the plaintext remote first. Everything written through this remote is encrypted before it reaches that one.",
+				Hint: "Name of an existing B2 remote that this one wraps — create the B2 remote first. Everything written through this remote is encrypted before it reaches B2.",
 			},
 			{
 				Key: "filename_encryption", Label: "Filename encryption", Type: FieldSelect, Default: "standard",
@@ -119,100 +129,33 @@ var Backends = []BackendDef{
 		},
 	},
 	{
-		ID: BackendS3, Label: "Amazon S3",
-		PathHint:  "Bucket and optional prefix — e.g. my-bucket or my-bucket/clients",
-		PathLabel: "Bucket / path",
-		Fields: []RemoteField{
-			{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Required: true},
-			{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Required: true},
-			{Key: "region", Label: "Region", Type: FieldText, Required: true, Default: "us-east-1", Hint: "e.g. us-east-1, eu-west-1"},
-		},
-	},
-	{
-		ID: BackendS3Compat, Label: "S3-Compatible (Wasabi / MinIO / R2 / …) — untested",
-		PathHint:  "Bucket and optional prefix — e.g. my-bucket or my-bucket/clients",
-		PathLabel: "Bucket / path",
-		Fields: []RemoteField{
-			{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Required: true},
-			{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Required: true},
-			{Key: "endpoint", Label: "Endpoint URL", Type: FieldText, Required: true, Hint: "e.g. https://s3.wasabisys.com or https://<id>.r2.cloudflarestorage.com"},
-			{Key: "region", Label: "Region", Type: FieldText, Hint: "Leave blank if the provider does not require one (Cloudflare R2, MinIO)"},
-		},
-	},
-	{
+		// B2 is the only provider. rclone addresses a B2 object as
+		// <remote>:<bucket>/<path>, so the bucket (and the optional prefix) are
+		// stored on the remote and prepended to every object path by
+		// RootPath. They are written into the managed section too, so the file
+		// says which bucket it feeds; rclone has no such options and ignores
+		// unknown keys (verified against rclone 1.76 — a section carrying them
+		// still authorises and addresses the bucket).
 		ID: BackendB2, Label: "Backblaze B2",
-		PathHint:  "Bucket name — e.g. my-backups",
-		PathLabel: "Bucket / path",
-		Fields: []RemoteField{
-			{Key: "account", Label: "Application Key ID", Type: FieldText, Required: true},
-			{Key: "key", Label: "Application Key", Type: FieldPassword, Required: true},
-		},
-	},
-	{
-		ID: BackendGDrive, Label: "Google Drive",
-		PathHint:  "Folder path relative to root — leave blank to write directly to the root folder",
-		PathLabel: "Folder path (optional)",
+		PathHint:  "Path inside the bucket — e.g. clients. Leave blank to use the client's slug.",
+		PathLabel: "Bucket path",
 		Fields: []RemoteField{
 			{
-				Key: "service_account_credentials", Label: "Service Account JSON",
-				Type: FieldTextarea, Required: true,
-				Hint: "Paste the full contents of the downloaded service-account key file (.json).",
+				Key: "account", Label: "Application Key ID (keyID)", Type: FieldText, Required: true,
+				Hint: "B2 console → Application Keys. The keyID identifies the key; the applicationKey below is its secret. Give the key access to this one bucket only.",
 			},
 			{
-				Key: "team_drive", Label: "Shared Drive ID", Type: FieldText, Required: true,
-				Hint: "Required for service accounts — they have no My Drive quota. Create a Shared Drive in Google Drive, share it with the service account email (client_email in the JSON), then paste the Shared Drive ID here (find it in the URL: /drive/folders/<ID>).",
+				Key: "key", Label: "Application Key (applicationKey)", Type: FieldPassword, Required: true,
+				Hint: "Shown once when the application key is created. Without it rclone cannot upload, and it cannot be read back out of B2.",
 			},
-		},
-	},
-	{
-		ID: BackendSFTP, Label: "SFTP — untested",
-		PathHint:  "Absolute path on the server — e.g. /srv/backups/clients",
-		PathLabel: "Remote path",
-		Fields: []RemoteField{
-			{Key: "host", Label: "Hostname / IP", Type: FieldText, Required: true},
-			{Key: "user", Label: "Username", Type: FieldText, Required: true},
-			{Key: "port", Label: "Port", Type: FieldText, Default: "22"},
-			{Key: "pass", Label: "Password", Type: FieldPassword, Obscure: true, Hint: "Leave blank when authenticating with a key file."},
-			{Key: "key_file", Label: "Private Key Path", Type: FieldText, Hint: "Absolute path to the SSH private key on the server. Leave blank when using password auth."},
-		},
-	},
-	{
-		ID: BackendWebDAV, Label: "WebDAV — untested",
-		PathHint:  "Path on the WebDAV server — e.g. backups/clients",
-		PathLabel: "Remote path",
-		Fields: []RemoteField{
-			{Key: "url", Label: "URL", Type: FieldText, Required: true, Hint: "e.g. https://cloud.example.com/remote.php/dav/files/user"},
 			{
-				Key: "vendor", Label: "Vendor", Type: FieldSelect, Required: true,
-				Options: []SelectOpt{
-					{Value: "nextcloud", Label: "Nextcloud"},
-					{Value: "owncloud", Label: "ownCloud"},
-					{Value: "sharepoint", Label: "SharePoint Online"},
-					{Value: "other", Label: "Other"},
-				},
+				Key: "bucket", Label: "Bucket", Type: FieldText, Required: true,
+				Hint: "The B2 bucket that receives the backups — e.g. my-backups. Every client on this remote writes under it.",
 			},
-			{Key: "user", Label: "Username", Type: FieldText, Required: true},
-			{Key: "pass", Label: "Password", Type: FieldPassword, Required: true, Obscure: true},
-		},
-	},
-	{
-		ID: BackendAzure, Label: "Azure Blob Storage — untested",
-		PathHint:  "Container and optional prefix — e.g. backups or backups/clients",
-		PathLabel: "Container / path",
-		Fields: []RemoteField{
-			{Key: "account", Label: "Storage account name", Type: FieldText, Required: true},
-			{Key: "key", Label: "Storage account key", Type: FieldPassword, Required: true},
-		},
-	},
-	{
-		ID: BackendFTP, Label: "FTP — untested",
-		PathHint:  "Path on the FTP server — e.g. /backups/clients",
-		PathLabel: "Remote path",
-		Fields: []RemoteField{
-			{Key: "host", Label: "Hostname / IP", Type: FieldText, Required: true},
-			{Key: "port", Label: "Port", Type: FieldText, Default: "21"},
-			{Key: "user", Label: "Username", Type: FieldText},
-			{Key: "pass", Label: "Password", Type: FieldPassword, Obscure: true},
+			{
+				Key: "path", Label: "Path prefix", Type: FieldText,
+				Hint: "Optional prefix inside the bucket, e.g. backups — useful when several backitup servers share one bucket. Leave blank to write at the top of the bucket.",
+			},
 		},
 	},
 }
@@ -234,6 +177,13 @@ type Remote struct {
 	Backend   RemoteBackend
 	Config    map[string]string // backend-specific key-value config
 	CreatedAt time.Time
+	// Unsupported marks a row whose backend this build no longer supports —
+	// written by an older backitup that still offered S3, Drive, SFTP and so
+	// on. The row is kept (deleting an operator's configured remote behind
+	// their back is data loss) but nothing uses it: the lifecycle skips it, the
+	// UI says to recreate it as B2, and the edit form is read-only. It is set
+	// by migration v4 and never by the create path.
+	Unsupported bool
 }
 
 // BackendLabel returns the human label for this remote's backend.
@@ -261,29 +211,78 @@ func (r Remote) CryptParent() string {
 	return strings.TrimSuffix(strings.TrimSpace(r.Config["remote"]), ":")
 }
 
+// RootPath returns the path every object for this remote is written under:
+// the B2 bucket plus the optional prefix ("my-bucket/backups"). A remote with
+// no bucket configured — a crypt wrapper, a row written before buckets moved
+// onto the remote, or a test-only local remote pointed at a directory — returns
+// "" or its configured root and leaves paths exactly as they were.
+//
+// An absolute bucket (the test-only local backend addresses a directory this
+// way) keeps its leading slash.
+func (r Remote) RootPath() string {
+	bucket := strings.TrimSpace(r.Config["bucket"])
+	prefix := strings.TrimSpace(r.Config["path"])
+	parts := make([]string, 0, 2)
+	for _, p := range []string{bucket, prefix} {
+		if p = strings.Trim(p, "/"); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	root := strings.Join(parts, "/")
+	if strings.HasPrefix(bucket, "/") {
+		root = "/" + root
+	}
+	return root
+}
+
+// cryptRemoteSpec returns the `remote = <name>:<path>` value a crypt section
+// needs. rclone wants the parent remote and, when the parent writes inside a
+// bucket/prefix of its own, that path — otherwise the crypt would address the
+// provider's top level and put the backup outside the bucket the parent names.
+func (r Remote) cryptRemoteSpec(parents func(name string) (Remote, bool)) string {
+	name := strings.TrimSuffix(strings.TrimSpace(r.Config["remote"]), ":")
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		// An operator's own value may already carry a path; keep it.
+		name = strings.TrimSpace(name[:i])
+	}
+	spec := name + ":"
+	if parents == nil || name == "" {
+		return spec
+	}
+	p, ok := parents(name)
+	if !ok {
+		return spec
+	}
+	if root := p.RootPath(); root != "" {
+		spec = name + ":" + strings.TrimSuffix(root, "/") + "/"
+	}
+	return spec
+}
+
 // RcloneSection returns the [name]\ntype=...\n… block for rclone.conf.
 func (r Remote) RcloneSection() string {
+	return r.RcloneSectionFor(nil)
+}
+
+// RcloneSectionFor is RcloneSection with a way to look up a remote by name.
+//
+// A crypt section names the plaintext remote rclone writes through, and that
+// reference has to carry the parent's own root path: the bucket (and prefix) a
+// B2 remote was configured with live on the remote, not in rclone.conf, so a
+// bare `remote = b2name:` would make rclone write at the top of the account,
+// ignoring the bucket. parents resolves that; nil (or an unknown name, e.g. a
+// section the operator wrote by hand) leaves the bare `<name>:` as before.
+func (r Remote) RcloneSectionFor(parents func(name string) (Remote, bool)) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[%s]\n", r.Name)
 
 	switch r.Backend {
-	case BackendS3:
-		sb.WriteString("type = s3\n")
-		sb.WriteString("provider = AWS\n")
-		sb.WriteString("env_auth = false\n")
-	case BackendS3Compat:
-		sb.WriteString("type = s3\n")
-		sb.WriteString("provider = Other\n")
-		sb.WriteString("env_auth = false\n")
 	case BackendB2:
 		sb.WriteString("type = b2\n")
 		// Without hard_delete, rclone only creates a hide marker; the file
 		// remains stored (and billed) on B2. hard_delete permanently removes
 		// the file and all its versions on deletefile.
 		sb.WriteString("hard_delete = true\n")
-	case BackendGDrive:
-		sb.WriteString("type = drive\n")
-		sb.WriteString("scope = drive\n")
 	case BackendCrypt:
 		// crypt does not talk to a provider itself: `remote` names the
 		// plaintext remote whose contents it encrypts, so that remote — and
@@ -307,18 +306,8 @@ func (r Remote) RcloneSection() string {
 		if v == "" {
 			continue
 		}
-		if k == "service_account_credentials" {
-			// Compact JSON to a single line so it fits on one config line.
-			var raw json.RawMessage
-			if err := json.Unmarshal([]byte(v), &raw); err == nil {
-				if compact, err := json.Marshal(raw); err == nil {
-					v = string(compact)
-				}
-			}
-		}
 		if r.Backend == BackendCrypt && k == "remote" {
-			// rclone wants the parent as `<name>:` (optionally with a path).
-			v = strings.TrimSuffix(strings.TrimSpace(v), ":") + ":"
+			v = r.cryptRemoteSpec(parents)
 		}
 		// One value per line: a newline in a value would inject config lines,
 		// and a lone \r is a line break to some INI readers even though

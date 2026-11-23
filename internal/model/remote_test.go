@@ -46,7 +46,7 @@ func TestCryptParent(t *testing.T) {
 		{"rclone syntax", Remote{Backend: BackendCrypt, Config: map[string]string{"remote": "provider:"}}, "provider"},
 		{"padded", Remote{Backend: BackendCrypt, Config: map[string]string{"remote": "  provider  "}}, "provider"},
 		{"unset", Remote{Backend: BackendCrypt}, ""},
-		{"not a crypt remote", Remote{Backend: BackendS3, Config: map[string]string{"remote": "provider"}}, ""},
+		{"not a crypt remote", Remote{Backend: BackendB2, Config: map[string]string{"remote": "provider"}}, ""},
 	}
 	for _, tc := range cases {
 		if got := tc.remote.CryptParent(); got != tc.want {
