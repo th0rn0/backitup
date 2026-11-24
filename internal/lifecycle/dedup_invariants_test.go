@@ -31,10 +31,15 @@ func newClientIn(t *testing.T, st *store.Store, base string, c model.Client) (in
 // pruning half of this invariant went with offsite pruning itself (offsite
 // retention is the B2 bucket's rule; TestRunOnceDeletesNoOffsiteObjectWhateverItsAge
 // asserts no deletion at all, dedup rows included), but the data-safety half did
-// not: a dedup record only protects its snapshot while the object it points at is
-// intact. Once the verification pass reports the owner's object missing, the
-// content is nowhere — so the hot copy of the duplicate must be kept, and the real
-// object of another client with an intact record must still be pruned.
+// not: a dedup record is offsite evidence — it can be the newest offsite copy that
+// a delete leans on — only while the object it points at is intact.
+//
+// So the two cases differ in what the marker becomes. With the owner's object
+// intact the dependent (17th) IS the newest offsite copy, which makes the owner
+// (16th) strictly older and therefore prunable; the dependent itself stays,
+// because the freshness rule keeps anything at or newer than the marker. With the
+// owner reported remote_missing the dependent's claim is not offsite evidence
+// either (PR #42), there is no newest offsite copy at all, and nothing is pruned.
 //
 // The two cases run as separate passes with separate remotes on purpose: the pass
 // reconciles each client's records against what its remote reports before it
@@ -54,7 +59,7 @@ func TestDedupRecordOnlyProtectsWhileOwnerObjectExists(t *testing.T) {
 		missing  bool
 		wantKill want
 	}{
-		{"intact", false, want{pruned: []string{"backup-20260617T000000Z-000.tar.gz", "backup-20260616T000000Z-000.tar.gz"}, kept: []string{"backup-20260618T000000Z-000.tar.gz"}}},
+		{"intact", false, want{pruned: []string{"backup-20260616T000000Z-000.tar.gz"}, kept: []string{"backup-20260617T000000Z-000.tar.gz", "backup-20260618T000000Z-000.tar.gz"}}},
 		{"owner-missing", true, want{pruned: nil, kept: []string{"backup-20260617T000000Z-000.tar.gz", "backup-20260616T000000Z-000.tar.gz", "backup-20260618T000000Z-000.tar.gz"}}},
 	}
 

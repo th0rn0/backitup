@@ -16,16 +16,17 @@ import (
 // A run whose tree was unchanged does not upload: it is recorded as a dedupe of
 // the run that owns the object, with 0 bytes moved. That record is an inference —
 // "my content lives in that object" — and once B2's bucket lifecycle rule expires
-// the object it is false. Before this fix nothing noticed: the dedupe row kept
-// claiming an offsite copy, so pruneHot read it as "there is a copy elsewhere" and
-// deleted the hot snapshot that was by then the only one. The client ended up with
-// no copy anywhere while the database said otherwise, and nothing surfaced it
-// until some later offsite verify happened to run.
+// the object it is false. Nothing in the database notices on its own, so the row
+// keeps claiming an offsite copy.
 //
-// The pass below is the whole point: an expired owner is *seen* by the pass that
-// prunes, the dependent run is flagged as needing a re-upload instead of keeping a
-// false claim, the pass says why once, and the next upload pass puts the content
-// back.
+// Since the hot-prune guard became a freshness rule, that claim is dangerous in
+// exactly one shape: it can be the NEWEST offsite copy, and then every older
+// snapshot is deleted because of it. The pass below is therefore the whole point —
+// the pass that prunes looks at the remote first (pruneLeansOnDedupe forces the
+// check here), the expired owner is *seen*, the dependent run is flagged as
+// needing a re-upload instead of keeping a false claim, and because the claim no
+// longer moves the newest-offsite marker nothing is pruned on the strength of it.
+// The next upload pass puts the content back.
 func TestDedupedRunIsFlaggedAndReuploadedWhenItsOwnerObjectExpires(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
@@ -35,39 +36,53 @@ func TestDedupedRunIsFlaggedAndReuploadedWhenItsOwnerObjectExpires(t *testing.T)
 		RetentionDays: 14, Enabled: true,
 	})
 	const (
-		// The pass walks newest-first, so of two identical snapshots the newer
-		// one is uploaded and becomes the owner of the object; the older one
-		// dedupes against it. Both are past hot retention, so both are prune
-		// candidates once their offsite claim stops holding.
-		owner     = "backup-20260515T000000Z-000.tar.gz" // 34d: uploaded, owns the object
-		dependent = "backup-20260509T000000Z-000.tar.gz" // 40d: same content, deduped
-		newest    = "backup-20260618T000000Z-000.tar.gz" // 1h: always protected
+		// The upload pass walks newest-first, so of two identical snapshots the
+		// newer one is uploaded and becomes the owner of the object. The dependent
+		// is a LATER run over the same tree (created between the two upload
+		// passes) so that it — not the owner — is the newest snapshot with an
+		// offsite record: the position from which a stale claim would justify a
+		// delete. `older` is the prune candidate that claim would have killed.
+		older     = "backup-20260509T000000Z-000.tar.gz" // 40d: own object, prune candidate
+		owner     = "backup-20260515T000000Z-000.tar.gz" // 34d: uploaded, owns the shared object
+		dependent = "backup-20260516T000000Z-000.tar.gz" // 33d: same content, deduped
+		newest    = "backup-20260618T000000Z-000.tar.gz" // 1h: created after the upload passes
 	)
+	mkArchiveContent(t, filepath.Join(dir, older), now.Add(-40*24*time.Hour), "older-tree")
 	mkArchiveContent(t, filepath.Join(dir, owner), now.Add(-34*24*time.Hour), "shared-tree")
-	mkArchiveContent(t, filepath.Join(dir, dependent), now.Add(-40*24*time.Hour), "shared-tree")
-	mkArchiveContent(t, filepath.Join(dir, newest), now.Add(-time.Hour), "other-tree")
 
 	deps := Deps{Store: st, Offsite: &fakeOffsite{}, BackupBaseDir: base, Now: func() time.Time { return now }}
 	off := deps.Offsite.(*fakeOffsite)
 
-	// ── upload A, then the unchanged B that dedupes to it ──────────────────
+	// ── upload the owner's tree and the older snapshot ─────────────────────
 	if err := RunOffsiteOnce(ctx, deps); err != nil {
 		t.Fatalf("RunOffsiteOnce: %v", err)
 	}
 	if len(off.up) != 2 {
-		t.Fatalf("offsite uploads = %d, want 2 (the owner and the newest): %v", len(off.up), off.up)
+		t.Fatalf("offsite uploads = %d, want 2 (the owner and the older snapshot): %v", len(off.up), off.up)
+	}
+
+	// ── a later run of the unchanged tree dedupes against the owner ────────
+	mkArchiveContent(t, filepath.Join(dir, dependent), now.Add(-33*24*time.Hour), "shared-tree")
+	if err := RunOffsiteOnce(ctx, deps); err != nil {
+		t.Fatalf("RunOffsiteOnce (unchanged tree): %v", err)
+	}
+	if len(off.up) != 2 {
+		t.Fatalf("an unchanged tree must not upload again: uploads = %d, want still 2: %v", len(off.up), off.up)
 	}
 	dep := offsiteRow(t, st, id, dependent)
 	if dep.DedupOf != owner || dep.Bytes != 0 {
 		t.Fatalf("an unchanged tree must be recorded as a dedupe of %s with 0 bytes: %+v", owner, dep)
 	}
 
+	// ── a still later run, not offsited yet; the newest is protected anyway ─
+	mkArchiveContent(t, filepath.Join(dir, newest), now.Add(-time.Hour), "other-tree")
+
 	// ── the bucket lifecycle rule expires the owner's object ───────────────
 	if !deleteObject(off, owner) {
 		t.Fatalf("the owner's object was never uploaded, so it cannot be expired: %v", off.up)
 	}
 
-	// ── a lifecycle pass: flag, say why, and keep the hot copy ─────────────
+	// ── a lifecycle pass: flag, say why, and prune nothing on the claim ────
 	logs := captureLog(t)
 	if err := RunOnce(ctx, deps); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -81,8 +96,13 @@ func TestDedupedRunIsFlaggedAndReuploadedWhenItsOwnerObjectExpires(t *testing.T)
 	if !dep.RemoteMissing {
 		t.Fatalf("the dependent run still claims an offsite copy that does not exist: %+v", dep)
 	}
-	if _, err := os.Stat(filepath.Join(dir, dependent)); err != nil {
-		t.Fatalf("the hot copy of the deduped run was pruned while its offsite copy was gone: %v", err)
+	// With the claim rejected, the newest confirmed offsite copy is the 40-day-old
+	// one, so nothing is strictly older than it and nothing may be pruned. Had the
+	// stale claim been honoured, `older` would have died here with no copy left.
+	for _, name := range []string{older, owner, dependent, newest} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s was pruned on the strength of an expired dedupe claim: %v\n%s", name, err, logs.String())
+		}
 	}
 
 	// ── the next upload pass puts the content back ─────────────────────────
@@ -99,8 +119,11 @@ func TestDedupedRunIsFlaggedAndReuploadedWhenItsOwnerObjectExpires(t *testing.T)
 	if dep = offsiteRow(t, st, id, dependent); dep.RemoteMissing {
 		t.Fatalf("a re-uploaded run must not stay flagged as missing: %+v", dep)
 	}
-	if !remoteHolds(off, owner) {
-		t.Fatalf("the expired owner object was not uploaded again: %v", off.up)
+	// Both hot copies exist now, so the pass uploads one of them (the newer, the
+	// dependent) and dedupes the other against it: what matters is that the shared
+	// tree is on the remote again, under one of the two runs' names.
+	if !remoteHolds(off, owner) && !remoteHolds(off, dependent) {
+		t.Fatalf("the shared tree is on the remote under neither run's object after the re-upload pass: %v", off.up)
 	}
 
 	// One line per client per pass, and only on the transition: the claim is

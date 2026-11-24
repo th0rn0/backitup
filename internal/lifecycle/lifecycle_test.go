@@ -195,32 +195,72 @@ func TestRunOnceOffsiteAndPrune(t *testing.T) {
 	}
 }
 
-// Offsite-first: when the offsite worker's upload fails, nothing is recorded
-// offsite, AND the lifecycle worker must NOT prune the old snapshot from hot.
-func TestRunOnceOffsiteFirstProtectsHot(t *testing.T) {
+// Offsite-first is now a freshness rule: a hot snapshot may be deleted when a
+// STRICTLY NEWER snapshot is confirmed offsite. This pins the wiring end to end,
+// in the shape the rule was written for — a client on offsite_upload_mode=latest,
+// where only the newest snapshot ever has an offsite record of its own.
+//
+// First pass: every upload fails, so nothing is offsited, so retention may not
+// delete a single copy and the pass says why. Second pass: the one upload that
+// latest mode makes succeeds, and now both older snapshots are older than the
+// newest offsite copy — so they go. Under the per-snapshot guard neither ever
+// would have: neither has an offsite record of itself, so retention blocked
+// forever on a client that only ever offsites the latest.
+func TestRunOnceOffsiteFirstRequiresANewerOffsiteCopy(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	id, base, dir := newClient(t, st, model.Client{
+	const (
+		old    = "backup-20260509T000000Z-000.tar.gz" // 40d
+		mid    = "backup-20260519T000000Z-000.tar.gz" // 30d
+		newest = "backup-20260618T110000Z-000.tar.gz" // 1h
+	)
+	_, base, dir := newClient(t, st, model.Client{
 		Name: "c", Mode: model.ModeTarGz, OffsiteRemote: "local",
-		RetentionDays: 14, Enabled: true,
+		OffsiteUploadMode: "latest", RetentionDays: 14, Enabled: true,
 	})
-	mkArchive(t, filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz"), now.Add(-40*24*time.Hour))
-	mkArchive(t, filepath.Join(dir, "backup-20260618T000000Z-000.tar.gz"), now.Add(-1*time.Hour))
+	mkArchive(t, filepath.Join(dir, old), now.Add(-40*24*time.Hour))
+	mkArchive(t, filepath.Join(dir, mid), now.Add(-30*24*time.Hour))
+	mkArchive(t, filepath.Join(dir, newest), now.Add(-1*time.Hour))
 
 	deps := Deps{Store: st, Offsite: &fakeOffsite{fail: true}, BackupBaseDir: base, Now: func() time.Time { return now }}
+	off := deps.Offsite.(*fakeOffsite)
 
-	// Offsite worker fails.
+	// ── uploads failing: no offsite copy exists, so no delete is permitted ──
 	if err := RunOffsiteOnce(context.Background(), deps); err == nil {
 		t.Fatal("expected error when offsite upload fails")
 	}
-	if objs, _ := st.ListOffsiteObjects(context.Background(), id); len(objs) != 0 {
+	if objs, _ := st.ListOffsiteObjects(context.Background(), 1); len(objs) != 0 {
 		t.Fatalf("nothing should be recorded offsite, got %d", len(objs))
 	}
+	logs := runOnceCapturingLog(t, deps)
+	for _, name := range []string{old, mid, newest} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s must not be pruned while nothing is offsited: %v\n%s", name, err, logs)
+		}
+	}
+	if want := "keeping 2 snapshots: nothing is offsited for this client"; !strings.Contains(logs, want) {
+		t.Fatalf("the pass must say why it pruned nothing;\nwant a line containing: %s\ngot:\n%s", want, logs)
+	}
 
-	// Lifecycle worker runs — must not prune the un-offsited old snapshot.
-	_ = RunOnce(context.Background(), deps)
-	if _, err := os.Stat(filepath.Join(dir, "backup-20260509T000000Z-000.tar.gz")); err != nil {
-		t.Fatal("old un-offsited archive must NOT be pruned (offsite-first)")
+	// ── the newest snapshot reaches cold storage; latest mode offsites only it ──
+	off.fail = false
+	if err := RunOffsiteOnce(context.Background(), deps); err != nil {
+		t.Fatalf("RunOffsiteOnce (healthy): %v", err)
+	}
+	if len(off.up) != 1 {
+		t.Fatalf("offsite_upload_mode=latest uploaded %d snapshots, want 1: %v", len(off.up), off.up)
+	}
+	logs = runOnceCapturingLog(t, deps)
+	for _, name := range []string{old, mid} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Errorf("%s must be pruned now that a strictly newer snapshot is offsite\n%s", name, logs)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, newest)); err != nil {
+		t.Fatalf("the offsited newest snapshot must survive: %v\n%s", err, logs)
+	}
+	if want := "older than the newest offsite copy " + newest; !strings.Contains(logs, want) {
+		t.Errorf("the log must name the copy that justified the delete;\nwant a line containing: %s\ngot:\n%s", want, logs)
 	}
 }
 
