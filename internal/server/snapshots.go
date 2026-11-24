@@ -214,20 +214,9 @@ func (s *Server) offsiteObjectPath(ctx context.Context, c *model.Client, offsite
 	if c.Mode == model.ModeRsync {
 		objectName += ".tar.gz"
 	}
-	parts := make([]string, 0, 3)
-	abs := strings.HasPrefix(root, "/") // a test-only local remote addresses a directory
-	if root = strings.Trim(root, "/"); root != "" {
-		parts = append(parts, root)
-	}
-	if dir := strings.Trim(offsiteDir, "/"); dir != "" {
-		parts = append(parts, dir)
-	}
-	parts = append(parts, objectName)
-	objectPath = strings.Join(parts, "/")
-	if abs {
-		objectPath = "/" + objectPath
-	}
-	return objectPath, objectName, nil
+	// model.ObjectPath is the same join the offsite worker uploads with, so a
+	// download or delete addresses the object that was actually written.
+	return model.ObjectPath(root, offsiteDir, objectName), objectName, nil
 }
 
 // hotSnapshots lists a client's snapshots on the hot store as the UI should see
