@@ -210,10 +210,7 @@ func (s *Server) offsiteObjectPath(ctx context.Context, c *model.Client, offsite
 			root = r.RootPath()
 		}
 	}
-	objectName = snapshotID
-	if c.Mode == model.ModeRsync {
-		objectName += ".tar.gz"
-	}
+	objectName = model.OffsiteObjectName(c.Mode, c.OffsiteUploadMode, snapshotID)
 	// model.ObjectPath is the same join the offsite worker uploads with, so a
 	// download or delete addresses the object that was actually written.
 	return model.ObjectPath(root, offsiteDir, objectName), objectName, nil

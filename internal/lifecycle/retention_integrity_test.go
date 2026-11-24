@@ -279,6 +279,8 @@ func (p *stagingProbe) Upload(_ context.Context, local, _, _ string) (int64, err
 
 func (p *stagingProbe) Delete(context.Context, string, string) error { return nil }
 
+func (p *stagingProbe) Move(context.Context, string, string, string) error { return nil }
+
 func (p *stagingProbe) Lsf(context.Context, string, string) ([]string, error) { return nil, nil }
 
 func mkRsyncSnapshots(t *testing.T, clientDir string, ids ...string) {

@@ -351,6 +351,28 @@ lifecycle rule (see [Offsite retention is the bucket's lifecycle
 rule](#offsite-retention-is-the-buckets-lifecycle-rule)). tar.gz archives upload as-is;
 rsync snapshots are tarred into one object per snapshot.
 
+#### Upload scope: how many cold copies a client holds
+
+Each client's **Upload scope** decides what cold storage holds for it:
+
+| Upload scope | What the bucket holds |
+|---|---|
+| **All snapshots** (default) | One object per snapshot, named after the snapshot. Nothing is overwritten, ever. |
+| **Latest only** | The newest un-uploaded snapshot goes up each pass, still as its own object. The earlier objects stay until the bucket rule expires them, so this bounds the *work* per pass, not the space. |
+| **Single generation** | Exactly one object per client, `<bucket path>/latest.tar.gz`, overwritten by every successful upload. |
+
+Single generation is the only mode that bounds what the bucket holds without
+backitup deleting anything. The overwrite is done so that it cannot destroy the
+copy it replaces: the archive is uploaded to `latest.tar.gz.part` and then moved
+onto `latest.tar.gz` with a server-side rename (`rclone moveto` — a server-side
+copy plus a server-side delete, so no bytes cross the wire twice), and the
+bookkeeping row is rewritten only after the move has landed. A failed or
+truncated upload therefore leaves the previous object untouched.
+
+The cost is real and it is the point of the mode: **one generation, no
+point-in-time restore**, and a bad backup replaces a good one on the next
+successful run.
+
 #### Setting up the offsite destination (Backblaze B2)
 
 Offsite storage is **Backblaze B2 and nothing else**. Open **Remote storage** in
@@ -449,7 +471,9 @@ incremental snapshots on the hot store via hardlinks (only changed data costs sp
   is offsited at all nothing is pruned. The age horizon still applies on top — this
   rule narrows what `retention_days` allows, it never widens it. Offsite pushes
   **immutable per-snapshot objects** (no destructive sync), so corruption cannot be
-  replicated over your only cold copy.
+  replicated over your only cold copy — with one deliberate exception: a client on
+  the **single** upload scope replaces its one object by design, which is the trade
+  it makes for bounding storage.
 - The trade-off is deliberate: **while offsite is stale or broken the hot store keeps
   everything newer than the last good offsite copy, so it grows.** That growth plus
   one log line per pass — `keeping 4 snapshots: not older than the newest offsite
@@ -459,6 +483,13 @@ incremental snapshots on the hot store via hardlinks (only changed data costs sp
   client on `offsite_upload_mode = latest` offsites only its newest snapshot, so
   everything older than that one is prunable and the hot store no longer grows
   forever on it.
+- A client on `offsite_upload_mode = single` follows the same rule with one extra
+  condition: its one cold copy is current only as of its last **successful** upload.
+  The pass deletes hot snapshots strictly older than the snapshot held in
+  `latest.tar.gz` and keeps everything newer; if the last upload failed (or is still
+  running) **nothing is pruned** until one succeeds, and the pass says so. The row
+  alone cannot answer the question — a failed upload leaves it exactly as the last
+  success left it.
 - `remote_missing` is the check that tells you a bucket rule ate something it should
   not have. The lifecycle verification pass lists each remote and flags an object the
   database believes in but the bucket no longer holds; a snapshot flagged that way
@@ -529,12 +560,23 @@ rsync -a ~/restore/20260101T000000Z/ /srv/photos/
 `rclone cat` — or fetch the object directly with rclone. The object path is deterministic:
 `<offsite-dir>/<snapshot-id>` for `targz` clients, and
 `<offsite-dir>/<snapshot-id>.tar.gz` for `rsync` clients, where `<offsite-dir>`
-defaults to the client's slug.
+defaults to the client's slug. (A client on the `single` upload scope has one
+object and one name — see below.)
 
 ```bash
 # store the remote as [archive] in the config rclone uses (see BACKITUP_RCLONE_CONFIG)
 rclone copy archive:laptop-docs/backup-20260101T000000Z-000.tar.gz ~/restore/
 rclone copy archive:nas-photos/20260101T000000Z.tar.gz            ~/restore/
+```
+
+**Offsite, `single` upload scope.** The object is named `latest.tar.gz` inside the
+client's path — `<offsite-dir>/latest.tar.gz`, whatever the client's mode — and it
+contains the newest snapshot only. There is one restore point, not a history: the
+download button on the client page fetches that object, and the snapshot id it is
+listed under is simply which backup it currently holds.
+
+```bash
+rclone copy archive:laptop-docs/latest.tar.gz ~/restore/
 ```
 
 **What a restore preserves, and what it does not.** File contents, permission

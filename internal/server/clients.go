@@ -551,8 +551,11 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	dir := strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/"))
 	cronExpr := strings.TrimSpace(r.PostFormValue("offsite_cron"))
 	uploadMode := r.PostFormValue("offsite_upload_mode")
-	if uploadMode != "latest" {
-		uploadMode = "all"
+	switch uploadMode {
+	case model.OffsiteUploadLatest, model.OffsiteUploadSingle:
+		// keep as posted
+	default:
+		uploadMode = model.OffsiteUploadAll
 	}
 
 	if cronExpr != "" {

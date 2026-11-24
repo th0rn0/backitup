@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,9 +19,12 @@ import (
 )
 
 type fakeOffsite struct {
-	up   map[string]int64
-	del  []string
-	fail bool
+	up      map[string]int64
+	payload map[string][]byte // what each object holds, so a test can prove the bytes were replaced
+	del     []string
+	moves   [][2]string // (from, to) of every Move, in order
+	fail    bool        // Upload fails
+	moveErr error       // Move fails with this
 }
 
 func (f *fakeOffsite) Upload(_ context.Context, local, _, obj string) (int64, error) {
@@ -31,15 +35,44 @@ func (f *fakeOffsite) Upload(_ context.Context, local, _, obj string) (int64, er
 	if err != nil {
 		return 0, err
 	}
+	body, err := os.ReadFile(local)
+	if err != nil {
+		return 0, err
+	}
 	if f.up == nil {
 		f.up = map[string]int64{}
 	}
+	if f.payload == nil {
+		f.payload = map[string][]byte{}
+	}
 	f.up[obj] = fi.Size()
+	f.payload[obj] = body
 	return fi.Size(), nil
+}
+
+// Move mirrors rclone moveto: the source must exist, and the destination
+// replaces whatever was there.
+func (f *fakeOffsite) Move(_ context.Context, _, from, to string) error {
+	if f.moveErr != nil {
+		return f.moveErr
+	}
+	size, ok := f.up[from]
+	if !ok {
+		return fmt.Errorf("move: source object %q does not exist", from)
+	}
+	body := f.payload[from]
+	delete(f.up, from)
+	delete(f.payload, from)
+	f.up[to] = size
+	f.payload[to] = body
+	f.moves = append(f.moves, [2]string{from, to})
+	return nil
 }
 
 func (f *fakeOffsite) Delete(_ context.Context, _, obj string) error {
 	f.del = append(f.del, obj)
+	delete(f.up, obj)
+	delete(f.payload, obj)
 	return nil
 }
 

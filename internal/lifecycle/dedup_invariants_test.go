@@ -96,7 +96,7 @@ func TestDedupRecordOnlyProtectsWhileOwnerObjectExists(t *testing.T) {
 			off := &fakeOffsite{}
 			if !tc.missing {
 				off.up = map[string]int64{
-					objectPath("", model.Slug(tc.name), model.ModeTarGz, "backup-20260616T000000Z-000.tar.gz"): 1,
+					model.ObjectPath("", model.Slug(tc.name), "backup-20260616T000000Z-000.tar.gz"): 1,
 				}
 			}
 
