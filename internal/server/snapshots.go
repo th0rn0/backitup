@@ -38,7 +38,7 @@ func (s *Server) getSnapshotDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snaps, err := sm.List(ctx, clientDir)
+	snaps, err := s.hotSnapshots(ctx, c, sm, clientDir)
 	if err != nil {
 		http.Error(w, "failed to list snapshots", http.StatusInternalServerError)
 		return
@@ -228,6 +228,31 @@ func (s *Server) offsiteObjectPath(ctx context.Context, c *model.Client, offsite
 		objectPath = "/" + objectPath
 	}
 	return objectPath, objectName, nil
+}
+
+// hotSnapshots lists a client's snapshots on the hot store as the UI should see
+// them: the directories the mode lists, minus the ones the server's own run
+// record says are not backups.
+//
+// The mode can only tell "this directory is not marked". A run that was killed
+// before it could report never marks anything, so a half-copied tree sits in
+// snapshots/<ts>/ looking exactly like a backup; the run row it opened (and that
+// never reached ok) is what distinguishes it. See lifecycle.VisibleSnapshots.
+//
+// A run history that cannot be read is not evidence, so this falls back to the
+// unfiltered listing and logs: a dashboard that hides a real backup because the
+// database blipped is the worse failure of the two.
+func (s *Server) hotSnapshots(ctx context.Context, c *model.Client, sm mode.ServerMode, clientDir string) ([]mode.Snapshot, error) {
+	snaps, err := sm.List(ctx, clientDir)
+	if err != nil {
+		return nil, err
+	}
+	visible, _, vErr := lifecycle.VisibleSnapshots(ctx, s.st, *c, sm, snaps)
+	if vErr != nil {
+		log.Printf("hot store: client %q: %v: showing every listed snapshot", c.Name, vErr)
+		return snaps, nil
+	}
+	return visible, nil
 }
 
 // resolveClientAndMode loads the client and its ServerMode for snapshot operations.

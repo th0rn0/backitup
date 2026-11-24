@@ -111,6 +111,22 @@ func (Server) ListIncomplete(ctx context.Context, clientDir string) ([]mode.Snap
 	return out, nil
 }
 
+// RunStart reports the run start time a snapshot's name encodes: rsync names
+// each snapshot after the clock it read at the top of the run, so
+// snapshots/<ts> and the run row's started_at are the same instant. See
+// mode.RunStartNamed for why the server needs to know that.
+func (Server) RunStart(s mode.Snapshot) (time.Time, bool) {
+	t, err := time.Parse("20060102T150405Z", s.ID)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
+}
+
+// The hot-store guard attributes a snapshot directory to the run row that named
+// it; rsync is the mode whose names allow that.
+var _ mode.RunStartNamed = Server{}
+
 // StagingDirEnv names the directory PrepareOffsite builds its temporary
 // archives in. Unset means <backup base dir>/staging — a sibling of the client
 // directories, on the volume the operator sized for backups. The default used to

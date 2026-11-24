@@ -222,7 +222,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 			log.Printf("getClient: %v; not listing local snapshots", dirErr)
 		} else {
 			clientDir = dir
-			snaps, err := sm.List(ctx, clientDir)
+			snaps, err := s.hotSnapshots(ctx, c, sm, clientDir)
 			if err == nil {
 				localSnapshots = snaps
 			}
