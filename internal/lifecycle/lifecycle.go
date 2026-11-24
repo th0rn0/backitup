@@ -1078,20 +1078,12 @@ func recordOffsiteRun(ctx context.Context, d Deps, c model.Client, triggeredBy s
 
 // remoteDir returns the directory inside a remote that holds a client's
 // objects: "<root>/<dir>", each part omitted when empty. It is what verify
-// lists with rclone lsf. An absolute root (a test-only local remote addresses a
-// directory) keeps its leading slash.
+// lists with rclone lsf. model.ObjectDir owns the rule, so this listing and the
+// upload path (and the download/delete routes in the server) always address the
+// same place — including dropping a client directory that only repeats the
+// bucket.
 func remoteDir(root, dir string) string {
-	parts := make([]string, 0, 2)
-	for _, p := range []string{root, dir} {
-		if p = strings.Trim(p, "/"); p != "" {
-			parts = append(parts, p)
-		}
-	}
-	p := strings.Join(parts, "/")
-	if strings.HasPrefix(root, "/") && p != "" {
-		p = "/" + p
-	}
-	return p
+	return model.ObjectDir(root, dir)
 }
 
 // objectName is the filename one snapshot has inside the remote directory: an
@@ -1109,11 +1101,7 @@ func objectName(m model.Mode, snapshotID string) string {
 // remote was configured with — "" for a remote backitup has no row for, which
 // keeps the old path.
 func objectPath(root, dir string, m model.Mode, snapshotID string) string {
-	name := objectName(m, snapshotID)
-	if d := remoteDir(root, dir); d != "" {
-		return d + "/" + name
-	}
-	return name
+	return model.ObjectPath(root, dir, objectName(m, snapshotID))
 }
 
 // fileChecksum returns the SHA-256 hex digest of the file at path.

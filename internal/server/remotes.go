@@ -561,6 +561,15 @@ func (s *Server) validateRemoteConfig(ctx context.Context, name string, def *mod
 				return "Path prefix " + reason, nil
 			}
 		}
+		// The bucket is prepended to every object path, so a key that cannot see
+		// it turns each upload into a bucket-creation attempt that B2 refuses
+		// with duplicate_bucket_name. Check visibility here, at the form, where
+		// the operator can still fix it (see verifyBucketVisible).
+		if msg, err := s.verifyBucketVisible(ctx, name, cfg); err != nil {
+			return "", err
+		} else if msg != "" {
+			return msg, nil
+		}
 		return "", nil
 	}
 	if def.ID != model.BackendCrypt {

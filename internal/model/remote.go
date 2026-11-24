@@ -217,11 +217,26 @@ func (r Remote) CryptParent() string {
 // onto the remote, or a test-only local remote pointed at a directory — returns
 // "" or its configured root and leaves paths exactly as they were.
 //
+// A prefix that repeats the bucket is dropped. The field that fills it is
+// labelled "Path inside the bucket", and operators naturally type the bucket
+// name there — as older builds did on their own, defaulting it to the client's
+// slug, so a client whose slug matched its bucket wrote every object to
+// "<bucket>/<bucket>/<snapshot>". A prefix that repeats the bucket decorates
+// nothing and makes the destination hard to read, and rclone addresses the
+// bucket by the first path element only, so the repetition is noise at best.
+//
 // An absolute bucket (the test-only local backend addresses a directory this
 // way) keeps its leading slash.
 func (r Remote) RootPath() string {
 	bucket := strings.TrimSpace(r.Config["bucket"])
 	prefix := strings.TrimSpace(r.Config["path"])
+	if b := strings.Trim(bucket, "/"); b != "" {
+		if p := strings.Trim(prefix, "/"); p == b {
+			prefix = ""
+		} else if strings.HasPrefix(p, b+"/") {
+			prefix = p[len(b)+1:]
+		}
+	}
 	parts := make([]string, 0, 2)
 	for _, p := range []string{bucket, prefix} {
 		if p = strings.Trim(p, "/"); p != "" {
