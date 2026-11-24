@@ -85,6 +85,12 @@ func LogOffsiteRetentionDelegated() {
 // is the path within the remote, e.g. "client-3/20260618T....tar.gz".
 type Offsite interface {
 	Upload(ctx context.Context, localPath, remote, objectName string) (bytes int64, err error)
+	// Move renames an object inside the remote in one step. Production is rclone
+	// moveto, which is a server-side copy followed by a server-side delete, so no
+	// bytes cross the wire twice. It exists for the single-generation mode, where
+	// a finished upload has to replace the live object without a window in which
+	// the client has no cold copy at all.
+	Move(ctx context.Context, remote, from, to string) error
 	Delete(ctx context.Context, remote, objectName string) error
 	// Lsf returns the filenames (no path prefix) inside a remote directory.
 	Lsf(ctx context.Context, remote, dir string) ([]string, error)
@@ -384,37 +390,30 @@ func uploadClient(ctx context.Context, d Deps, c model.Client, root string) erro
 	// pointing at nothing, which is the failure this whole path exists to avoid.
 	verifyOffsiteObjects(ctx, d, c, root, true)
 
-	offsited, err := d.offsitedSet(ctx, c.ID)
+	// The rows as well as the set: the single-generation mode decides what to
+	// upload from what the one row claims the fixed object holds, not merely
+	// from whether a snapshot has a row.
+	objs, err := d.Store.ListOffsiteObjects(ctx, c.ID)
 	if err != nil {
 		return err
 	}
 
 	start := d.now()
-	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited, root)
+	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, objs, root)
 	if snapsUploaded > 0 || uploadErr != nil {
 		recordOffsiteRun(ctx, d, c, "scheduled", start, snapsUploaded, bytesUploaded, uploadErr)
 	}
 	return uploadErr
 }
 
-// offsitedSet returns the snapshot ids whose content is believed to be in cold
-// storage, so the hot pruner may delete them (offsite-first, D8).
+// offsitedSetFrom answers "which snapshots' content is believed to be in cold
+// storage", for records a pass has already loaded.
 //
 // "Believed" is doing the work: a record only counts while the object it names
 // is thought to exist. A row the verification pass has reported missing protects
 // nothing (its content is not on the remote), and a dedup row counts only while
 // the object it points at is itself intact — otherwise "offsited" would mean "was
 // offsited once", and the hot copy would be pruned with no copy left anywhere.
-func (d Deps) offsitedSet(ctx context.Context, clientID int64) (map[string]bool, error) {
-	objs, err := d.Store.ListOffsiteObjects(ctx, clientID)
-	if err != nil {
-		return nil, err
-	}
-	return offsitedSetFrom(objs), nil
-}
-
-// offsitedSetFrom is offsitedSet's answer for records already loaded, so a pass
-// that had to re-read them after verification does not query twice.
 func offsitedSetFrom(objs []model.OffsiteObject) map[string]bool {
 	present := make(map[string]bool, len(objs))
 	for _, o := range objs {
@@ -487,15 +486,30 @@ func pruneLeansOnDedupe(c model.Client, snaps []mode.Snapshot, objs []model.Offs
 	return false
 }
 
-// offsiteNewSnapshots uploads snapshots not yet in cold storage.
-// When c.OffsiteUploadMode is "latest", only the newest un-offsited snapshot
-// is uploaded (snaps must be sorted newest-first). Otherwise all are uploaded.
+// offsiteNewSnapshots gets this client's snapshots into cold storage, in the
+// shape its offsite_upload_mode asks for.
+//
+//   - "all": every snapshot without a copy is uploaded (or recorded as dedup).
+//   - "latest": at most one un-offsited snapshot per pass — the newest, since
+//     snaps must be sorted newest-first. Each upload is still its own object.
+//   - "single": the fixed object (latest.tar.gz) is replaced by the newest
+//     snapshot, and the client keeps exactly one object and one row. See
+//     offsiteSingleSnapshot.
+//
 // Returns the number of snapshots uploaded and total bytes transferred;
 // deduplicated snapshots are recorded but not counted as uploads.
-func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, offsited map[string]bool, root string) (int, int64, error) {
+func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, objs []model.OffsiteObject, root string) (int, int64, error) {
+	if c.OffsiteUploadMode == model.OffsiteUploadSingle {
+		bytes, uploaded, err := offsiteSingleSnapshot(ctx, d, c, sm, clientDir, snaps, objs, root)
+		if !uploaded {
+			return 0, 0, err
+		}
+		return 1, bytes, err
+	}
 	var totalSnaps int
 	var totalBytes int64
-	latestOnly := c.OffsiteUploadMode == "latest"
+	offsited := offsitedSetFrom(objs)
+	latestOnly := c.OffsiteUploadMode == model.OffsiteUploadLatest
 	for _, s := range snaps {
 		if offsited[s.ID] {
 			continue
@@ -513,6 +527,121 @@ func offsiteNewSnapshots(ctx context.Context, d Deps, c model.Client, sm mode.Se
 		}
 	}
 	return totalSnaps, totalBytes, nil
+}
+
+// offsiteSingleSnapshot replaces the client's one cold copy with the newest
+// snapshot, in the only order that cannot lose it:
+//
+//  1. upload the archive to "latest.tar.gz.part" — a name nothing reads, so a
+//     failed or truncated transfer leaves the live object untouched;
+//  2. move it to "latest.tar.gz" (rclone moveto: server-side copy, then a
+//     server-side delete), which is what replaces the previous generation;
+//  3. only then replace the database rows with the one that names the held
+//     snapshot, its checksum, size and upload time.
+//
+// The row is written last on purpose. A row that named the new snapshot before
+// the move landed would be a claim that the fixed object holds content it does
+// not, and the hot pruner deletes on the strength of exactly that claim.
+//
+// Nothing is uploaded when the fixed object already holds the newest snapshot:
+// there is nothing newer to replace it with, so a pass over an unchanged client
+// touches no bytes and — like the other modes — writes no offsite_run row.
+func offsiteSingleSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, clientDir string, snaps []mode.Snapshot, objs []model.OffsiteObject, root string) (int64, bool, error) {
+	newest, ok := newestSnapshot(snaps)
+	if !ok {
+		return 0, false, nil // no snapshot to tier
+	}
+	if held, ok := singleHeldSnapshot(objs, c.OffsiteRemote); ok && held == newest.ID {
+		return 0, false, nil // the fixed object already holds the newest snapshot
+	}
+	obj, err := sm.PrepareOffsite(ctx, clientDir, newest)
+	if err != nil {
+		return 0, false, fmt.Errorf("prepare offsite %s: %w", newest.ID, err)
+	}
+	// rsync builds a temp archive; remove it as soon as this upload is done
+	// (tar.gz returns the archive in place, which must NOT be removed).
+	if c.Mode == model.ModeRsync {
+		defer func() { _ = os.Remove(obj) }()
+	}
+	checksum, err := fileChecksum(obj)
+	if err != nil {
+		return 0, false, fmt.Errorf("checksum %s: %w", newest.ID, err)
+	}
+
+	live := objectPathFor(root, c, newest.ID)
+	part := model.ObjectPath(root, offsiteDir(c), model.SingleObjectPartName)
+
+	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, part)
+	if err != nil {
+		// The live object was never touched: this write went to the staging
+		// name, which nothing reads and the bucket rule will expire if rclone
+		// left anything behind.
+		return 0, false, fmt.Errorf("offsite upload %s: %w", newest.ID, err)
+	}
+	if err := d.Offsite.Move(ctx, c.OffsiteRemote, part, live); err != nil {
+		// The previous generation is still at the live name — a move that did
+		// not happen replaced nothing. Drop the staged copy so a failing pass
+		// does not pay for the upload twice over in the bucket, but never the
+		// live object: that is the client's only cold copy.
+		if delErr := d.Offsite.Delete(ctx, c.OffsiteRemote, part); delErr != nil {
+			log.Printf("offsite: client=%q snap=%s: could not remove the staging object %s after a failed move: %v",
+				c.Name, newest.ID, part, delErr)
+		}
+		return 0, false, fmt.Errorf("offsite move %s -> %s: %w", part, live, err)
+	}
+	if err := d.Store.ReplaceSingleOffsiteObject(ctx, model.OffsiteObject{
+		ClientID:   c.ID,
+		SnapshotID: newest.ID,
+		Remote:     c.OffsiteRemote,
+		Bytes:      bytes,
+		Checksum:   checksum,
+		UploadedAt: d.now(),
+	}); err != nil {
+		return 0, false, fmt.Errorf("record offsite %s: %w", newest.ID, err)
+	}
+	log.Printf("offsite: client=%q remote=%s snapshot=%s replaced %s (bytes=%d sha256=%s…)",
+		c.Name, c.OffsiteRemote, newest.ID, live, bytes, checksum[:12])
+	if d.Verbose {
+		log.Printf("offsite: client=%q single generation: the only object is %s", c.Name, live)
+	}
+	if d.DiscordWebhook != "" {
+		go alert.Discord(d.DiscordWebhook, fmt.Sprintf(
+			"☁️ **backitup** — `%s` offsite upload complete (single generation: previous copy replaced)\nRemote: %s | snapshot: %s | size: %s",
+			c.Name, c.OffsiteRemote, newest.ID, alert.FormatBytes(bytes),
+		))
+	}
+	return bytes, true, nil
+}
+
+// singleHeldSnapshot returns the snapshot id the fixed object is recorded as
+// holding, and whether that record can be read as "the object holds this
+// snapshot's content right now".
+//
+// Only one row for this remote counts, and only an owning, verified one: a
+// client that has just been switched to this mode still has the per-snapshot
+// rows of the mode it came from, and none of those says anything about the fixed
+// name. A dedupe row names someone else's object, and a row the verification
+// pass reported missing names an object the bucket no longer holds. In all three
+// cases the answer is "no," and the pass uploads — which is also what makes the
+// switch to this mode replace those rows rather than trust them. Rows for a
+// different remote are filtered out first: an operator repointing a client leaves
+// them behind, and reading them as a second generation would re-upload the same
+// snapshot on every pass forever.
+func singleHeldSnapshot(objs []model.OffsiteObject, remote string) (string, bool) {
+	var rows []model.OffsiteObject
+	for _, o := range objs {
+		if o.Remote == remote {
+			rows = append(rows, o)
+		}
+	}
+	if len(rows) != 1 {
+		return "", false
+	}
+	o := rows[0]
+	if o.DedupOf != "" || o.RemoteMissing {
+		return "", false
+	}
+	return o.SnapshotID, true
 }
 
 // offsiteSnapshot gets one snapshot into cold storage — by uploading it, or by
@@ -557,7 +686,7 @@ func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.Server
 		return 0, false, nil
 	}
 
-	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPath(root, offsiteDir(c), c.Mode, s.ID))
+	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPathFor(root, c, s.ID))
 	if err != nil {
 		return 0, false, fmt.Errorf("offsite upload %s: %w", s.ID, err)
 	}
@@ -733,6 +862,21 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 	if len(snaps) <= 1 {
 		return 0, 0, nil
 	}
+	if offsiteOn && c.OffsiteUploadMode == model.OffsiteUploadSingle {
+		// A single-generation client has exactly one cold copy, and that copy is
+		// current only as of its last SUCCESSFUL upload. The freshness rule below
+		// ("delete what is strictly older than the newest offsite snapshot") reads
+		// the row, and the row survives a failed upload unchanged — it still names
+		// the snapshot the fixed object holds, which may be days older than
+		// anything this pass is looking at. Deleting hot snapshots older than a
+		// copy that the last run failed to update would leave one generation in
+		// cold storage and no way to tell how stale it is, so a client whose last
+		// upload did not succeed is pruned by nothing until one does.
+		if why, stale := singleCopyStale(ctx, d, c); stale {
+			log.Printf("lifecycle: client %d (%s): keeping all %d snapshots: %s", c.ID, c.Name, len(snaps), why)
+			return 0, 0, nil
+		}
+	}
 	cutoff := d.now().Add(-time.Duration(c.RetentionDays) * 24 * time.Hour)
 	newest, ok := newestSnapshot(snaps)
 	// The freshest evidence that this client's content is off the hot store.
@@ -788,6 +932,48 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 		}
 	}
 	return deleted, failed, err
+}
+
+// singleCopyStale reports whether a single-generation client's one cold copy
+// must be treated as not current, and why.
+//
+// The evidence is the offsite run history, not the object row: a failed upload
+// leaves the row — and the object behind it — exactly as the last successful
+// upload left them, so the row cannot say whether the copy is up to date. Only a
+// finished, successful run says "the fixed object holds the newest snapshot as
+// of that moment".
+//
+// No run history at all falls through to the row: a client whose rows predate
+// the history (or whose history was pruned) is judged by the freshness rule like
+// any other mode, because refusing to prune forever over missing bookkeeping is
+// a retention stall, not a safety property.
+func singleCopyStale(ctx context.Context, d Deps, c model.Client) (reason string, stale bool) {
+	runs, err := d.Store.ListOffsiteRuns(ctx, c.ID, 1)
+	if err != nil {
+		return fmt.Sprintf("the offsite run history could not be read (%v), so there is no evidence the one cold copy is current", err), true
+	}
+	if len(runs) == 0 {
+		return "", false
+	}
+	switch runs[0].Status {
+	case "ok":
+		return "", false
+	case "running":
+		return "an offsite upload is still running, so the fixed object may be mid-replacement", true
+	default:
+		detail := strings.TrimSpace(runs[0].ErrorText)
+		if i := strings.IndexByte(detail, '\n'); i >= 0 {
+			detail = detail[:i]
+		}
+		if len(detail) > 160 {
+			detail = detail[:160] + "…"
+		}
+		if detail != "" {
+			detail = ": " + detail
+		}
+		return "the last offsite upload failed (" + runs[0].Status + detail + "), so the one cold copy may not hold a snapshot " +
+			"newer than what is on the hot store; nothing is pruned until an upload succeeds", true
+	}
 }
 
 // newestOffsiteSnapshot returns the newest snapshot in snaps whose id is in
@@ -1002,14 +1188,15 @@ func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root stri
 	now := d.now().UTC()
 	missingOwners := make(map[string]bool, len(objects))
 	for _, o := range objects {
-		missing := !fileSet[objectName(c.Mode, o.SnapshotID)]
+		missing := !fileSet[objectNameFor(c, o.SnapshotID)]
 		if err := d.Store.UpdateOffsiteRemoteStatus(ctx, o.ID, missing, now); err != nil {
 			log.Printf("lifecycle: offsite verify: update: %v", err)
 			continue
 		}
 		if missing {
 			missingOwners[o.SnapshotID] = true
-			log.Printf("lifecycle: offsite verify: client=%s snap=%s missing from %s", c.Name, o.SnapshotID, c.OffsiteRemote)
+			log.Printf("lifecycle: offsite verify: client=%s snap=%s object %s missing from %s",
+				c.Name, o.SnapshotID, objectNameFor(c, o.SnapshotID), c.OffsiteRemote)
 		}
 	}
 	flagGoneDedupOwners(ctx, d, c, all, missingOwners, now)
@@ -1057,7 +1244,7 @@ func flagGoneDedupOwners(ctx context.Context, d Deps, c model.Client, all []mode
 		more = fmt.Sprintf(" (and %d more run(s) deduplicated against the same object)", n)
 	}
 	log.Printf("lifecycle: offsite object %s referenced by run %s is gone (expired by the bucket lifecycle rule): re-uploading%s",
-		objectName(c.Mode, first.DedupOf), objectName(c.Mode, first.SnapshotID), more)
+		objectNameFor(c, first.DedupOf), objectNameFor(c, first.SnapshotID), more)
 }
 
 // offsiteDue returns true when the client's cron schedule has a tick between
@@ -1119,7 +1306,7 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	// on the remote, so it looks now rather than trusting the last hour's answer.
 	verifyOffsiteObjects(ctx, d, c, root, true)
 
-	offsited, err := d.offsitedSet(ctx, c.ID)
+	objs, err := d.Store.ListOffsiteObjects(ctx, c.ID)
 	if err != nil {
 		return err
 	}
@@ -1127,7 +1314,7 @@ func OffsiteClient(ctx context.Context, d Deps, c model.Client) error {
 	// Insert a "running" row immediately so the dashboard can show progress.
 	// Pruning is the lifecycle worker's job; the adhoc trigger only uploads.
 	runID, startErr := d.Store.StartOffsiteRun(ctx, c.ID, "adhoc", d.now())
-	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, offsited, root)
+	snapsUploaded, bytesUploaded, uploadErr := offsiteNewSnapshots(ctx, d, c, sm, clientDir, snaps, objs, root)
 	if startErr == nil {
 		status, errText := "ok", ""
 		if uploadErr != nil {
@@ -1188,22 +1375,20 @@ func remoteDir(root, dir string) string {
 	return model.ObjectDir(root, dir)
 }
 
-// objectName is the filename one snapshot has inside the remote directory: an
-// rsync snapshot is a directory and goes up as a single archive, a tar.gz
-// snapshot is already the archive.
-func objectName(m model.Mode, snapshotID string) string {
-	if m == model.ModeRsync {
-		return snapshotID + ".tar.gz"
-	}
-	return snapshotID
+// objectNameFor is the file name one snapshot has inside the remote directory,
+// for this client's upload mode: its own name in the immutable modes, the fixed
+// name in single-generation mode. model.OffsiteObjectName owns the rule so the
+// verification pass and the server's download route cannot drift from it.
+func objectNameFor(c model.Client, snapshotID string) string {
+	return model.OffsiteObjectName(c.Mode, c.OffsiteUploadMode, snapshotID)
 }
 
-// objectPath returns the path of one snapshot's offsite object:
+// objectPathFor returns the path of one snapshot's offsite object:
 // "<root>/<dir>/<file>", where root is the bucket (and optional prefix) the
 // remote was configured with — "" for a remote backitup has no row for, which
 // keeps the old path.
-func objectPath(root, dir string, m model.Mode, snapshotID string) string {
-	return model.ObjectPath(root, dir, objectName(m, snapshotID))
+func objectPathFor(root string, c model.Client, snapshotID string) string {
+	return model.ObjectPath(root, offsiteDir(c), objectNameFor(c, snapshotID))
 }
 
 // fileChecksum returns the SHA-256 hex digest of the file at path.

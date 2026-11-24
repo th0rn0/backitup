@@ -139,3 +139,63 @@ func TestPruneRuns(t *testing.T) {
 		t.Fatal("recent run should survive prune")
 	}
 }
+
+// The single-generation mode keeps one row, and the rows it supersedes are
+// deleted rather than kept: a row is read as "the remote holds this", and after
+// the fixed object has been overwritten every one of those older rows would be a
+// claim about content that is no longer anywhere.
+func TestReplaceSingleOffsiteObjectLeavesExactlyOneRow(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	id, _ := st.CreateClient(ctx, model.Client{Name: "c", Mode: model.ModeTarGz, Enabled: true})
+
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	// What the older mode left behind: two per-snapshot rows, one of them a
+	// dedupe pointer into the other's object.
+	for _, o := range []model.OffsiteObject{
+		{ClientID: id, SnapshotID: "a", Remote: "r", Bytes: 10, UploadedAt: now.Add(-48 * time.Hour)},
+		{ClientID: id, SnapshotID: "b", Remote: "r", Bytes: 0, UploadedAt: now.Add(-24 * time.Hour), DedupOf: "a"},
+		{ClientID: id, SnapshotID: "other", Remote: "elsewhere", Bytes: 5, UploadedAt: now.Add(-48 * time.Hour)},
+	} {
+		if err := st.RecordOffsiteObject(ctx, o); err != nil {
+			t.Fatalf("record %s: %v", o.SnapshotID, err)
+		}
+	}
+
+	if err := st.ReplaceSingleOffsiteObject(ctx, model.OffsiteObject{
+		ClientID: id, SnapshotID: "newest", Remote: "r", Bytes: 42, Checksum: "abc", UploadedAt: now,
+	}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	got, err := st.ListOffsiteObjects(ctx, id)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	// The other remote's row is not this object's business and must be kept.
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (the new one plus the other remote's): %+v", len(got), got)
+	}
+	for _, o := range got {
+		if o.Remote != "r" {
+			continue
+		}
+		if o.SnapshotID != "newest" || o.Bytes != 42 || o.Checksum != "abc" || o.DedupOf != "" {
+			t.Fatalf("the surviving row is %+v, want only the new generation", o)
+		}
+		if o.RemoteMissing {
+			t.Fatal("a row written by a successful upload must not be flagged missing")
+		}
+		if !o.UploadedAt.Equal(now) {
+			t.Fatalf("uploaded_at = %s, want %s", o.UploadedAt, now)
+		}
+	}
+	// Dedupe rows for the superseded objects are gone with them.
+	if n := len(got); n != 2 {
+		t.Fatalf("a dedup row survived the replacement (%d rows): %+v", n, got)
+	}
+}

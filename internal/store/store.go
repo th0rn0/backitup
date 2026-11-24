@@ -283,7 +283,7 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 		return 0, fmt.Errorf("marshal excludes: %w", err)
 	}
 	if c.OffsiteUploadMode == "" {
-		c.OffsiteUploadMode = "all"
+		c.OffsiteUploadMode = model.OffsiteUploadAll
 	}
 	slug, err := s.slugForNewClient(ctx, c.Name)
 	if err != nil {
@@ -678,6 +678,45 @@ func (s *Store) RecordOffsiteObject(ctx context.Context, o model.OffsiteObject) 
 	return nil
 }
 
+// ReplaceSingleOffsiteObject records the one object an OffsiteUploadSingle
+// client keeps, as a single transaction: every row for this client and remote is
+// removed and the new one is inserted.
+//
+// The superseded rows are DELETED rather than kept with a "superseded" marker.
+// A row here is read as a claim about what the remote holds *now*: the hot pruner
+// deletes a snapshot because a row says its content is elsewhere, the
+// verification pass lists the object a row names, and the UI offers that object
+// for download. Once the fixed name has been overwritten it holds none of those
+// earlier snapshots, so a retained row would be a false claim of exactly the kind
+// that loses data. The history an operator wants — one upload per row, with the
+// bytes that moved — is offsite_runs, which is where it belongs.
+func (s *Store) ReplaceSingleOffsiteObject(ctx context.Context, o model.OffsiteObject) error {
+	uploaded := o.UploadedAt
+	if uploaded.IsZero() {
+		uploaded = time.Now().UTC()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("record single offsite object: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM offsite_objects WHERE client_id=? AND remote=?`, o.ClientID, o.Remote); err != nil {
+		return fmt.Errorf("record single offsite object: clear previous rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO offsite_objects (client_id, snapshot_id, remote, bytes, uploaded_at, checksum, dedup_of)
+		VALUES (?,?,?,?,?,?,'')`,
+		o.ClientID, o.SnapshotID, o.Remote, o.Bytes,
+		uploaded.UTC().Format(rfc3339), o.Checksum); err != nil {
+		return fmt.Errorf("record single offsite object: insert: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("record single offsite object: commit: %w", err)
+	}
+	return nil
+}
+
 // ListOffsiteObjects returns the offsite objects for a client, newest first.
 //
 // A row whose uploaded_at cannot be parsed is skipped with a loud log rather
@@ -912,12 +951,21 @@ func (s *Store) RecordOffsiteRun(ctx context.Context, r model.OffsiteRun) error 
 	return err
 }
 
-// ListOffsiteRuns returns up to limit offsite run records for a client, newest first.
+// ListOffsiteRuns returns up to limit offsite run records for a client, newest
+// first.
+//
+// The id breaks ties: two passes in the same second share a started_at (the
+// frozen clock in tests makes it the norm rather than the exception), and
+// "which upload ran last" has to be a property of the rows, not of whatever
+// order SQLite happened to return them in. The single-generation prune guard
+// reads the newest row to decide whether the cold copy is current, so an
+// arbitrary tie-break would make it sometimes trust a failure and sometimes a
+// success.
 func (s *Store) ListOffsiteRuns(ctx context.Context, clientID int64, limit int) ([]model.OffsiteRun, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, client_id, triggered_by, started_at, finished_at, status,
 		        snapshots_uploaded, bytes_uploaded, error_text
-		 FROM offsite_runs WHERE client_id=? ORDER BY started_at DESC LIMIT ?`,
+		 FROM offsite_runs WHERE client_id=? ORDER BY started_at DESC, id DESC LIMIT ?`,
 		clientID, limit)
 	if err != nil {
 		return nil, err

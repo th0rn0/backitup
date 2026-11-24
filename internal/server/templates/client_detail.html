@@ -231,6 +231,9 @@
 
             {{if .Client.OffsiteRemote}}
             <div data-tab="offsite-files">
+              {{if eq .Client.OffsiteUploadMode "single"}}
+              <p class="help-text">One generation: this client keeps a single object, <code>latest.tar.gz</code>, holding the snapshot below. The next successful upload replaces it — the Download button fetches that object, not a per-snapshot file.</p>
+              {{end}}
               {{if .OffsiteObjects}}
               <div class="bulk-toolbar">
                 <input type="checkbox" data-select-all="offsite" title="Select all">
@@ -328,10 +331,12 @@
 
               <label>Upload scope</label>
               <div class="radio-group">
-                <label><input type="radio" name="offsite_upload_mode" value="all"{{if ne .Client.OffsiteUploadMode "latest"}} checked{{end}}> All snapshots</label>
+                <label><input type="radio" name="offsite_upload_mode" value="all"{{if or (eq .Client.OffsiteUploadMode "all") (not .Client.OffsiteUploadMode)}} checked{{end}}> All snapshots</label>
                 <label><input type="radio" name="offsite_upload_mode" value="latest"{{if eq .Client.OffsiteUploadMode "latest"}} checked{{end}}> Latest only</label>
+                <label><input type="radio" name="offsite_upload_mode" value="single"{{if eq .Client.OffsiteUploadMode "single"}} checked{{end}}> Single generation (one object)</label>
               </div>
-              <div class="field-hint">All: every local snapshot is mirrored offsite. Latest: only the newest snapshot is kept in cold storage.</div>
+              <div class="field-hint">All: every local snapshot is mirrored offsite as its own object. Latest: only the newest un-uploaded snapshot is uploaded each pass, but the earlier objects stay until the bucket rule expires them — it bounds work, not storage.</div>
+              <div class="field-hint mode-warn-hint">⚠ Single generation keeps <strong>one</strong> object, <code>latest.tar.gz</code>, which every successful upload overwrites. There is no point-in-time restore: older snapshots exist offsite only until the next upload replaces them, and a bad backup replaces a good one on the next successful run. It is the only mode that bounds what cold storage holds without backitup deleting anything.</div>
 
               <div class="field-hint">Deleting offsite objects is not scheduled here. Retention in cold storage is the B2 bucket's lifecycle rule; the life of an object is decided there, per bucket, not per client.</div>
 

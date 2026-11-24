@@ -69,6 +69,22 @@ func (r *Rclone) Delete(ctx context.Context, remote, objectName string) error {
 	return err
 }
 
+// Move renames one object inside a remote with rclone moveto.
+//
+// On a single backend (B2, and a crypt wrapping it) moveto is a server-side copy
+// followed by a server-side delete, so no bytes cross the wire twice — the wire
+// already carried them once, for the upload that created the source. B2's copy
+// is atomic: the destination name holds either the previous object or the new
+// one, never a half-written blend, which is what lets the single-generation mode
+// replace its only copy without a window where none exists.
+//
+// --retries 1 for the same reason as Upload: the next scheduled pass is the
+// retry, and a refusal that is a property of the destination repeats identically.
+func (r *Rclone) Move(ctx context.Context, remote, from, to string) error {
+	_, err := r.run(ctx, "moveto", []string{"--retries", "1"}, remote+":"+from, remote+":"+to)
+	return err
+}
+
 // Lsf returns the filenames (not paths) present in a remote directory.
 func (r *Rclone) Lsf(ctx context.Context, remote, dir string) ([]string, error) {
 	out, err := r.run(ctx, "lsf", nil, remote+":"+dir)

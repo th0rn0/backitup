@@ -122,7 +122,7 @@ type Client struct {
 	OffsiteRemote     string // rclone remote name selecting this client's cold target; "" = no offsite
 	OffsiteDir        string // subdirectory within the remote; "" = use the client's slug
 	OffsiteCron       string // standard 5-field cron expression for upload schedule; "" = every lifecycle pass
-	OffsiteUploadMode string // "all" (default) or "latest" — which snapshots to push offsite
+	OffsiteUploadMode string // model.OffsiteUploadAll (default), OffsiteUploadLatest or OffsiteUploadSingle
 
 	// Auth. The private SSH key is shown once at creation and NOT retained (D4);
 	// only the public key and a hash of the token live here.
