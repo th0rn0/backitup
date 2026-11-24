@@ -443,14 +443,27 @@ incremental snapshots on the hot store via hardlinks (only changed data costs sp
   Writes through that destination reach the provider as ciphertext. The crypt remote
   is configured in the webgui; do not point clients directly at the plaintext remote
   if you require encryption.
-- The lifecycle worker runs **offsite first, then prune** — a snapshot is never
-  pruned before it is confirmed offsited. Offsite pushes **immutable per-snapshot
-  objects** (no destructive sync), so corruption cannot be replicated over your only
-  cold copy.
+- The lifecycle worker prunes **only what a strictly newer offsite copy already
+  covers**. A hot snapshot is deleted when a snapshot newer than it is confirmed
+  offsite; anything at or newer than the newest offsite copy is kept, and if nothing
+  is offsited at all nothing is pruned. The age horizon still applies on top — this
+  rule narrows what `retention_days` allows, it never widens it. Offsite pushes
+  **immutable per-snapshot objects** (no destructive sync), so corruption cannot be
+  replicated over your only cold copy.
+- The trade-off is deliberate: **while offsite is stale or broken the hot store keeps
+  everything newer than the last good offsite copy, so it grows.** That growth plus
+  one log line per pass — `keeping 4 snapshots: not older than the newest offsite
+  copy <snapshot> (<timestamp>)`, or `keeping 2 snapshots: nothing is offsited for
+  this client, so there is no copy elsewhere to fall back on` — is how an offsite
+  outage becomes visible, rather than retention quietly deleting the only copies. A
+  client on `offsite_upload_mode = latest` offsites only its newest snapshot, so
+  everything older than that one is prunable and the hot store no longer grows
+  forever on it.
 - `remote_missing` is the check that tells you a bucket rule ate something it should
   not have. The lifecycle verification pass lists each remote and flags an object the
-  database believes in but the bucket no longer holds; a snapshot flagged that way no
-  longer counts as safely offsite, so its hot copy is kept rather than pruned. With
+  database believes in but the bucket no longer holds; a snapshot flagged that way
+  stops counting as offsite evidence, so if it was the newest offsite copy the marker
+  falls back to the next one and everything at or newer than *that* is kept. With
   deletion now happening outside backitup, this is the instrument, not just a
   diagnostic.
 

@@ -441,12 +441,19 @@ func offsitedSetFrom(objs []model.OffsiteObject) map[string]bool {
 // the strength of a dedupe claim.
 //
 // Every other offsite record names an object this build uploaded itself, so it
-// only goes stale when someone else acts. A dedupe record is an inference —
-// "my content lives in that object" — and the B2 bucket's lifecycle rule can
-// make it false without backitup hearing about it. The hourly verification
-// throttle exists so that an idle fleet does not talk to rclone on every pass;
-// when such a claim is about to justify deleting a hot copy, an answer from the
-// previous hour is not good enough and the caller must look now.
+// only goes stale when someone else acts. A dedupe record is an inference — "my
+// content lives in that object" — and the B2 bucket's lifecycle rule can make it
+// false without backitup hearing about it. The hourly verification throttle
+// exists so that an idle fleet does not talk to rclone on every pass; when such a
+// claim is about to justify deleting a hot copy, an answer from the previous hour
+// is not good enough and the caller must look now.
+//
+// Since the guard became a freshness rule, the claim a delete leans on is the one
+// for the newest offsite snapshot: everything strictly older than it is deleted
+// because that copy exists. So the question is whether THAT record is a dedupe —
+// checking each candidate's own record would answer the old, per-snapshot
+// question and miss exactly the case that matters (an older direct upload pruned
+// on the strength of a newer, and expired, dedupe claim).
 func pruneLeansOnDedupe(c model.Client, snaps []mode.Snapshot, objs []model.OffsiteObject, now time.Time) bool {
 	if c.RetentionDays <= 0 || len(snaps) <= 1 {
 		return false
@@ -460,17 +467,20 @@ func pruneLeansOnDedupe(c model.Client, snaps []mode.Snapshot, objs []model.Offs
 	if len(dedupBacked) == 0 {
 		return false
 	}
+	newestOffsite, ok := newestOffsiteSnapshot(snaps, offsitedSetFrom(objs))
+	if !ok || !dedupBacked[newestOffsite.ID] {
+		return false
+	}
 	cutoff := now.Add(-time.Duration(c.RetentionDays) * 24 * time.Hour)
 	newest, ok := newestSnapshot(snaps)
 	if !ok {
 		return false
 	}
-	offsited := offsitedSetFrom(objs)
 	for _, s := range snaps {
 		if s.ID == newest.ID || !s.CreatedAt.Before(cutoff) {
 			continue
 		}
-		if dedupBacked[s.ID] && offsited[s.ID] {
+		if strictlyOlder(s, newestOffsite) {
 			return true
 		}
 	}
@@ -668,7 +678,35 @@ func pruneIncomplete(ctx context.Context, d Deps, c model.Client, sm mode.Server
 }
 
 // pruneHot deletes hot snapshots older than retention, never the newest, and —
-// when offsite is enabled — only those already offsited (offsite-first, D8).
+// when offsite is enabled — only snapshots strictly older than the newest
+// snapshot already confirmed offsite (offsite-first, D8).
+//
+// The offsite guard is a property of the CLIENT's offsite state, not of each
+// snapshot's own record. It used to be the latter: every snapshot without an
+// offsite record of itself was kept. That cannot work for a client on
+// offsite_upload_mode=latest, where only one snapshot in the whole listing ever
+// has a record of its own, and it turns a run of failing uploads into "retention
+// never fires again" — the hot store fills while nothing new is protected.
+//
+// The rule is instead: find the newest snapshot (by CreatedAt, ID as tiebreak)
+// whose id is in offsited, and delete a snapshot only when it is strictly older
+// than that one. Deleting an old copy is safe because a strictly newer copy
+// exists somewhere; anything at or newer than the newest offsite copy is kept,
+// because nothing newer proves the content survives off the hot store.
+//
+// Two consequences, both deliberate:
+//
+//   - No offsited snapshot at all means no permission to delete anything, as
+//     before. Nothing is known to be off the hot store, so nothing is offered.
+//   - While offsite is stale or broken the hot store keeps everything newer than
+//     the last good offsite copy and therefore grows. That growth plus the log
+//     line is how an offsite outage becomes visible; the alternative — treating
+//     the absence of a copy elsewhere as permission to delete — quietly removes
+//     the only copies.
+//
+// The age horizon still applies on top: this rule narrows what retention_days
+// allows, it never widens it. A snapshot inside the hot horizon is kept whatever
+// the offsite state says.
 //
 // "Never the newest" is decided from the snapshots, not from the slice order:
 // the newest is the one with the greatest CreatedAt, with the ID breaking ties.
@@ -697,6 +735,14 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 	}
 	cutoff := d.now().Add(-time.Duration(c.RetentionDays) * 24 * time.Hour)
 	newest, ok := newestSnapshot(snaps)
+	// The freshest evidence that this client's content is off the hot store.
+	// "Where is the newest offsite copy" is asked of the snapshots on disk, not
+	// of the offsite table: a record for a snapshot that is already gone from
+	// here says nothing about which of the remaining ones may be dropped, and
+	// using it would let a stale, newer-looking row justify deleting the only
+	// copies younger than it.
+	newestOffsite, haveOffsite := newestOffsiteSnapshot(snaps, offsited)
+	var kept []string
 	for _, s := range snaps {
 		if ok && s.ID == newest.ID {
 			continue // protect the newest, whatever position it is in
@@ -704,8 +750,8 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 		if !s.CreatedAt.Before(cutoff) {
 			continue // within the hot horizon
 		}
-		if offsiteOn && !offsited[s.ID] {
-			log.Printf("lifecycle: client %d: keeping un-offsited snapshot %s (offsite-first)", c.ID, s.ID)
+		if offsiteOn && (!haveOffsite || !strictlyOlder(s, newestOffsite)) {
+			kept = append(kept, s.ID)
 			continue
 		}
 		if delErr := sm.DeleteSnapshot(ctx, clientDir, s.ID); delErr != nil {
@@ -717,8 +763,64 @@ func pruneHot(ctx context.Context, d Deps, c model.Client, sm mode.ServerMode, c
 			continue
 		}
 		deleted++
+		if offsiteOn {
+			log.Printf("lifecycle: client %d (%s): pruning %s: older than the newest offsite copy %s (%s)",
+				c.ID, c.Name, s.ID, newestOffsite.ID, newestOffsite.CreatedAt.UTC().Format(time.RFC3339))
+			continue
+		}
+		log.Printf("lifecycle: client %d (%s): pruning %s: older than the %d-day hot horizon",
+			c.ID, c.Name, s.ID, c.RetentionDays)
+	}
+	// One line per pass, with a count when several were held back: "why was
+	// nothing pruned" has to be answerable from the log, and a client with dozens
+	// of snapshots would otherwise print dozens of near-identical lines.
+	if len(kept) > 0 {
+		what := kept[0]
+		if n := len(kept); n > 1 {
+			what = fmt.Sprintf("%d snapshots", n)
+		}
+		if haveOffsite {
+			log.Printf("lifecycle: client %d (%s): keeping %s: not older than the newest offsite copy %s (%s)",
+				c.ID, c.Name, what, newestOffsite.ID, newestOffsite.CreatedAt.UTC().Format(time.RFC3339))
+		} else {
+			log.Printf("lifecycle: client %d (%s): keeping %s: nothing is offsited for this client, so there is no copy elsewhere to fall back on",
+				c.ID, c.Name, what)
+		}
 	}
 	return deleted, failed, err
+}
+
+// newestOffsiteSnapshot returns the newest snapshot in snaps whose id is in
+// offsited — the copy elsewhere that permits deleting anything strictly older.
+// ok is false when nothing in the listing is offsited, which is the "keep
+// everything" case.
+//
+// Only the snapshots on disk are considered: the offsite table also holds rows
+// for snapshots already pruned from here, and those must not be read as a newer
+// copy than the ones still present.
+func newestOffsiteSnapshot(snaps []mode.Snapshot, offsited map[string]bool) (mode.Snapshot, bool) {
+	var newest mode.Snapshot
+	found := false
+	for _, s := range snaps {
+		if !offsited[s.ID] {
+			continue
+		}
+		if !found || strictlyOlder(newest, s) {
+			newest = s
+			found = true
+		}
+	}
+	return newest, found
+}
+
+// strictlyOlder reports whether a is strictly older than b, by CreatedAt with
+// the ID breaking ties — the same ordering newestSnapshot applies, so "the
+// newest" and "older than the newest" cannot disagree about the pair.
+func strictlyOlder(a, b mode.Snapshot) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.ID < b.ID
 }
 
 // newestSnapshot returns the snapshot that must never be pruned: the one with

@@ -72,22 +72,25 @@ func TestDeduplicatedUploadIsRecordedSoHotPruneProceeds(t *testing.T) {
 			"otherwise it never becomes \"offsited\" and the hot pruner protects it forever", len(objs), objs)
 	}
 
-	// A snapshot with unique content that was never offsited must still be
-	// protected by the offsite-first rule (created after the upload pass).
+	// A snapshot that was never offsited is not protected by its own missing
+	// record: the guard is a freshness rule (a delete is justified by a strictly
+	// newer offsite copy), so this 40-hour-old one is pruned because the 1-hour
+	// one is offsite. What the rule keeps is anything at or newer than that copy
+	// — see hot_prune_freshness_test.go, which pins the boundary directly.
 	unoffsited := filepath.Join(dir, "backup-20260509T000001Z-000.tar.gz")
 	mkArchiveContent(t, unoffsited, now.Add(-40*time.Hour), "unique-content")
 
 	if err := RunOnce(context.Background(), deps); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	for _, pruned := range []string{"backup-20260509T000000Z-000.tar.gz", "backup-20260617T000000Z-000.tar.gz"} {
+	for _, pruned := range []string{"backup-20260509T000000Z-000.tar.gz", "backup-20260617T000000Z-000.tar.gz", "backup-20260509T000001Z-000.tar.gz"} {
 		if _, statErr := os.Stat(filepath.Join(dir, pruned)); statErr == nil {
-			t.Errorf("%s must be pruned: its content is offsite (deduplicated) and it is past the 1-day hot horizon", pruned)
+			t.Errorf("%s must be pruned: it is past the 1-day hot horizon and older than the newest offsite copy", pruned)
 		}
 	}
-	for _, kept := range []string{"backup-20260618T000000Z-000.tar.gz", "backup-20260509T000001Z-000.tar.gz"} {
+	for _, kept := range []string{"backup-20260618T000000Z-000.tar.gz"} {
 		if _, statErr := os.Stat(filepath.Join(dir, kept)); statErr != nil {
-			t.Errorf("%s must survive (newest snapshot / no offsite record): %v", kept, statErr)
+			t.Errorf("%s must survive (newest snapshot / newest offsite copy): %v", kept, statErr)
 		}
 	}
 }
