@@ -100,6 +100,11 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.MarkClientRunningRunFailed(ctx, cl.ID); err != nil {
 		log.Printf("getConfig: clear stale run for client=%q: %v", cl.Name, err)
 	}
+	// A client is loaded here before every run, which is the cheapest place to
+	// keep its two server-owned directories group-traversable: a store written by
+	// an older build has 0700 there, and a directory re-used from a deleted
+	// client keeps whatever mode it had.
+	s.reconcileClientDirModes(*cl)
 	excludes := cl.Excludes
 	if excludes == nil {
 		excludes = []string{}
@@ -123,6 +128,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		"preserve_hardlinks":    cl.PreserveHardlinks,
 		"preserve_acls":         cl.PreserveACLs,
 		"preserve_xattrs":       cl.PreserveXattrs,
+		"group_readable":        cl.GroupReadable,
 	})
 }
 

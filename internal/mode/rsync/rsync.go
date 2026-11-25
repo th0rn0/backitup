@@ -52,27 +52,16 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	snap := start.Format("20060102T150405Z")
 	target := fmt.Sprintf("%s@%s:snapshots/%s/", o.SSHUser, host, snap)
 
-	args := []string{"-a", "--numeric-ids", "--delete", "--stats"}
-	args = append(args, fidelityArgs(o)...)
-	if o.HasPreviousSnapshot {
-		args = append(args, "--link-dest=/snapshots/latest")
-	}
-	if os.Getenv("BACKITUP_RSYNC_DEBUG") == "1" {
-		args = append(args, "-vvv")
-	}
-	if o.SkipSymlinks {
-		args = append(args, "--no-links")
-	}
-	for _, ex := range o.Excludes {
-		args = append(args, "--exclude="+ex)
-	}
-	args = append(args, "-e", sshArgs, ensureTrailingSlash(o.SourceDir), target)
+	args := snapshotArgs(o, sshArgs, target)
 
 	// Name what the snapshot will capture, so the run log answers "did this
 	// client's ACL setting apply?" without the operator reconstructing the
 	// flags from rsync's own output.
 	if f := fidelityFlags(o); f != "" {
 		logger.Printf("fidelity: %s — this snapshot carries them", f)
+	}
+	if o.GroupReadable {
+		logger.Printf("group readable: --chmod=Dg+rx,Fg+r — modes in this snapshot are widened for the server's group, so they no longer mirror the source")
 	}
 
 	logger.Printf("syncing %s → %s", o.SourceDir, target)
@@ -107,6 +96,35 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 		StartedAt:  start,
 		FinishedAt: time.Now().UTC(),
 	}, nil
+}
+
+// snapshotArgs is the argv for the snapshot transfer itself (the `latest` flip is
+// a separate, one-file transfer). Kept separate from Backup so the invocation a
+// client with a given set of settings sends can be asserted without a real rsync.
+func snapshotArgs(o mode.BackupOpts, sshArgs, target string) []string {
+	args := []string{"-a", "--numeric-ids", "--delete", "--stats"}
+	args = append(args, fidelityArgs(o)...)
+	if o.GroupReadable {
+		// Widen the modes as the receiver writes them instead of walking the
+		// tree again afterwards: one pass, one failure mode. The receiver is the
+		// file's owner, so it can chmod what it creates, and the widened mode
+		// lands on the inode a later unchanged file hardlinks to.
+		args = append(args, "--chmod=Dg+rx,Fg+r")
+	}
+	if o.HasPreviousSnapshot {
+		args = append(args, "--link-dest=/snapshots/latest")
+	}
+	if os.Getenv("BACKITUP_RSYNC_DEBUG") == "1" {
+		args = append(args, "-vvv")
+	}
+	if o.SkipSymlinks {
+		args = append(args, "--no-links")
+	}
+	for _, ex := range o.Excludes {
+		args = append(args, "--exclude="+ex)
+	}
+	args = append(args, "-e", sshArgs, ensureTrailingSlash(o.SourceDir), target)
+	return args
 }
 
 // flipLatest points snapshots/latest at the new snapshot by rsyncing a local

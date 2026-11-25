@@ -385,6 +385,24 @@
             </form>
           </div>
 
+          <div class="settings-group">
+            <div class="settings-group-title">Group-readable snapshots</div>
+            <p class="section-hint">rsync mode only. The backup user's own directories are <code>0750</code> (owner rwx, group r-x), so an account in the server's group — <code>gid 10001</code> in the shipped image — can walk into the store without root. What sits <em>inside</em> a snapshot is different: the rsync receiver copies the source's modes, so a source directory at <code>0700</code> lands at <code>0700</code> and the operator's group still cannot enter it.</p>
+            <form method="POST" action="/clients/{{.Client.Slug}}/group-readable" class="form" style="margin-top:0">
+              <label class="checkbox-label">
+                <input type="checkbox" name="group_readable" value="1"{{if .Client.GroupReadable}} checked{{end}}>
+                <span>
+                  Make this client's snapshots group-readable (<code>--chmod=Dg+rx,Fg+r</code>)
+                  <span class="hint">Adds group read+execute to every directory and group read to every regular file as the receiver writes it — one pass, applied during the transfer itself, not a second chmod walk afterwards.</span>
+                </span>
+              </label>
+              <div class="field-hint mode-warn-hint">⚠ This trades fidelity for access, deliberately. <strong>Modes in the snapshot no longer match the source</strong>: a <code>0600</code> file lands group-readable. And because an unchanged file is a <strong>hardlink shared with earlier snapshots</strong>, the mode lives on the inode — turning this on <strong>also changes the modes of earlier snapshots</strong> that share those files. ACLs are not affected by the flag, but an ACL that denies group read will still deny it.</div>
+              <div class="form-actions">
+                <button type="submit" class="btn">Save</button>
+              </div>
+            </form>
+          </div>
+
           <div class="settings-group danger-group">
             <div class="settings-group-title">Danger zone</div>
             <div class="danger-row">

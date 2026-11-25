@@ -40,6 +40,9 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 	}
 	rl.Printf("config: mode=%s excludes=%v skip_symlinks=%v fidelity=%v", scfg.Mode, scfg.Excludes, scfg.SkipSymlinks || cfg.SkipSymlinks,
 		fidelityNames(scfg))
+	if scfg.GroupReadable {
+		rl.Printf("config: group_readable=on — modes in the snapshot are widened for the server's group, not copied from the source")
+	}
 	m := model.Mode(scfg.Mode)
 	if !m.Valid() {
 		m = cfg.Mode
@@ -61,6 +64,7 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		PreserveHardlinks:   scfg.PreserveHardlinks,
 		PreserveACLs:        scfg.PreserveACLs,
 		PreserveXattrs:      scfg.PreserveXattrs,
+		GroupReadable:       scfg.GroupReadable,
 		HasPreviousSnapshot: scfg.HasPreviousSnapshot,
 		Logger:              rl.Logger,
 		SSHServer:           cfg.SSHServer,

@@ -217,6 +217,35 @@ chmod 700 /servdata/backitup/sshd-hostkeys   # contains the private SSH host key
 > `no supported methods remain`. Fix: run the `chown` above, then restart the stack
 > or rotate any existing client's credentials to trigger a rewrite.
 
+#### Reading backups without root (the `10001` group)
+
+Both containers run as uid/gid **10001**, so every backup file belongs to
+`10001:10001`. The app creates each client's two store directories — `backups/<slug>`
+and, for `rsync`, `backups/<slug>/snapshots` — at **`0750`** (owner `rwx`, group `r-x`),
+and reconciles them at startup if an older build left them `0700`. An account in gid
+**10001** on the host can therefore read the store directly:
+
+```sh
+sudo groupadd -g 10001 backitup 2>/dev/null || true   # same number as inside the container
+sudo usermod -aG backitup "$USER"                     # log out and back in for it to take effect
+ls /servdata/backitup/backups/laptop-docs/snapshots/  # no sudo
+```
+
+Three properties of that, all deliberate:
+
+- **The group is the control.** Anyone in gid 10001 on the backup host can read *every*
+  client's backups. There is no per-client permission state in backitup, by design;
+  give the group only to accounts that may see all of it.
+- **A `0700` directory *inside* a snapshot is still `0700`.** `rsync -a` copies the
+  source's modes, so a source tree at `0700` lands at `0700` under the `0750` parent and
+  the group cannot enter it. Turn on **Group-readable snapshots** for that client
+  ([below](#group-readable-snapshots-fidelity-traded-for-operator-access)).
+- **A named volume cannot be read this way at all.** Named volumes live under
+  `/var/lib/docker`, which is root-only (`0700`) regardless of the modes inside it, so
+  no `chmod` in a container or on a volume subdirectory helps. Use a host bind mount
+  (`/servdata/backitup/backups:/srv/backups`, as in the compose example above), whose
+  ownership you own and can set — or read the store with `sudo` / `docker cp`.
+
 ## Building the images
 
 ```sh
@@ -485,6 +514,29 @@ on the hot tier would only be recoverable through `--fake-super` (ownership stor
 an xattr), which is measurable but changes the shape of every snapshot and makes every
 restore depend on remembering `--fake-super`; it is not implemented.
 
+**Group-readable snapshots: fidelity traded for operator access.**
+`rsync -a` copies the source's modes, which is the right default but stops the operator
+reading a backup when the source is private: a source directory at `0700` lands at `0700`
+inside the `0750` client directory, and anyone but the backup user is locked out. The
+per-client setting **Settings → Group-readable snapshots** (off by default, rsync only)
+passes `--chmod=Dg+rx,Fg+r` to the receiver, so directories land group-traversable and
+regular files group-readable as they are written — one pass, no second `chmod` walk.
+
+What it costs is stated on the page and is not a bug:
+
+- **Modes in the snapshot no longer match the source.** A `0600` file lands `0640`-style
+  group-readable. Fidelity is given up for operator access, per client, deliberately.
+- **Earlier snapshots change too.** An unchanged file is a hardlink shared with the
+  previous snapshot, so the mode lives on the inode: turning the setting on changes the
+  modes of the earlier snapshots that share those files. That is convenient, and it is a
+  change to history.
+- **ACLs are unaffected** by the flag (`-A` still applies or does not), but an ACL that
+  denies group read still denies it.
+
+Offsite is unaffected: the archive is built by the server as uid 10001 and uploaded as one
+file, so the widened modes travel inside the archive and the dedupe checksum of an
+unchanged tree is unchanged (`TestGroupReadableSnapshotArchivesTheSameAsAnUnchangedTree`).
+
 **Not preserved, on purpose: sockets, FIFOs and device nodes.** `rrsync` adds
 `--drop-D` for any jail other than `/`, so the receiver cannot create them and the
 client logs `skipping non-regular file`. A socket holds no data and a restored one
@@ -655,6 +707,12 @@ diff -r ~/restore/laptop-docs /home/me/documents
   fleet out of the dashboard it needs to see whether backups are running.
 - **Per-client SSH access is confined**: `internal-sftp` + chroot for tar.gz clients,
   restricted `rrsync` locked to the client's directory for rsync clients.
+- **The hot store is readable by gid 10001, and that group is the control.** The app
+  creates the two directories it owns per client at `0750`, so any account in the backup
+  user's group can read *every* client's backups on the host. That is a deliberate choice
+  over per-client ACL state: one group decides, and its membership is the whole access
+  policy. The app-data directory (the SQLite database, with every token hash) stays
+  `0700` and is not part of it.
 
 ## Development
 

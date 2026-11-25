@@ -11,7 +11,7 @@ import (
 
 // schemaVersion is the version this binary writes. It must equal the last entry
 // of migrations (asserted by TestSchemaVersionMatchesLastStep).
-const schemaVersion = 5
+const schemaVersion = 6
 
 // droppedColumns names, per table, the columns a migration is allowed to remove.
 //
@@ -83,6 +83,11 @@ var migrations = []migration{
 	// column defaults to 0, so an upgraded database keeps the snapshots it was
 	// already producing; the settings are opt-in per client.
 	{version: 5, name: "rsync fidelity settings", fkOff: true, apply: applyCanonicalShape},
+	// v6: group_readable, the per-client switch that makes the rsync receiver
+	// widen modes as it writes (--chmod=Dg+rx,Fg+r) so an account in the
+	// server's group can read the tree. Defaults to 0: an upgraded database
+	// keeps producing snapshots whose modes mirror the source.
+	{version: 6, name: "group readable snapshots", fkOff: true, apply: applyCanonicalShape},
 }
 
 // migrationFault is a test seam. When set, it is called at each point inside a

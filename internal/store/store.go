@@ -294,13 +294,13 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 		INSERT INTO clients (name, slug, mode, source_label, excludes, retention_days,
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, skip_symlinks,
-			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs, group_readable)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Name, c.Slug, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
 		c.ExpectedIntervalSecs, c.OffsiteRemote, c.OffsiteDir,
 		c.OffsiteCron, c.SSHPubKey, c.TokenHash, c.TokenPrefix, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
 		b2i(c.SkipSymlinks), c.OffsiteUploadMode,
-		b2i(c.PreserveSparse), b2i(c.PreserveHardlinks), b2i(c.PreserveACLs), b2i(c.PreserveXattrs))
+		b2i(c.PreserveSparse), b2i(c.PreserveHardlinks), b2i(c.PreserveACLs), b2i(c.PreserveXattrs), b2i(c.GroupReadable))
 	if err != nil {
 		// A concurrent create can slip past the pre-check; the unique index is
 		// what actually guarantees one client per slug.
@@ -320,7 +320,7 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 		SELECT id, name, slug, mode, source_label, excludes, retention_days,
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs
+			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs, group_readable
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -348,7 +348,7 @@ func (s *Store) GetClientBySlug(ctx context.Context, slug string) (*model.Client
 		SELECT id, name, slug, mode, source_label, excludes, retention_days,
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs
+			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs, group_readable
 		FROM clients WHERE slug = ?`, slug)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -366,7 +366,7 @@ func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) 
 		SELECT id, name, slug, mode, source_label, excludes, retention_days,
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
-			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs
+			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs, group_readable
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -1122,6 +1122,25 @@ func (s *Store) UpdateClientFidelity(ctx context.Context, id int64, sparse, hard
 	return nil
 }
 
+// UpdateClientGroupReadable turns the per-client group-readable-snapshot switch
+// on or off. Separate from UpdateClientFidelity because it is the one setting
+// that trades fidelity for operator access: the next run widens modes as it
+// writes (rsync --chmod=Dg+rx,Fg+r) instead of mirroring the source, and
+// because unchanged files are hardlinks shared with earlier snapshots, the
+// modes of those earlier snapshots change too.
+func (s *Store) UpdateClientGroupReadable(ctx context.Context, id int64, on bool) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE clients SET group_readable=? WHERE id=?`, b2i(on), id)
+	if err != nil {
+		return fmt.Errorf("update group_readable: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("client %d: not found", id)
+	}
+	return nil
+}
+
 // ForgetOffsiteObject removes the offsite tracking record without touching the
 // remote file. Use when the local copy has already been pruned and the operator
 // just wants to clear the stale entry.
@@ -1291,11 +1310,11 @@ func scanClient(sc scanner) (model.Client, error) {
 	var c model.Client
 	var mode, excludes, createdAt string
 	var enabled, skipSymlinks int
-	var sparse, hardlinks, acls, xattrs int
+	var sparse, hardlinks, acls, xattrs, groupReadable int
 	if err := sc.Scan(&c.ID, &c.Name, &c.Slug, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
 		&c.OffsiteCron, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks,
-		&c.OffsiteUploadMode, &sparse, &hardlinks, &acls, &xattrs); err != nil {
+		&c.OffsiteUploadMode, &sparse, &hardlinks, &acls, &xattrs, &groupReadable); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)
@@ -1305,6 +1324,7 @@ func scanClient(sc scanner) (model.Client, error) {
 	c.PreserveHardlinks = hardlinks != 0
 	c.PreserveACLs = acls != 0
 	c.PreserveXattrs = xattrs != 0
+	c.GroupReadable = groupReadable != 0
 	if excludes != "" {
 		_ = json.Unmarshal([]byte(excludes), &c.Excludes)
 	}

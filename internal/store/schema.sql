@@ -42,7 +42,12 @@ CREATE TABLE IF NOT EXISTS clients (
     preserve_sparse         INTEGER NOT NULL DEFAULT 0,
     preserve_hardlinks      INTEGER NOT NULL DEFAULT 0,
     preserve_acls           INTEGER NOT NULL DEFAULT 0,
-    preserve_xattrs         INTEGER NOT NULL DEFAULT 0
+    preserve_xattrs         INTEGER NOT NULL DEFAULT 0,
+    -- Group-readable snapshots (rsync --chmod=Dg+rx,Fg+r). 0 = the snapshot's
+    -- modes mirror the source, which is what every client that existed before
+    -- the setting produces; see model.Client.GroupReadable for what turning it
+    -- on costs.
+    group_readable          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS runs (

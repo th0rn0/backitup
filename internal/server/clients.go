@@ -143,6 +143,11 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		log.Printf("authkeys regenerate failed: %v — the new client's key is NOT in authorized_keys, so it cannot connect yet", err)
 		// The client exists; surface the issue but still show the secrets.
 	}
+	// A name re-used after a delete inherits that client's directory, and with it
+	// whatever mode the build that first made it used. Heal both directories now
+	// rather than at some later pass, so the operator's group can read this client
+	// from its first run.
+	s.ReconcileClientDirModes(akCtx)
 
 	apiBase := s.apiBase(r.PostFormValue("api_scheme"))
 	// The page names ONE secrets directory (step 1) and the command mounts that
@@ -554,6 +559,52 @@ func (s *Server) postUpdateClientFidelity(w http.ResponseWriter, r *http.Request
 	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
 }
 
+// postUpdateClientGroupReadable flips the per-client switch that makes an rsync
+// snapshot group-readable (--chmod=Dg+rx,Fg+r at the receiver).
+//
+// It is its own form, and its own store method, because it is the one setting
+// here that trades fidelity for access: it is stated plainly on the page, and
+// the operator who turns it on is told that earlier snapshots change too (the
+// modes live on inodes shared by hardlinks). A targz client has no rsync
+// receiver to widen anything, so the request is refused with a flash rather
+// than stored and silently ignored.
+func (s *Server) postUpdateClientGroupReadable(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	on := r.PostFormValue("group_readable") == "1"
+	ctx, cancel := s.storeCtx(r)
+	defer cancel()
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("group-readable: load client %q", r.PathValue("name")), err) {
+			return
+		}
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if on && c.Mode != model.ModeRsync {
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err",
+			"Group-readable snapshots are an rsync setting: a tar.gz client writes one archive and has no snapshot directory to widen."),
+			http.StatusSeeOther)
+		return
+	}
+	if err := s.st.UpdateClientGroupReadable(ctx, c.ID, on); err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("group-readable: update client %d (%q)", c.ID, c.Name), err) {
+			return
+		}
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", "Could not save the setting: the database did not answer. Try again."),
+			http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/clients/"+c.Slug, http.StatusSeeOther)
+}
+
 // postForgetOffsiteObject removes the offsite tracking record without deleting
 // the remote file. Used for "missing on disk" entries the operator wants to clear.
 func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request) {
@@ -875,7 +926,17 @@ func (s *Server) regenAuthorizedKeys(ctx context.Context) error {
 		if c.Mode == model.ModeRsync {
 			dir = filepath.Join(dir, "snapshots")
 		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		// 0750, not 0700: the operator reads backups as an account that is in the
+		// server's group (gid 10001 in the shipped image), and these two
+		// directories — <clientDir> and, for rsync, <clientDir>/snapshots — are
+		// exactly the ones that would otherwise stop that account traversing into
+		// the store. Everything below them is written by the rsync receiver, which
+		// copies the source's modes (see model.Client.GroupReadable).
+		//
+		// MkdirAll does not touch the mode of a directory that already exists, so
+		// a store written by an older build keeps its 0700 until
+		// ReconcileClientDirModes heals it.
+		if err := os.MkdirAll(dir, ClientDirMode); err != nil {
 			log.Printf("authkeys: client %d (%q): cannot create %s: %v", c.ID, c.Name, dir, err)
 			dirErrs = errors.Join(dirErrs, fmt.Errorf("create client dir %s: %w", dir, err))
 		}

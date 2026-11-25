@@ -120,6 +120,19 @@ type Client struct {
 	PreserveACLs      bool // rsync -A: POSIX ACLs
 	PreserveXattrs    bool // rsync -X: extended attributes
 
+	// GroupReadable makes the snapshot tree group-readable as it is written
+	// (rsync --chmod=Dg+rx,Fg+r), so an account in the server's group — gid
+	// 10001 in the shipped image — can read a backup without root. rsync mode
+	// only, default off.
+	//
+	// It is not a fidelity setting like the four above; it is the opposite of
+	// one, and deliberately so: modes in the snapshot no longer mirror the
+	// source (a 0600 file lands 0640-style), and because unchanged files are
+	// hardlinks shared with earlier snapshots the mode lives on the inode, so
+	// turning it on also changes the modes of earlier snapshots that share
+	// those files. The operator is told both things on the client page.
+	GroupReadable bool
+
 	// Retention (D7/D8). Hot retention is ours: the disk the server owns. There
 	// is no offsite horizon any more — cold storage is Backblaze B2 and its
 	// bucket lifecycle rule owns offsite retention (see lifecycle.go), because a

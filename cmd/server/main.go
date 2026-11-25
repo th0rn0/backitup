@@ -76,6 +76,17 @@ func main() {
 		cancel()
 	}
 
+	// The hot store's two server-owned directories are 0750 so an account in the
+	// backup user's group can read backups without root. A store written by a
+	// build that predates that has 0700 there, and the group membership alone buys
+	// nothing until they are healed — hence once per start. Directories owned by
+	// another uid (a bind mount set up wrong) are left alone with one log line.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		srv.ReconcileClientDirModes(ctx)
+		cancel()
+	}
+
 	// Lifecycle worker: hot retention + verification + integrity, on the
 	// server's own schedule (D1/D9). Per-client OffsiteRemote gates whether a
 	// client is tiered; rclone is only invoked for clients that opt in.
