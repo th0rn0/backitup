@@ -120,6 +120,16 @@ type Client struct {
 	PreserveACLs      bool // rsync -A: POSIX ACLs
 	PreserveXattrs    bool // rsync -X: extended attributes
 
+	// RecordOwnership makes the snapshot record the SOURCE's uid/gid instead of
+	// the receiver account's. It is not an rsync flag on the client: the client
+	// cannot ask for it (authorized_keys locks the key to a forced command), so
+	// it selects a different forced command — `backitup-rrsync`, which adds
+	// --fake-super to the rsync the server runs. The receiver stays unprivileged;
+	// the ownership lives in a `user.rsync.%stat` xattr, and a restore reads it
+	// back with --fake-super on the sending side. Off by default, because a
+	// snapshot that carries pseudo-ownership changes what every restore script
+	// has to do.
+	RecordOwnership bool
 	// GroupReadable makes the snapshot tree group-readable as it is written
 	// (rsync --chmod=Dg+rx,Fg+r), so an account in the server's group — gid
 	// 10001 in the shipped image — can read a backup without root. rsync mode

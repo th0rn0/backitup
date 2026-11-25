@@ -503,16 +503,48 @@ with the flag named in its log (`the receiving side refused -A (POSIX ACLs): tur
 the "preserve_acls" setting for this client`) instead of rsync's bare "protocol data
 stream" error.
 
-**Not preserved in the hot tier: ownership.** The receiver runs unprivileged (uid
-10001) inside the ingest container, so it cannot `chown`, and `rsync` as a non-root
-receiver silently ignores ownership: a source file owned by `1000:1000` arrives as
-`10001:10001` with exit status 0. That is deliberate — a privileged receiver would
-make every client's read-write jail root-equivalent on the backup volume — and it is
-why `targz` remains the mode to use when the numeric owner has to survive: `tar`
-records uid/gid in the archive, and a restore as root applies them. `rsync` ownership
-on the hot tier would only be recoverable through `--fake-super` (ownership stored in
-an xattr), which is measurable but changes the shape of every snapshot and makes every
-restore depend on remembering `--fake-super`; it is not implemented.
+**Ownership: recorded per client, without giving the receiver root.** The receiver
+runs unprivileged (uid 10001) inside the ingest container, so it cannot `chown`, and
+`rsync` as a non-root receiver silently ignores ownership: a source file owned by
+`1000:1000` arrives as `10001:10001` with exit status 0. That is deliberate — a
+privileged receiver would make every client's jail root-equivalent on the backup
+volume, and would also cost the app its read rights over `0600` files, which the
+offsite archiver depends on.
+
+The per-client setting **Settings → Ownership in snapshots** (off by default, rsync
+only) records the real owner instead, using `rsync --fake-super` **on the receiving
+side**: each entry keeps the backup account as its Unix owner, and its real `uid`,
+`gid` and mode are written into a `user.rsync.%stat` extended attribute.
+
+- **The client cannot ask for this, and that is why it is a setting and not a flag.**
+  `authorized_keys` locks each client key to a forced command, so a client-side
+  `--rsync-path` is ignored and the server's own options come from that command. A
+  client with the setting on gets `backitup-rrsync <jail>` in place of `rrsync <jail>`;
+  the wrapper appends `--fake-super` to the command and execs `rrsync`, so the jail
+  and its option allowlist are unchanged. Turning the setting on rewrites
+  `authorized_keys` in the same request — there is nothing to install on the client.
+- **The hot tier keeps the backup account as owner.** That is the property that makes
+  this safe: the app can still read, delete and archive every snapshot. The ownership
+  lives in the xattr, not on the inode.
+- **The backups volume must carry user xattrs.** ext4, xfs and btrfs do; an NFS export
+  mounted without xattr support may not. If the receiver cannot set one, the run fails
+  and the log says so — `the "Record source ownership" setting needs user extended
+  attributes (xattrs) on the backups volume, which this one refuses (Operation not
+  supported)` — rather than storing a snapshot without the ownership.
+- **A plain `cp` or `tar` out of a snapshot loses it**, because the owner is in an
+  xattr: `tar --xattrs` or a `--fake-super` read is how you keep it. Restoring is
+  documented under [Restore](#restore).
+- **It does not help a file the client cannot read in the first place.** A root-owned
+  `0600` qcow2 on the client is a source-permission problem; no receiver option fixes
+  it.
+- **Off by default, and existing snapshots are untouched.** A tree that suddenly
+  carried pseudo-ownership would change what every operator and every restore script
+  has to do, so a client created before the setting keeps its command and its snapshot
+  shape until someone turns it on.
+
+Offsite archives carry the attribute as PAX records (`SCHILY.xattr.user.rsync.%stat`,
+what `tar --xattrs` reads and writes), so ownership is not lost on the way to B2;
+`TestTarGzCarriesUserXattrs` and `TestTarGzXattrRoundTrip` hold that down.
 
 **Group-readable snapshots: fidelity traded for operator access.**
 `rsync -a` copies the source's modes, which is the right default but stops the operator
@@ -659,6 +691,25 @@ rclone copy archive:laptop-docs/backup-20260101T000000Z-000.tar.gz ~/restore/
 rclone copy archive:nas-photos/20260101T000000Z.tar.gz            ~/restore/
 ```
 
+**An offsite object of an `rsync` client carries extended attributes as PAX records.**
+When the client records ownership (**Settings → Ownership in snapshots**), the object
+holds each entry's `user.rsync.%stat` as a `SCHILY.xattr.*` record, so extraction has to
+ask for attributes by name or the owner is dropped at the last step:
+
+```bash
+tar --xattrs --xattrs-include='*' -xzpf ~/restore/20260101T000000Z.tar.gz -C ~/restore/stage
+```
+
+Without `--xattrs` nothing is carried at all; `cp` and any extractor that ignores PAX
+records behave the same way. `--xattrs-include='*'` is in the command because it names
+the namespaces explicitly instead of trusting whichever one the tar build treats as
+default (GNU tar 1.35 restores `user.*` with plain `--xattrs`; other builds differ, and
+`security.*`/`trusted.*` always need it and root). The extracted files are owned by the
+extracting user (or by the archive header's owner — the backup account — when you
+extract as root), so the real owner is applied afterwards with a `--fake-super` read;
+see "Ownership, when the client records it" below. With a client that does not record
+ownership the object carries no PAX record and the flag changes nothing.
+
 **Offsite, `single` upload scope.** The object is named `latest.tar.gz` inside the
 client's path — `<offsite-dir>/latest.tar.gz`, whatever the client's mode — and it
 contains the newest snapshot only. There is one restore point, not a history: the
@@ -669,6 +720,46 @@ listed under is simply which backup it currently holds.
 rclone copy archive:laptop-docs/latest.tar.gz ~/restore/
 ```
 
+**Ownership, when the client records it.** A snapshot of a client with **Settings →
+Ownership in snapshots** on stores each entry's real `uid`/`gid`/mode in a
+`user.rsync.%stat` xattr, so the copy on the hot store (or in an offsite archive)
+belongs to the backup account but *remembers* its owner. Two ways to get it back, and
+the asymmetry between them is the whole trick:
+
+```bash
+# 1. Straight from the hot store, on the machine that will hold the files, as root.
+#    The server's forced command adds --fake-super to ITS rsync (the sending side);
+#    your local rsync must stay plain, or it writes a new pseudo-owner instead of
+#    chown()ing. This is also why the command needs no special option.
+rsync -a --numeric-ids -e 'ssh -i /path/to/client_key' \
+  backup@backup.example.com:snapshots/20260101T000000Z/ /srv/photos/
+
+# 2. From a downloaded archive (hot-store tar.gz or an offsite object). The archive
+#    carries the attribute as SCHILY.xattr records, so extract with --xattrs.
+#    --xattrs-include='*' names every namespace rather than relying on which one
+#    your tar treats as default (GNU tar 1.35 restores user.* without it; older and
+#    newer builds differ, and it is what restores security.*/trusted.* as root).
+#    -p keeps modes; ownership does NOT come from here:
+tar --xattrs --xattrs-include='*' -xzpf ~/20260101T000000Z.tar.gz -C /stage
+#    ...the extracted files belong to whoever ran tar (root: the backup account's
+#    uid from the archive header, not the real one). Apply the real owner by
+#    reading the attribute back with --fake-super at a plain receiver:
+rsync -a --fake-super /stage/20260101T000000Z/ root@target:/srv/photos/
+```
+
+Where the ownership lands, precisely: `tar` writes the *archive header's* uid/gid,
+which for an rsync snapshot is the backup account — so an unprivileged extraction
+gives you your own user, and an extraction as root gives you `backup`. The real
+owner only comes back from a reader that understands `user.rsync.%stat`, i.e.
+`rsync --fake-super` as the sender, or `rsync --fake-super` locally over the
+extracted tree. That is a property of storing ownership in an attribute, and it is
+why the second command above is not optional when the owner matters.
+
+`cp`, `tar` without `--xattrs`, and any `rsync` without `--fake-super` copy the files
+*without* the owner: they give you the backup account's uid, which is what the hot
+tier looks like anyway. That is a property of storing ownership in an attribute, not a
+bug, and it is why the restore commands above name the option.
+
 **What a restore preserves, and what it does not.** File contents, permission
 bits, modification times and symlink targets are preserved, in both modes — the
 tests that prove it compare sha256, mode, mtime and link target per entry
@@ -677,9 +768,10 @@ in-tree hardlinks are preserved only if the client has the matching fidelity set
 on (**Settings → What the snapshot captures**; see "What the rsync hot tier does and
 does not preserve" above), and hardlink structure *between separate snapshots* is not
 preserved on restore — an `rsync` snapshot is internally hardlinked on the hot store,
-but a restored copy is plain files. Numeric ownership is **not** preserved in the
-`rsync` hot tier (the receiver is unprivileged); `tar.gz` archives carry uid/gid, so
-they can be applied by extracting as root when ownership matters.
+but a restored copy is plain files. Numeric ownership in the `rsync` hot tier is the
+backup account's unless the client has **Ownership in snapshots** on, in which case
+the commands above put the real owner back; `tar.gz` snapshots carry uid/gid natively,
+so they can be applied by extracting as root when ownership matters.
 
 **Restore is not a drill until you have done it.** Pull one snapshot of one client
 to a scratch directory and diff it against the source before you need it:

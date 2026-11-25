@@ -32,7 +32,11 @@ COPY docker/sshd/sshd_config /etc/ssh/sshd_config
 COPY docker/sshd/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/sshd/recv-limits.sh /usr/local/bin/recv-limits.sh
 COPY docker/sshd/backitup-recv /usr/local/bin/backitup-recv
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/recv-limits.sh /usr/local/bin/backitup-recv
+# The forced command for a client whose snapshots record the source's ownership:
+# rrsync with --fake-super injected server-side (see the script's own comment
+# for why the client cannot ask for it and why the flag's position matters).
+COPY docker/sshd/backitup-rrsync /usr/local/bin/backitup-rrsync
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/recv-limits.sh /usr/local/bin/backitup-recv /usr/local/bin/backitup-rrsync
 
 EXPOSE 2222
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

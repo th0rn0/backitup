@@ -1,0 +1,47 @@
+#!/bin/sh
+# backitup-rrsync — the forced command for a client whose snapshots record the
+# source's ownership (the "Record source ownership" setting on the client page).
+#
+# Why a wrapper and not a client flag. The receiver is the unprivileged
+# `backitup` account (uid 10001), so `rsync -a`'s -o/-g cannot chown and every
+# file in a snapshot silently lands as 10001:10001 with exit status 0. Adding
+# --fake-super to the rsync the SERVER runs makes the receiving side record the
+# real owner in a `user.rsync.%stat` xattr instead of chowning, and makes a
+# sending side interpret that xattr, so a root restore applies the real
+# ownership. The client cannot ask for it: authorized_keys locks each key to
+# this command (`restrict,command="..."`), so the client's own --rsync-path is
+# ignored and the server's options come from this forced command.
+#
+# Where the flag goes matters twice over:
+#   - rrsync requires `--server` to be the SECOND word, so the flag cannot go
+#     between `rsync` and `--server`.
+#   - rrsync decides whether a transfer is a read or a write from
+#     `--sender` being the first word after `--server`. Inserting the flag
+#     before `--sender` would turn a restore (a pull) into a write and drop the
+#     read-only guarantees that come with rrsync's sender mode.
+# So the flag goes directly after `--sender` when present, and directly after
+# `--server` otherwise. `--fake-super` is in rrsync's own option table, so
+# rrsync validates it like any other option the client asked for.
+#
+# Nothing else is changed: the command is passed to rrsync exactly as received,
+# including a command that does not run rsync at all (rrsync rejects it, with
+# its own message) and the `true` rsync-free connectivity check.
+set -eu
+
+cmd=${SSH_ORIGINAL_COMMAND:-}
+case "$cmd" in
+*--fake-super*)
+	# Already asked for (a newer client, or a restore that set it): pass it
+	# through untouched rather than adding a second copy.
+	;;
+rsync\ --server\ --sender\ *)
+	cmd="rsync --server --sender --fake-super${cmd#"rsync --server --sender"}"
+	;;
+rsync\ --server\ *)
+	cmd="rsync --server --fake-super${cmd#"rsync --server"}"
+	;;
+esac
+SSH_ORIGINAL_COMMAND=$cmd
+export SSH_ORIGINAL_COMMAND
+
+exec rrsync "$@"

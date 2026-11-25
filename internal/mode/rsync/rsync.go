@@ -60,6 +60,11 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	if f := fidelityFlags(o); f != "" {
 		logger.Printf("fidelity: %s — this snapshot carries them", f)
 	}
+	// Ownership is not one of those flags: the server's forced command adds
+	// --fake-super, so say what the snapshot will hold instead.
+	if note := ownershipNote(o); note != "" {
+		logger.Printf("%s", note)
+	}
 	if o.GroupReadable {
 		logger.Printf("group readable: --chmod=Dg+rx,Fg+r — modes in this snapshot are widened for the server's group, so they no longer mirror the source")
 	}
@@ -73,6 +78,13 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 		// unexpectedly closed ... error in rsync protocol data stream". The
 		// operator cannot act on that; name the setting instead.
 		if hint := refusedFidelityOption(err.Error()); hint != "" {
+			logger.Printf("%s", hint)
+			err = fmt.Errorf("%w — %s", err, hint)
+		}
+		// The same reasoning for a volume that cannot store xattrs: the run
+		// fails with exit 23 and a per-file `lsetxattr ... failed` line, which
+		// names neither the setting nor the volume.
+		if hint := xattrFailureHint(o, err.Error()); hint != "" {
 			logger.Printf("%s", hint)
 			err = fmt.Errorf("%w — %s", err, hint)
 		}

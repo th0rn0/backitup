@@ -87,12 +87,16 @@ func TestGroupReadableDefaultsOffOnUpgrade(t *testing.T) {
 	if clients[0].GroupReadable {
 		t.Error("an existing client was upgraded with group-readable snapshots on")
 	}
+	if clients[0].RecordOwnership {
+		t.Error("an existing client was upgraded with ownership recording on: a snapshot tree that suddenly carried pseudo-ownership would change what every restore script has to do")
+	}
 }
 
-// writeV5DB builds a database at the previous release's shape: today's
-// schema.sql with clients.group_readable taken away, one client row, stamped
-// user_version 5. That is the state an operator's store is in when they upgrade
-// to the build that has the setting.
+// writeV5DB builds a database at a previous release's shape: today's
+// schema.sql with the per-client columns added since taken away, one client
+// row, stamped user_version 5. That is the state an operator's store is in when
+// they upgrade to a build that has group_readable and record_ownership: both
+// must read as 0, which is the snapshot shape every existing row produces.
 func writeV5DB(t *testing.T, path string) {
 	t.Helper()
 	sch, err := parseSchema(schemaSQL)
@@ -108,7 +112,9 @@ func writeV5DB(t *testing.T, path string) {
 	for _, tbl := range sch.tables {
 		ddl := tbl.ddl
 		if tbl.name == "clients" {
-			ddl = withoutColumn(t, ddl, "group_readable")
+			// Every column added after v5 comes off together: a v5 database has
+			// neither, and the upgrade must give both their default.
+			ddl = withoutColumns(t, ddl, "group_readable", "record_ownership")
 		}
 		if _, err := db.Exec(ddl); err != nil {
 			t.Fatalf("create table %s: %v", tbl.name, err)

@@ -29,13 +29,18 @@ var ErrNotImplemented = errors.New("not implemented")
 // The server-side directory is NOT here: it is baked into the forced command in
 // authorized_keys, so the client can only ever write into its own directory.
 type BackupOpts struct {
-	SourceDir           string
-	Excludes            []string
-	SkipSymlinks        bool        // omit symlinks from the backup
-	PreserveSparse      bool        // rsync -S: keep holes as holes
-	PreserveHardlinks   bool        // rsync -H: one inode for an in-tree hardlink pair
-	PreserveACLs        bool        // rsync -A
-	PreserveXattrs      bool        // rsync -X
+	SourceDir         string
+	Excludes          []string
+	SkipSymlinks      bool // omit symlinks from the backup
+	PreserveSparse    bool // rsync -S: keep holes as holes
+	PreserveHardlinks bool // rsync -H: one inode for an in-tree hardlink pair
+	PreserveACLs      bool // rsync -A
+	PreserveXattrs    bool // rsync -X
+	// RecordOwnership means the SERVER records the source's uid/gid in the
+	// snapshot (--fake-super receiver-side). No client flag does this — the
+	// server's forced command does — so the client only uses it to say so in
+	// the run log and to explain a receiver that cannot store xattrs.
+	RecordOwnership     bool
 	HasPreviousSnapshot bool        // rsync: skip --link-dest when false (first backup)
 	Logger              *log.Logger // nil = use log.Default()
 	SSHServer           string      // host:port of the sshd ingest (data channel)
