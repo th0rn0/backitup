@@ -137,8 +137,8 @@ func TestClientPageWithNoSnapshotsRendersADash(t *testing.T) {
 }
 
 // TestClientPageWithSnapshotsButNoMeasurementSaysSo: snapshots exist but the
-// lifecycle pass has not measured yet. Saying "not measured yet" is the only
-// answer that is neither a zero nor an invented figure.
+// lifecycle pass has not measured yet. Saying "Measured on the next lifecycle
+// pass" is the only answer that is neither a zero nor an invented figure.
 func TestClientPageWithSnapshotsButNoMeasurementSaysSo(t *testing.T) {
 	st, _, ts, base := newDiskStack(t)
 	c := loggedInClient(t, st, ts)
@@ -146,7 +146,7 @@ func TestClientPageWithSnapshotsButNoMeasurementSaysSo(t *testing.T) {
 	writeSnapshot(t, base, cl.Slug, "20260618T120000Z", "payload.bin", 4096)
 
 	card := statCard(t, getPage(t, c, ts.URL+"/clients/"+cl.Slug), "On disk (allocated)")
-	if !strings.Contains(card, "not measured yet") {
+	if !strings.Contains(card, "Measured on the next lifecycle pass") {
 		t.Fatalf("a client whose store has never been measured does not say so:\n%s", card)
 	}
 	if strings.Contains(card, "0 B") {
@@ -209,7 +209,7 @@ func TestDashboardSumsStoredMeasurementsAndShowsTheirAge(t *testing.T) {
 	if !strings.Contains(body, "as of 10m ago") {
 		t.Fatalf("the dashboard does not show the age of the oldest measurement:\n%s", storageChips(body))
 	}
-	if !strings.Contains(body, "1 client not measured yet") {
+	if !strings.Contains(body, "1 client pending measurement") {
 		t.Fatalf("the dashboard does not name the client it could not measure:\n%s", storageChips(body))
 	}
 	if !strings.Contains(storageChips(body), "≥") {

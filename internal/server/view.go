@@ -28,6 +28,8 @@ type storageStats struct {
 
 type summaryCounts struct{ OK, Stale, Failed, Never, Running int }
 
+func (s summaryCounts) Total() int { return s.OK + s.Stale + s.Failed + s.Never + s.Running }
+
 type clientRow struct {
 	ID               int64
 	Name             string

@@ -6,6 +6,9 @@
     var meta = document.querySelector('.fleet-meta');
     if (!meta) return;
 
+    var total = meta.querySelector('.total');
+    if (total) total.textContent = summary.total + ' client' + (summary.total === 1 ? '' : 's');
+
     var ok = meta.querySelector('.ok');
     var stale = meta.querySelector('.stale');
     var failed = meta.querySelector('.failed');

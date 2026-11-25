@@ -46,10 +46,27 @@
 // Tab switcher for elements with data-tab-group / data-tab-btn / data-tab.
 // scopedQuery only returns elements whose nearest data-tab-group ancestor is
 // exactly `group`, so nested tab groups don't bleed into each other.
+// Unselected panels use the `hidden` attribute so they are absent from the
+// accessibility tree, not merely invisible.
 (function () {
   function scopedQuery(group, selector) {
     return Array.from(group.querySelectorAll(selector)).filter(function (el) {
       return el.closest('[data-tab-group]') === group;
+    });
+  }
+
+  function activate(group, target) {
+    scopedQuery(group, '[data-tab-btn]').forEach(function (b) {
+      var isActive = b.getAttribute('data-tab-btn') === target;
+      b.classList.toggle('tab-active', isActive);
+      b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    scopedQuery(group, '[data-tab]').forEach(function (p) {
+      if (p.getAttribute('data-tab') === target) {
+        p.removeAttribute('hidden');
+      } else {
+        p.setAttribute('hidden', '');
+      }
     });
   }
 
@@ -59,18 +76,40 @@
     var group = btn.closest('[data-tab-group]');
     if (!group) return;
     var target = btn.getAttribute('data-tab-btn');
-
-    scopedQuery(group, '[data-tab-btn]').forEach(function (b) {
-      b.classList.toggle('tab-active', b.getAttribute('data-tab-btn') === target);
-    });
-    scopedQuery(group, '[data-tab]').forEach(function (p) {
-      p.style.display = p.getAttribute('data-tab') === target ? '' : 'none';
-    });
+    activate(group, target);
   });
 
-  // Initialise each group by clicking its first directly-owned button.
+  // Keyboard navigation: arrow keys move between tabs in the same tablist.
+  document.addEventListener('keydown', function (e) {
+    var btn = e.target.closest('[role="tab"]');
+    if (!btn) return;
+    var tablist = btn.closest('[role="tablist"]');
+    if (!tablist) return;
+    var tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+    var idx = tabs.indexOf(btn);
+    if (idx < 0) return;
+    var next = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      next = (idx + 1) % tabs.length;
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      next = (idx - 1 + tabs.length) % tabs.length;
+    } else if (e.key === 'Home') {
+      next = 0;
+    } else if (e.key === 'End') {
+      next = tabs.length - 1;
+    }
+    if (next >= 0) {
+      e.preventDefault();
+      tabs[next].focus();
+      tabs[next].click();
+    }
+  });
+
+  // Initialise each group by activating its first directly-owned button.
   document.querySelectorAll('[data-tab-group]').forEach(function (group) {
     var first = scopedQuery(group, '[data-tab-btn]')[0];
-    if (first) first.click();
+    if (first) {
+      activate(group, first.getAttribute('data-tab-btn'));
+    }
   });
 }());
