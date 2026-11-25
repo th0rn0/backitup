@@ -90,6 +90,10 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 		OffsiteDir:           strings.TrimSpace(strings.Trim(r.PostFormValue("offsite_dir"), "/")),
 		OffsiteCron:          strings.TrimSpace(r.PostFormValue("offsite_cron")),
 		SkipSymlinks:         r.PostFormValue("skip_symlinks") == "1",
+		PreserveSparse:       r.PostFormValue("preserve_sparse") == "1",
+		PreserveHardlinks:    r.PostFormValue("preserve_hardlinks") == "1",
+		PreserveACLs:         r.PostFormValue("preserve_acls") == "1",
+		PreserveXattrs:       r.PostFormValue("preserve_xattrs") == "1",
 		SSHPubKey:            pubLine,
 		TokenHash:            tokenHash,
 		TokenPrefix:          tokenPrefix,
@@ -504,6 +508,44 @@ func (s *Server) postUpdateClientRetention(w http.ResponseWriter, r *http.Reques
 	}
 	if err := s.st.UpdateClientRetention(ctx, c.ID, hotDays, expectedInterval); err != nil {
 		if s.storeFailure(w, ctx, fmt.Sprintf("retention: update client %d (%q)", c.ID, c.Name), err) {
+			return
+		}
+		http.Error(w, "update failed", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+}
+
+// postUpdateClientFidelity records what this client's snapshots should capture
+// beyond `-a`. Each box is "on" only when it was checked, so a form submitted
+// with none of them clears every setting — the same shape as the create form,
+// and no way to end up half-applied by an unchecked box that was never sent.
+func (s *Server) postUpdateClientFidelity(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := s.storeCtx(r)
+	defer cancel()
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("fidelity: load client %q", r.PathValue("name")), err) {
+			return
+		}
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	err = s.st.UpdateClientFidelity(ctx, c.ID,
+		r.PostFormValue("preserve_sparse") == "1",
+		r.PostFormValue("preserve_hardlinks") == "1",
+		r.PostFormValue("preserve_acls") == "1",
+		r.PostFormValue("preserve_xattrs") == "1")
+	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("fidelity: update client %d (%q)", c.ID, c.Name), err) {
 			return
 		}
 		http.Error(w, "update failed", http.StatusInternalServerError)

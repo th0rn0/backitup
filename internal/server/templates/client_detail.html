@@ -346,6 +346,45 @@
             </form>
           </div>
 
+          <div class="settings-group">
+            <div class="settings-group-title">What the snapshot captures</div>
+            <p class="section-hint">rsync mode only — a targz client ignores these. Changing one affects the <em>next</em> run; snapshots already on disk keep the shape they were written with.</p>
+            <form method="POST" action="/clients/{{.Client.Slug}}/fidelity" class="form" style="margin-top:0">
+              <label class="checkbox-label">
+                <input type="checkbox" name="preserve_sparse" value="1"{{if .Client.PreserveSparse}} checked{{end}}>
+                <span>
+                  Preserve sparse files (<code>-S</code>)
+                  <span class="hint">A hole stays a hole instead of becoming zeros on the server. Measured: a tree of 1.9 MB on disk with a 1 GiB hole landed as 1.0 GB without it and 3.0 MB with it.</span>
+                </span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" name="preserve_hardlinks" value="1"{{if .Client.PreserveHardlinks}} checked{{end}}>
+                <span>
+                  Preserve internal hardlinks (<code>-H</code>)
+                  <span class="hint">Two names for one file share one inode in the snapshot instead of storing the data twice.</span>
+                </span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" name="preserve_acls" value="1"{{if .Client.PreserveACLs}} checked{{end}}>
+                <span>
+                  Preserve ACLs (<code>-A</code>)
+                  <span class="hint">Keeps POSIX ACLs. A receiver that refuses the option fails the run with the flag named in the log, never silently.</span>
+                </span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" name="preserve_xattrs" value="1"{{if .Client.PreserveXattrs}} checked{{end}}>
+                <span>
+                  Preserve extended attributes (<code>-X</code>)
+                  <span class="hint">Keeps <code>user.*</code> and <code>security.capability</code> attributes.</span>
+                </span>
+              </label>
+              <div class="field-hint">Ownership (uid/gid) is <strong>not</strong> preserved in the hot tier: the receiver runs unprivileged, so every file in a snapshot belongs to the server's backup user. targz snapshots record the numeric owner in the archive instead.</div>
+              <div class="form-actions">
+                <button type="submit" class="btn">Save</button>
+              </div>
+            </form>
+          </div>
+
           <div class="settings-group danger-group">
             <div class="settings-group-title">Danger zone</div>
             <div class="danger-row">

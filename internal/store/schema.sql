@@ -35,7 +35,14 @@ CREATE TABLE IF NOT EXISTS clients (
     created_at              TEXT    NOT NULL,
     version                 INTEGER NOT NULL DEFAULT 1,  -- CAS guard for credential rotation
     skip_symlinks           INTEGER NOT NULL DEFAULT 0,  -- omit symlinks from backup
-    offsite_upload_mode     TEXT    NOT NULL DEFAULT 'all'   -- 'all' or 'latest': which snapshots to push
+    offsite_upload_mode     TEXT    NOT NULL DEFAULT 'all',  -- 'all' or 'latest': which snapshots to push
+    -- Fidelity (rsync -S/-H/-A/-X). 0 = the pre-fidelity snapshot shape, which
+    -- is what every existing client keeps on upgrade; the create form turns
+    -- sparse on for NEW clients only.
+    preserve_sparse         INTEGER NOT NULL DEFAULT 0,
+    preserve_hardlinks      INTEGER NOT NULL DEFAULT 0,
+    preserve_acls           INTEGER NOT NULL DEFAULT 0,
+    preserve_xattrs         INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS runs (

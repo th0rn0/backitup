@@ -119,6 +119,10 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		"retention_days":        cl.RetentionDays,
 		"skip_symlinks":         cl.SkipSymlinks,
 		"has_previous_snapshot": hasPrev,
+		"preserve_sparse":       cl.PreserveSparse,
+		"preserve_hardlinks":    cl.PreserveHardlinks,
+		"preserve_acls":         cl.PreserveACLs,
+		"preserve_xattrs":       cl.PreserveXattrs,
 	})
 }
 

@@ -38,7 +38,8 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 	if err != nil {
 		return err
 	}
-	rl.Printf("config: mode=%s excludes=%v skip_symlinks=%v", scfg.Mode, scfg.Excludes, scfg.SkipSymlinks || cfg.SkipSymlinks)
+	rl.Printf("config: mode=%s excludes=%v skip_symlinks=%v fidelity=%v", scfg.Mode, scfg.Excludes, scfg.SkipSymlinks || cfg.SkipSymlinks,
+		fidelityNames(scfg))
 	m := model.Mode(scfg.Mode)
 	if !m.Valid() {
 		m = cfg.Mode
@@ -56,6 +57,10 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		SourceDir:           cfg.Source,
 		Excludes:            scfg.Excludes,
 		SkipSymlinks:        scfg.SkipSymlinks || cfg.SkipSymlinks,
+		PreserveSparse:      scfg.PreserveSparse,
+		PreserveHardlinks:   scfg.PreserveHardlinks,
+		PreserveACLs:        scfg.PreserveACLs,
+		PreserveXattrs:      scfg.PreserveXattrs,
 		HasPreviousSnapshot: scfg.HasPreviousSnapshot,
 		Logger:              rl.Logger,
 		SSHServer:           cfg.SSHServer,
@@ -82,6 +87,26 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		}
 	}
 	return backupErr
+}
+
+// fidelityNames lists the fidelity settings this run will ask the receiver for,
+// so "did the ACL setting reach the client?" is answerable from the client's own
+// log instead of from the server page.
+func fidelityNames(c ConfigResp) []string {
+	out := []string{}
+	if c.PreserveSparse {
+		out = append(out, "sparse")
+	}
+	if c.PreserveHardlinks {
+		out = append(out, "hardlinks")
+	}
+	if c.PreserveACLs {
+		out = append(out, "acls")
+	}
+	if c.PreserveXattrs {
+		out = append(out, "xattrs")
+	}
+	return out
 }
 
 func buildStatus(res mode.BackupResult, backupErr error) StatusReq {
