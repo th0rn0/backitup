@@ -20,8 +20,10 @@ package lifecycle
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -32,6 +34,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/th0rn0/backitup/internal/alert"
 	"github.com/th0rn0/backitup/internal/authkeys"
+	"github.com/th0rn0/backitup/internal/diskusage"
 	"github.com/th0rn0/backitup/internal/mode"
 	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/store"
@@ -112,6 +115,13 @@ type Deps struct {
 	PartOrphanAge    time.Duration // 0 -> DefaultPartOrphanAge; min age before a .part file is removed
 	StaleRunTimeout  time.Duration // 0 -> DefaultStaleRunTimeout; max age of a "running" run
 	Now              func() time.Time
+
+	// DiskUsageMaxEntries bounds the per-client hot-store measurement this pass
+	// records for the dashboard. 0 -> diskusage.DefaultMaxEntries, negative ->
+	// no cap (tests over small trees want an exact figure). The cap keeps a
+	// pathological tree from stalling a pass whose other job is retention; a
+	// walk that hits it stores a lower bound and says so.
+	DiskUsageMaxEntries int64
 
 	DiscordWebhook string              // empty disables Discord alerts
 	Verbose        bool                // log offsite uploads/deletes and status changes
@@ -292,6 +302,15 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	verifyLatest(ctx, c, sm, clientDir, snaps)
 	checkStaleAlert(ctx, d, c)
 
+	// Measure the hot store for the dashboard, last so the figure covers this
+	// pass's own pruning. Bounded (diskusage.Measure): a pathological tree costs
+	// the cap, not the pass, and a capped walk stores a lower bound. A store that
+	// cannot be measured keeps its previous figure and its age — never a silent
+	// zero, and never a walk on a request path.
+	if err := measureClientStorage(ctx, d, c, clientDir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("lifecycle: client %d (%s): measure disk usage: %v", c.ID, c.Name, err)
+	}
+
 	keep := d.RunsKeepDays
 	if keep == 0 {
 		keep = DefaultRunsKeepDays
@@ -302,6 +321,29 @@ func processClient(ctx context.Context, d Deps, c model.Client) error {
 	// Last, so a failed prune still lets verification and the alerting pass run;
 	// the caller turns this into a non-clean lifecycle pass.
 	return pruneErr
+}
+
+// measureClientStorage records how much disk the client's hot store occupies, so
+// the dashboard can report a number that was measured once rather than a sum of
+// per-snapshot sizes (rsync reports 0 on purpose: summing its hardlinked tree is
+// a full walk) or a walk on every page load.
+//
+// A client whose directory does not exist yet is not an error — it simply has
+// nothing to measure until its first backup — and the caller treats that as "no
+// measurement" rather than storing a zero.
+func measureClientStorage(ctx context.Context, d Deps, c model.Client, clientDir string) error {
+	res, err := diskusage.Measure(ctx, clientDir, d.DiskUsageMaxEntries)
+	if err != nil {
+		return err
+	}
+	if err := d.Store.SetClientStorage(ctx, c.ID, res.Bytes, res.Partial, d.now()); err != nil {
+		return fmt.Errorf("record measurement: %w", err)
+	}
+	if res.Partial {
+		log.Printf("lifecycle: client %d (%s): disk usage stopped at the %d-entry cap; %d bytes is a lower bound",
+			c.ID, c.Name, res.Entries, res.Bytes)
+	}
+	return nil
 }
 
 // RunOffsiteOnce uploads new snapshots for all clients whose OffsiteCron

@@ -19,7 +19,10 @@ type dashboardView struct {
 
 type storageStats struct {
 	HotBytes    int64
-	HotMeasured bool // false until the background meter has completed one walk
+	HotMeasured bool   // at least one enabled client has a stored measurement
+	HotPartial  bool   // the total is a lower bound: a capped walk, or a client not measured yet
+	HotAsOf     string // age of the OLDEST measurement included in HotBytes ("" when none)
+	HotMissing  int    // enabled clients with no measurement yet — omitted from HotBytes
 	ColdBytes   int64
 }
 
@@ -109,11 +112,42 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 		return healthRank(v.Clients[i].Health) < healthRank(v.Clients[j].Health)
 	})
 
-	// Storage totals. Hot bytes come from the background meter — this handler
-	// must never walk the backup tree (see storage.go); cold bytes are a single
-	// indexed query.
+	// Storage totals. Hot bytes are the lifecycle's per-client measurements
+	// summed here: this handler must never walk the backup tree (see
+	// lifecycle.measureClientStorage), and the age shown is the OLDEST
+	// measurement included so the figure never flatters itself. A client with no
+	// measurement is counted, not assumed to be zero, and makes the total a
+	// lower bound.
+	measured, err := s.st.ListClientStorage(ctx)
+	if err != nil {
+		return dashboardView{}, err
+	}
+	var oldest time.Time
+	for _, c := range clients {
+		if !c.Enabled {
+			continue
+		}
+		st, ok := measured[c.ID]
+		if !ok || st.MeasuredAt.IsZero() {
+			v.Storage.HotMissing++
+			continue
+		}
+		v.Storage.HotBytes += st.Bytes
+		v.Storage.HotMeasured = true
+		if st.Partial {
+			v.Storage.HotPartial = true
+		}
+		if oldest.IsZero() || st.MeasuredAt.Before(oldest) {
+			oldest = st.MeasuredAt
+		}
+	}
+	if v.Storage.HotMissing > 0 {
+		v.Storage.HotPartial = true
+	}
+	if !oldest.IsZero() {
+		v.Storage.HotAsOf = relTime(now.Sub(oldest))
+	}
 	v.Storage.ColdBytes, _ = s.st.TotalOffsiteBytes(ctx)
-	v.Storage.HotBytes, v.Storage.HotMeasured = s.hotBytes()
 
 	return v, nil
 }

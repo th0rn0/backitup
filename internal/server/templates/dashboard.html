@@ -26,8 +26,9 @@
       {{if .Clients}}
       <div class="storage-stats">
         <div class="stat-chip">
-          <span class="stat-label">On disk</span>
-          <span class="stat-value">{{if .Storage.HotMeasured}}{{humanBytes .Storage.HotBytes}}{{else}}measuring…{{end}}</span>
+          <span class="stat-label" title="Allocated blocks on disk, each inode counted once — not apparent file size">On disk (allocated)</span>
+          <span class="stat-value">{{if .Storage.HotMeasured}}{{if .Storage.HotPartial}}≥ {{end}}{{humanBytes .Storage.HotBytes}}{{else}}measuring…{{end}}</span>
+          {{if .Storage.HotAsOf}}<span class="stat-sub">as of {{.Storage.HotAsOf}}{{if .Storage.HotMissing}} · {{.Storage.HotMissing}} client{{if ne .Storage.HotMissing 1}}s{{end}} not measured yet{{end}}</span>{{end}}
         </div>
         <div class="stat-chip">
           <span class="stat-label">On remote</span>
