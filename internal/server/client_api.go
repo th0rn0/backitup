@@ -129,6 +129,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		"preserve_acls":         cl.PreserveACLs,
 		"preserve_xattrs":       cl.PreserveXattrs,
 		"group_readable":        cl.GroupReadable,
+		"record_ownership":      cl.RecordOwnership,
 	})
 }
 

@@ -11,7 +11,7 @@ import (
 
 // schemaVersion is the version this binary writes. It must equal the last entry
 // of migrations (asserted by TestSchemaVersionMatchesLastStep).
-const schemaVersion = 7
+const schemaVersion = 8
 
 // droppedColumns names, per table, the columns a migration is allowed to remove.
 //
@@ -94,6 +94,10 @@ var migrations = []migration{
 	// refuses one that does not (nothing in common to copy), so "canonicalise
 	// everything" alone cannot introduce a table.
 	{version: 7, name: "client disk usage", fkOff: true, apply: applyClientStorage},
+	// v8: record_ownership, which selects the client's sshd forced command. It
+	// defaults to 0, so every existing client keeps the command it has and the
+	// snapshot shape it already produces until an operator turns it on.
+	{version: 8, name: "record source ownership", fkOff: true, apply: applyCanonicalShape},
 }
 
 // migrationFault is a test seam. When set, it is called at each point inside a

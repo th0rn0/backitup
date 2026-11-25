@@ -64,6 +64,11 @@ type ConfigResp struct {
 	PreserveACLs      bool `json:"preserve_acls"`
 	PreserveXattrs    bool `json:"preserve_xattrs"`
 
+	// RecordOwnership: the server's forced command adds --fake-super, so the
+	// snapshot records the source's uid/gid instead of the receiver account's.
+	// The client cannot ask for it, but it reports it — a run's log should say
+	// what the snapshot it just took holds.
+	RecordOwnership bool `json:"record_ownership"`
 	// GroupReadable (rsync mode): widen modes for the server's group as the
 	// receiver writes them. A server that predates it omits the key, which
 	// decodes as off — the behaviour that server had.

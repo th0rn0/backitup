@@ -64,6 +64,7 @@ func Run(ctx context.Context, cfg Config, lockPath string) error {
 		PreserveHardlinks:   scfg.PreserveHardlinks,
 		PreserveACLs:        scfg.PreserveACLs,
 		PreserveXattrs:      scfg.PreserveXattrs,
+		RecordOwnership:     scfg.RecordOwnership,
 		GroupReadable:       scfg.GroupReadable,
 		HasPreviousSnapshot: scfg.HasPreviousSnapshot,
 		Logger:              rl.Logger,
@@ -109,6 +110,12 @@ func fidelityNames(c ConfigResp) []string {
 	}
 	if c.PreserveXattrs {
 		out = append(out, "xattrs")
+	}
+	if c.RecordOwnership {
+		// Not an rsync flag: the server's forced command adds --fake-super, so
+		// the snapshot records the source's uid/gid. Listed here because it is
+		// the same question — what does this run's snapshot hold?
+		out = append(out, "ownership")
 	}
 	return out
 }

@@ -373,6 +373,9 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"OffsiteTotalBytes":   offsiteTotalBytes,
 		"ExpectedIntervalStr": expectedIntervalStr,
 		"NextExpected":        nextExpected,
+		// The restore command for a snapshot that records ownership is a pull
+		// from this server, so the page needs the ingest address to state it.
+		"PublicHost": s.publicHost,
 	})
 }
 
@@ -630,6 +633,81 @@ func (s *Server) postUpdateClientGroupReadable(w http.ResponseWriter, r *http.Re
 		return
 	}
 	http.Redirect(w, r, "/clients/"+c.Slug, http.StatusSeeOther)
+}
+
+// postUpdateClientOwnership flips the per-client switch that makes the SERVER
+// record the source's ownership in the snapshot (rsync --fake-super on the
+// receiver, keeping the receiver unprivileged).
+//
+// It is its own form and its own store method for a different reason than the
+// group-readable switch: this setting is not an rsync flag the client sends. It
+// selects which forced command the client's key may run — `rrsync` or
+// `backitup-rrsync` — so the store write alone changes nothing; authorized_keys
+// has to be rewritten before the next run, or the page would claim a setting
+// that has no effect. A targz client's receiver is not rsync at all, so the
+// request is refused with a flash rather than stored and silently ignored.
+func (s *Server) postUpdateClientOwnership(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	on := r.PostFormValue("record_ownership") == "1"
+	ctx, cancel := s.storeCtx(r)
+	defer cancel()
+	c, err := s.st.GetClientBySlug(ctx, r.PathValue("name"))
+	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("ownership: load client %q", r.PathValue("name")), err) {
+			return
+		}
+		http.Error(w, "failed to load client", http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if on && c.Mode != model.ModeRsync {
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err",
+			"Recording source ownership is an rsync setting: it changes the rsync the server runs on the other end of the transfer. A tar.gz client's own tar already records the numeric owner in the archive."),
+			http.StatusSeeOther)
+		return
+	}
+	if err := s.st.UpdateClientOwnership(ctx, c.ID, on); err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("ownership: update client %d (%q)", c.ID, c.Name), err) {
+			return
+		}
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", "Could not save the setting: the database did not answer. Try again."),
+			http.StatusSeeOther)
+		return
+	}
+	// authorized_keys is normally rewritten only on create/rotate/delete, but
+	// this setting IS the forced command: without this the next run would use
+	// the previous command and quietly store ownership the old way.
+	akCtx, akCancel := s.storeCtx(r)
+	defer akCancel()
+	if err := s.regenAuthorizedKeys(akCtx); err != nil {
+		log.Printf("ownership: client %d (%q): settings saved, but authorized_keys was not rewritten: %v", c.ID, c.Name, err)
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err",
+			"The setting is saved, but the sshd authorized_keys file could not be rewritten, so the client's next run still uses the previous command. Check the server log and restart the server (it rewrites the file on startup)."),
+			http.StatusSeeOther)
+		return
+	}
+	stored := "the source's uid/gid"
+	if !on {
+		stored = "the backup account's uid/gid, as before"
+	}
+	http.Redirect(w, r, clientFlashURL(c.Slug, "msg",
+		fmt.Sprintf("Ownership recording is %s for %s: the next run's snapshot will record %s. authorized_keys was rewritten; the client needs no change.",
+			onOff(on), c.Name, stored)),
+		http.StatusSeeOther)
+}
+
+// onOff spells a boolean the way the flash messages do.
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 // postForgetOffsiteObject stops tracking one offsite object without deleting the

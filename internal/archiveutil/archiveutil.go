@@ -76,6 +76,22 @@ func TarGz(ctx context.Context, w io.Writer, srcDir string, excludes []string, s
 		if d.IsDir() {
 			hdr.Name += "/"
 		}
+		// Extended attributes as PAX records, which is how GNU tar spells them
+		// (`SCHILY.xattr.<name>=<value>`) and what `tar --xattrs` writes back on
+		// extraction. This is not decoration for an rsync snapshot: the source's
+		// uid/gid lives in `user.rsync.%stat` when the client records ownership,
+		// so an archive that dropped attributes would lose the owner on the way
+		// to the offsite tier while keeping it in the hot tier.
+		//
+		// The format PAX header is only written when there is an attribute to
+		// carry, so an archive of a tree without xattrs stays byte-identical to
+		// what this function produced before.
+		for _, x := range readUserXattrs(p) {
+			if hdr.PAXRecords == nil {
+				hdr.PAXRecords = map[string]string{}
+			}
+			hdr.PAXRecords["SCHILY.xattr."+x.name] = x.value
+		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}

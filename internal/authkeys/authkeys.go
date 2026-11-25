@@ -8,6 +8,12 @@
 //	rsync : restrict,command="rrsync <baseDir>/<slug>"        <pubkey> backitup:<name>
 //	targz : restrict,command="backitup-recv <baseDir>/<slug>" <pubkey> backitup:<name>
 //
+// An rsync client with the record-ownership setting gets backitup-rrsync in
+// place of rrsync — same jail, with --fake-super added to the rsync the server
+// runs so the unprivileged receiver records the source's uid/gid in an xattr.
+// That is why this file is the setting's real effect: the forced command is
+// what the client is allowed to run, so the setting has to be written here.
+//
 // Confinement comes from the command itself (rrsync's path jail; the receiver
 // script's hardcoded directory), NOT from client-supplied input. The directory
 // comes from the client's persisted, UNIQUE slug column: it is computed once on
@@ -69,7 +75,7 @@ func Render(clients []model.Client, baseDir string) (content string, skipped []S
 			skipped = append(skipped, Skipped{ClientID: c.ID, Reason: reason})
 			continue
 		}
-		cmd, ok := forcedCommand(c.Mode, baseDir, c.Slug)
+		cmd, ok := forcedCommand(c, baseDir)
 		if !ok {
 			skipped = append(skipped, Skipped{ClientID: c.ID, Reason: "unknown mode " + string(c.Mode)})
 			continue
@@ -108,11 +114,24 @@ func InvalidSlug(slug string) string {
 	return ""
 }
 
-func forcedCommand(m model.Mode, baseDir, slug string) (string, bool) {
-	dir := filepath.Join(baseDir, slug)
-	switch m {
+func forcedCommand(c model.Client, baseDir string) (string, bool) {
+	dir := filepath.Join(baseDir, c.Slug)
+	switch c.Mode {
 	case model.ModeRsync:
 		// rrsync confines reads+writes to dir (needed for --link-dest + latest).
+		//
+		// A client that records ownership gets backitup-rrsync instead: the same
+		// jail, with --fake-super added to the rsync the server runs, so the
+		// unprivileged receiver stores the source's uid/gid in an xattr rather
+		// than silently writing its own. It is a different command, not a client
+		// flag, because this forced command is the only thing the key may run —
+		// the client cannot ask for anything else.
+		//
+		// Only for rsync mode: tar.gz's receiver is not rsync at all, and its
+		// archive already records the numeric owner.
+		if c.RecordOwnership {
+			return "backitup-rrsync " + dir, true
+		}
 		return "rrsync " + dir, true
 	case model.ModeTarGz:
 		// Forced receiver writes the streamed archive into dir; no sftp/chroot

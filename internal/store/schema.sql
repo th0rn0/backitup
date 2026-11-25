@@ -47,7 +47,12 @@ CREATE TABLE IF NOT EXISTS clients (
     -- modes mirror the source, which is what every client that existed before
     -- the setting produces; see model.Client.GroupReadable for what turning it
     -- on costs.
-    group_readable          INTEGER NOT NULL DEFAULT 0
+    group_readable          INTEGER NOT NULL DEFAULT 0,
+    -- Record the source's ownership in the snapshot (rsync mode). 0 = every
+    -- snapshot belongs to the receiver account, which is what every existing
+    -- client keeps on upgrade: a tree that suddenly carried pseudo-ownership
+    -- would confuse every operator and every restore script that predates it.
+    record_ownership        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS runs (

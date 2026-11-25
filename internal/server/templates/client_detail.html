@@ -393,7 +393,7 @@
                   <span class="hint">Keeps <code>user.*</code> and <code>security.capability</code> attributes.</span>
                 </span>
               </label>
-              <div class="field-hint">Ownership (uid/gid) is <strong>not</strong> preserved in the hot tier: the receiver runs unprivileged, so every file in a snapshot belongs to the server's backup user. targz snapshots record the numeric owner in the archive instead.</div>
+              <div class="field-hint">Ownership (uid/gid) is <strong>not</strong> preserved by these four flags: the receiver runs unprivileged, so every file in a snapshot belongs to the server's backup user. targz snapshots record the numeric owner in the archive instead; rsync snapshots can record it with the <em>Ownership in snapshots</em> setting below.</div>
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
               </div>
@@ -412,6 +412,26 @@
                 </span>
               </label>
               <div class="field-hint mode-warn-hint">⚠ This trades fidelity for access, deliberately. <strong>Modes in the snapshot no longer match the source</strong>: a <code>0600</code> file lands group-readable. And because an unchanged file is a <strong>hardlink shared with earlier snapshots</strong>, the mode lives on the inode — turning this on <strong>also changes the modes of earlier snapshots</strong> that share those files. ACLs are not affected by the flag, but an ACL that denies group read will still deny it.</div>
+              <div class="form-actions">
+                <button type="submit" class="btn">Save</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">Ownership in snapshots</div>
+            <p class="section-hint">rsync mode only. The receiver is an unprivileged account (<code>uid 10001</code> in the shipped image), so it cannot <code>chown</code> — normally every file in a snapshot belongs to the backup account, whatever the source said, and the run still exits 0. Turning this on makes the server record each file's real <code>uid</code>/<code>gid</code> and mode in a <code>user.rsync.%stat</code> extended attribute as it writes, so a restore can put the ownership back without ever giving the receiver root.</p>
+            <form method="POST" action="/clients/{{.Client.Slug}}/ownership" class="form" style="margin-top:0">
+              <label class="checkbox-label">
+                <input type="checkbox" name="record_ownership" value="1"{{if .Client.RecordOwnership}} checked{{end}}>
+                <span>
+                  Record the source's uid/gid in each snapshot (<code>rsync --fake-super</code>, server side)
+                  <span class="hint">Files in the <em>hot tier</em> stay owned by the backup account, so the server keeps its read and delete rights — that is what makes this safe, and why the receiver is not switched to root. The ownership lives in the xattr, not on the inode.</span>
+                </span>
+              </label>
+              <div class="field-hint">Turning this on rewrites this client's <code>authorized_keys</code> line, so it applies to the next run — the client needs no change and no new credentials. Existing snapshots are untouched: a tree written before this was on keeps the backup account as its owner.</div>
+              <div class="field-hint mode-warn-hint">⚠ The backups volume must support <strong>user extended attributes</strong>. ext4, xfs and btrfs do; an NFS volume exposed without xattr support may not. If the receiver refuses them the run fails and the log names xattrs — it does not silently store the snapshot without the ownership. Because the owner is in an xattr, <strong>a plain <code>cp</code> or <code>tar</code> out of a snapshot loses it</strong>: extract with <code>tar --xattrs</code>, or read the directory with <code>rsync --fake-super</code>.</div>
+              <div class="field-hint">Restoring: run the pull on the target host and the server's own command adds the flag — <code>rsync -a --numeric-ids -e 'ssh -i &lt;key&gt;' backup@{{.PublicHost}}:snapshots/&lt;snapshot&gt;/ /restore/</code> as root. Do <strong>not</strong> add <code>--fake-super</code> to the restoring end: it would write a new pseudo-owner instead of <code>chown</code>ing. From an offsite archive, extract it first (<code>tar --xattrs -xzf &lt;archive&gt; -C /stage</code>) and then copy it to the target with <code>rsync -a --fake-super /stage/ root@&lt;target&gt;:/restore/</code>, where the plain root receiver applies the recorded owner. Neither helps a file the client could not read in the first place (a root-owned <code>0600</code> qcow2 image): that is a source permission problem, not a receiver setting.</div>
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
               </div>
