@@ -452,6 +452,44 @@ of one pipeline:
 `tar.gz` is simplest and fully self-contained per snapshot. `rsync` gives cheap
 incremental snapshots on the hot store via hardlinks (only changed data costs space).
 
+### What the rsync hot tier does and does not preserve
+
+`rsync` clients capture what `-a` (`-rlptgoD`) carries by default: contents, permission
+bits, mtimes, symlink targets — and, per client, whatever else you turn on in
+**Settings → What the snapshot captures** (it is also on the create form):
+
+| Setting | Flag | Default | What it costs |
+|---|---|---|---|
+| Preserve sparse files | `-S` | **on for new clients** | Nothing; a hole stays a hole instead of being written out as zeros. A 1 GiB `truncate`d image otherwise costs 1 GiB on the server. |
+| Preserve internal hardlinks | `-H` | off | One extra pass over the file list per run. Without it, two names for one file are stored twice. |
+| Preserve ACLs | `-A` | off | Metadata only. |
+| Preserve extended attributes | `-X` | off | Metadata only. |
+
+Every setting defaults to off for clients that existed before it, so an upgraded
+server keeps producing exactly the snapshots it already did. Measured on the ingest
+image (`rsync` 3.4/3.5, `rrsync` 3.5.0): a tree of 2.1 MB on disk with a 1 GiB hole
+landed as 1.0 GB on disk with sparse off and 3.0 MB with it on; the four flags are
+all accepted by `rrsync`'s allowlist, and if a receiver ever refuses one the run fails
+with the flag named in its log (`the receiving side refused -A (POSIX ACLs): turn off
+the "preserve_acls" setting for this client`) instead of rsync's bare "protocol data
+stream" error.
+
+**Not preserved in the hot tier: ownership.** The receiver runs unprivileged (uid
+10001) inside the ingest container, so it cannot `chown`, and `rsync` as a non-root
+receiver silently ignores ownership: a source file owned by `1000:1000` arrives as
+`10001:10001` with exit status 0. That is deliberate — a privileged receiver would
+make every client's read-write jail root-equivalent on the backup volume — and it is
+why `targz` remains the mode to use when the numeric owner has to survive: `tar`
+records uid/gid in the archive, and a restore as root applies them. `rsync` ownership
+on the hot tier would only be recoverable through `--fake-super` (ownership stored in
+an xattr), which is measurable but changes the shape of every snapshot and makes every
+restore depend on remembering `--fake-super`; it is not implemented.
+
+**Not preserved, on purpose: sockets, FIFOs and device nodes.** `rrsync` adds
+`--drop-D` for any jail other than `/`, so the receiver cannot create them and the
+client logs `skipping non-regular file`. A socket holds no data and a restored one
+would be dead, so this is the correct outcome rather than a gap.
+
 ## Retention & offsite
 
 - **Hot retention** (`retention_days`) prunes snapshots on the server. The disk is
@@ -582,11 +620,14 @@ rclone copy archive:laptop-docs/latest.tar.gz ~/restore/
 **What a restore preserves, and what it does not.** File contents, permission
 bits, modification times and symlink targets are preserved, in both modes — the
 tests that prove it compare sha256, mode, mtime and link target per entry
-(`internal/server/restore_test.go`). What it does **not** preserve: numeric
-ownership (tar carries it, but extracting as a normal user cannot apply it — restore
-as root if ownership matters), extended attributes and ACLs, and hardlink structure
-between separate snapshots (an `rsync` snapshot is internally hardlinked on the hot
-store, but a restored copy is plain files).
+(`internal/server/restore_test.go`). ACLs, extended attributes, sparse holes and
+in-tree hardlinks are preserved only if the client has the matching fidelity setting
+on (**Settings → What the snapshot captures**; see "What the rsync hot tier does and
+does not preserve" above), and hardlink structure *between separate snapshots* is not
+preserved on restore — an `rsync` snapshot is internally hardlinked on the hot store,
+but a restored copy is plain files. Numeric ownership is **not** preserved in the
+`rsync` hot tier (the receiver is unprivileged); `tar.gz` archives carry uid/gid, so
+they can be applied by extracting as root when ownership matters.
 
 **Restore is not a drill until you have done it.** Pull one snapshot of one client
 to a scratch directory and diff it against the source before you need it:

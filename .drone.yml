@@ -51,6 +51,11 @@ steps:
     # GOTOOLCHAIN=local, which refuses to auto-fetch a newer toolchain.
     image: golang:1.26.11
     commands:
+      # The rsync-mode fidelity tests shell out to a real rsync: sparse holes,
+      # in-tree hardlinks, ACLs and xattrs are properties of a transfer, so they
+      # cannot be measured any other way. Without it those tests skip, which
+      # would turn the whole proof into silence on the only runner that matters.
+      - apt-get update -qq && apt-get install -y -qq rsync
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out | tail -1
 

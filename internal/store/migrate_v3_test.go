@@ -126,10 +126,11 @@ func writeV2Database(t *testing.T, path string) {
 		if tbl.name == "clients" {
 			ddl = strings.Replace(ddl, "    expected_interval_secs",
 				"    offsite_retention_days  INTEGER NOT NULL DEFAULT 90,\n    expected_interval_secs", 1)
-			ddl = strings.Replace(ddl, "offsite_upload_mode     TEXT    NOT NULL DEFAULT 'all'",
-				"offsite_upload_mode     TEXT    NOT NULL DEFAULT 'all',", 1)
-			ddl = strings.Replace(ddl, "which snapshots to push\n)",
-				"which snapshots to push\n    disable_offsite_pruning INTEGER NOT NULL DEFAULT 0   -- keep the operator's remote objects in place\n)", 1)
+			// Appended before the closing paren rather than after a fixed line:
+			// the columns after offsite_upload_mode change as the schema grows,
+			// and this fixture is "today's table plus the two retired columns".
+			ddl = strings.Replace(ddl, "\n)",
+				",\n    disable_offsite_pruning INTEGER NOT NULL DEFAULT 0   -- keep the operator's remote objects in place\n)", 1)
 			if !strings.Contains(ddl, "offsite_retention_days") || !strings.Contains(ddl, "disable_offsite_pruning INTEGER") {
 				t.Fatalf("could not rebuild the user_version 2 clients table from schema.sql:\n%s", ddl)
 			}

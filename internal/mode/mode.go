@@ -32,6 +32,10 @@ type BackupOpts struct {
 	SourceDir           string
 	Excludes            []string
 	SkipSymlinks        bool        // omit symlinks from the backup
+	PreserveSparse      bool        // rsync -S: keep holes as holes
+	PreserveHardlinks   bool        // rsync -H: one inode for an in-tree hardlink pair
+	PreserveACLs        bool        // rsync -A
+	PreserveXattrs      bool        // rsync -X
 	HasPreviousSnapshot bool        // rsync: skip --link-dest when false (first backup)
 	Logger              *log.Logger // nil = use log.Default()
 	SSHServer           string      // host:port of the sshd ingest (data channel)

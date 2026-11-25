@@ -53,6 +53,7 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	target := fmt.Sprintf("%s@%s:snapshots/%s/", o.SSHUser, host, snap)
 
 	args := []string{"-a", "--numeric-ids", "--delete", "--stats"}
+	args = append(args, fidelityArgs(o)...)
 	if o.HasPreviousSnapshot {
 		args = append(args, "--link-dest=/snapshots/latest")
 	}
@@ -67,10 +68,25 @@ func (Mode) Backup(ctx context.Context, o mode.BackupOpts) (mode.BackupResult, e
 	}
 	args = append(args, "-e", sshArgs, ensureTrailingSlash(o.SourceDir), target)
 
+	// Name what the snapshot will capture, so the run log answers "did this
+	// client's ACL setting apply?" without the operator reconstructing the
+	// flags from rsync's own output.
+	if f := fidelityFlags(o); f != "" {
+		logger.Printf("fidelity: %s — this snapshot carries them", f)
+	}
+
 	logger.Printf("syncing %s → %s", o.SourceDir, target)
 	stdout, err := runRsync(ctx, logger, args)
 	if err != nil {
 		logFailedRun(logger, stdout, err)
+		// A receiver that refuses one of these options kills the transfer
+		// before a byte moves, and rsync reports only "connection
+		// unexpectedly closed ... error in rsync protocol data stream". The
+		// operator cannot act on that; name the setting instead.
+		if hint := refusedFidelityOption(err.Error()); hint != "" {
+			logger.Printf("%s", hint)
+			err = fmt.Errorf("%w — %s", err, hint)
+		}
 		return mode.BackupResult{}, failRun(ctx, o, host, sshArgs, snap, stdout, err)
 	}
 

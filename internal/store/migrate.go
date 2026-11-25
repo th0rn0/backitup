@@ -11,7 +11,7 @@ import (
 
 // schemaVersion is the version this binary writes. It must equal the last entry
 // of migrations (asserted by TestSchemaVersionMatchesLastStep).
-const schemaVersion = 4
+const schemaVersion = 5
 
 // droppedColumns names, per table, the columns a migration is allowed to remove.
 //
@@ -79,6 +79,10 @@ var migrations = []migration{
 	{version: 2, name: "canonical table shape", fkOff: true, apply: applyCanonicalShape},
 	{version: 3, name: "drop offsite retention columns", fkOff: true, apply: applyCanonicalShape},
 	{version: 4, name: "mark unsupported remote backends", fkOff: true, apply: applyRemoteBackendsSupported},
+	// v5: the rsync fidelity settings (sparse/hardlinks/ACLs/xattrs). Every
+	// column defaults to 0, so an upgraded database keeps the snapshots it was
+	// already producing; the settings are opt-in per client.
+	{version: 5, name: "rsync fidelity settings", fkOff: true, apply: applyCanonicalShape},
 }
 
 // migrationFault is a test seam. When set, it is called at each point inside a

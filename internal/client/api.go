@@ -55,6 +55,14 @@ type ConfigResp struct {
 	RetentionDays       int      `json:"retention_days"`
 	SkipSymlinks        bool     `json:"skip_symlinks"`
 	HasPreviousSnapshot bool     `json:"has_previous_snapshot"`
+
+	// Fidelity (rsync mode): what the snapshot captures beyond `-a`. A server
+	// that predates them simply omits the keys, which decodes as "off" — the
+	// behaviour that server had.
+	PreserveSparse    bool `json:"preserve_sparse"`
+	PreserveHardlinks bool `json:"preserve_hardlinks"`
+	PreserveACLs      bool `json:"preserve_acls"`
+	PreserveXattrs    bool `json:"preserve_xattrs"`
 }
 
 // FetchConfig retrieves this client's config from the server.

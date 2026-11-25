@@ -109,6 +109,17 @@ type Client struct {
 	Excludes     []string // glob excludes (rsync --exclude / tar --exclude)
 	SkipSymlinks bool     // omit symlinks from the backup (BACKITUP_SKIP_SYMLINKS)
 
+	// Fidelity: what the snapshot captures beyond `-a`. Opt-in per client,
+	// rsync mode only, and every one of them defaults to OFF so a client that
+	// was created before they existed keeps producing exactly the snapshot it
+	// always did. -S and -H change what the snapshot HOLDS (holes stay holes,
+	// in-tree hardlinks stay one inode); -A and -X carry metadata the receiver
+	// can only apply as the file's owner, which it is (it creates the file).
+	PreserveSparse    bool // rsync -S: keep holes as holes instead of writing zeros
+	PreserveHardlinks bool // rsync -H: one inode for an in-tree hardlink pair
+	PreserveACLs      bool // rsync -A: POSIX ACLs
+	PreserveXattrs    bool // rsync -X: extended attributes
+
 	// Retention (D7/D8). Hot retention is ours: the disk the server owns. There
 	// is no offsite horizon any more — cold storage is Backblaze B2 and its
 	// bucket lifecycle rule owns offsite retention (see lifecycle.go), because a

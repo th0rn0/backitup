@@ -226,6 +226,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /clients/{name}/runs/{runID}", s.requireAdmin(s.getRunLog))
 	mux.HandleFunc("POST /clients/{name}/rotate", s.requireAdmin(s.postRotateClient))
 	mux.HandleFunc("POST /clients/{name}/retention", s.requireAdmin(s.postUpdateClientRetention))
+	mux.HandleFunc("POST /clients/{name}/fidelity", s.requireAdmin(s.postUpdateClientFidelity))
 	mux.HandleFunc("POST /clients/{name}/offsite", s.requireAdmin(s.postUpdateClientOffsite))
 	mux.HandleFunc("POST /clients/{name}/offsite/{snapshotID}/forget", s.requireAdmin(s.postForgetOffsiteObject))
 	mux.HandleFunc("POST /clients/{name}/offsite/run", s.requireAdmin(s.postOffsiteRun))

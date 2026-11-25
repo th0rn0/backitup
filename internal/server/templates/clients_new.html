@@ -73,6 +73,43 @@
           </span>
         </label>
 
+        <div class="section mt-18">
+          <h2>What the snapshot captures</h2>
+          <p class="form-subtext">rsync mode only — a targz client ignores these. Everything below is off by default except sparse files, which are a straight win for VM images and cost nothing.</p>
+
+          <label class="checkbox-label">
+            <input type="checkbox" name="preserve_sparse" value="1" checked>
+            <span>
+              Preserve sparse files (<code>-S</code>)
+              <span class="hint">A hole in a file stays a hole. Without it a 1 GiB hole becomes 1 GiB of zeros on the server, so a qcow2 image costs its apparent size.</span>
+            </span>
+          </label>
+
+          <label class="checkbox-label">
+            <input type="checkbox" name="preserve_hardlinks" value="1">
+            <span>
+              Preserve internal hardlinks (<code>-H</code>)
+              <span class="hint">Two names for one file are stored once. Costs one extra pass per file on every run; off keeps today's behaviour, where each name is a separate copy.</span>
+            </span>
+          </label>
+
+          <label class="checkbox-label">
+            <input type="checkbox" name="preserve_acls" value="1">
+            <span>
+              Preserve ACLs (<code>-A</code>)
+              <span class="hint">Keeps POSIX ACLs (the <code>+</code> on a directory listing). Metadata only; requires an rsync on the client that was built with ACL support.</span>
+            </span>
+          </label>
+
+          <label class="checkbox-label">
+            <input type="checkbox" name="preserve_xattrs" value="1">
+            <span>
+              Preserve extended attributes (<code>-X</code>)
+              <span class="hint">Keeps xattrs such as <code>security.capability</code> and <code>user.*</code>. Metadata only; the server's filesystem must support them (it does).</span>
+            </span>
+          </label>
+        </div>
+
         <label class="label-block">API scheme <span class="label-optional">(for the generated docker run command)</span></label>
         <div class="radio-group">
           <label><input type="radio" name="api_scheme" value="http" checked> http</label>
