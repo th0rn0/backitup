@@ -123,6 +123,7 @@ func TestHardlinkSettingSharesOneInode(t *testing.T) {
 // it is. With the settings on the snapshot carries them; with them off the run
 // still succeeds and carries neither (the old behaviour, and never a failure).
 func TestACLAndXattrSettings(t *testing.T) {
+	requireRsync(t)
 	src := sparseSource(t, 8<<20)
 	acl := posixACLBlob()
 	aclPath := filepath.Join(src, "acl.txt")
