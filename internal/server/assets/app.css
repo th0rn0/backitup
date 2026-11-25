@@ -177,6 +177,7 @@ h2 {
   font-size: 12px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .stat-chip .stat-label {
@@ -189,6 +190,12 @@ h2 {
   font-family: var(--mono);
   color: var(--text);
   font-weight: 600;
+}
+/* Age of the measurement, and why it may be a lower bound. */
+.stat-chip .stat-sub {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
 }
 
 /* ── Buttons ── */

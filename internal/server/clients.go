@@ -270,10 +270,17 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		offsiteViews[i] = offsiteObjectView{OffsiteObject: o, LocalExists: localIDs[o.SnapshotID]}
 	}
 
-	// Compute per-client dashboard stats.
-	var localTotalBytes int64
-	for _, sn := range localSnapshots {
-		localTotalBytes += sn.Bytes
+	// On-disk figure: the lifecycle's measurement of this client's hot store,
+	// read from the store. It is never derived from Snapshot.Bytes (rsync
+	// reports 0 by design — its hardlinked tree has no per-snapshot size) and it
+	// is never computed here: walking a 375 GB tree in a request handler is how
+	// the page that reports a backup problem becomes the page that times out.
+	onDiskValue, onDiskNote := "—", ""
+	if storage, stErr := s.st.GetClientStorage(ctx, c.ID); stErr != nil {
+		log.Printf("getClient: stored disk usage for client=%q: %v", c.Name, stErr)
+		onDiskValue, onDiskNote = "unavailable", "the stored measurement could not be read"
+	} else {
+		onDiskValue, onDiskNote = diskFigure(storage, len(localSnapshots), time.Now())
 	}
 	var offsiteTotalBytes int64
 	for _, o := range offsiteObjects {
@@ -341,7 +348,8 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"LastBackupAge":       lastBackupAge,
 		"LastBackupSize":      lastBackupSize,
 		"LocalCount":          len(localSnapshots),
-		"LocalTotalBytes":     localTotalBytes,
+		"OnDiskValue":         onDiskValue,
+		"OnDiskNote":          onDiskNote,
 		"OffsiteCount":        len(offsiteViews),
 		"OffsiteTotalBytes":   offsiteTotalBytes,
 		"ExpectedIntervalStr": expectedIntervalStr,

@@ -56,9 +56,10 @@
           <div class="client-stat-sub">{{.LastBackupSize}}</div>
         </div>
         <div class="client-stat">
-          <div class="client-stat-label">On disk</div>
+          <div class="client-stat-label" title="Allocated blocks on disk, each inode counted once — not apparent file size">On disk (allocated)</div>
           <div class="client-stat-value">{{.LocalCount}} snapshot{{if ne .LocalCount 1}}s{{end}}</div>
-          <div class="client-stat-sub">{{humanBytes .LocalTotalBytes}}</div>
+          <div class="client-stat-sub">{{.OnDiskValue}}</div>
+          {{if .OnDiskNote}}<div class="client-stat-sub">{{.OnDiskNote}}</div>{{end}}
         </div>
         {{if .Client.OffsiteRemote}}
         <div class="client-stat">

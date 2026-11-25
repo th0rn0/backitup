@@ -792,6 +792,62 @@ func (s *Store) TotalOffsiteBytes(ctx context.Context) (int64, error) {
 	return n, err
 }
 
+// SetClientStorage records the latest measurement of a client's hot store.
+//
+// It upserts rather than appends: the row is a fact about now, and its age
+// (measured_at) is what makes it honest, not a history nobody reads. Written by
+// the lifecycle pass.
+func (s *Store) SetClientStorage(ctx context.Context, clientID, bytes int64, partial bool, at time.Time) error {
+	p := 0
+	if partial {
+		p = 1
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO client_storage (client_id, disk_bytes, disk_partial, measured_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(client_id) DO UPDATE SET
+			disk_bytes   = excluded.disk_bytes,
+			disk_partial = excluded.disk_partial,
+			measured_at  = excluded.measured_at`,
+		clientID, bytes, p, at.UTC().Format(rfc3339)); err != nil {
+		return fmt.Errorf("set client storage %d: %w", clientID, err)
+	}
+	return nil
+}
+
+// GetClientStorage returns the last measurement of one client's hot store, or
+// (nil, nil) when it has never been measured. A missing row is not a zero: the
+// caller must say "not measured yet" rather than render 0 B.
+func (s *Store) GetClientStorage(ctx context.Context, clientID int64) (*model.ClientStorage, error) {
+	return scanClientStorage(s.db.QueryRowContext(ctx,
+		`SELECT disk_bytes, disk_partial, measured_at FROM client_storage WHERE client_id = ?`, clientID))
+}
+
+// ListClientStorage returns every stored measurement keyed by client ID. A
+// client with no row is absent, not zero.
+func (s *Store) ListClientStorage(ctx context.Context) (map[int64]model.ClientStorage, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT client_id, disk_bytes, disk_partial, measured_at FROM client_storage`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]model.ClientStorage)
+	for rows.Next() {
+		var id int64
+		var st model.ClientStorage
+		var partial int
+		var at string
+		if err := rows.Scan(&id, &st.Bytes, &partial, &at); err != nil {
+			return nil, fmt.Errorf("scan client storage: %w", err)
+		}
+		st.Partial = partial != 0
+		st.MeasuredAt = displayTime("client_storage.measured_at", at)
+		out[id] = st
+	}
+	return out, rows.Err()
+}
+
 // UpdateOffsiteRemoteStatus records the result of a remote existence check.
 func (s *Store) UpdateOffsiteRemoteStatus(ctx context.Context, id int64, missing bool, verifiedAt time.Time) error {
 	m := 0
@@ -1305,6 +1361,26 @@ func b2i(b bool) int {
 }
 
 type scanner interface{ Scan(...any) error }
+
+// scanClientStorage reads one client_storage row. sql.ErrNoRows is not an
+// error here: it means "never measured", which callers must render as such.
+func scanClientStorage(sc scanner) (*model.ClientStorage, error) {
+	var st model.ClientStorage
+	var partial int
+	var at string
+	if err := sc.Scan(&st.Bytes, &partial, &at); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("scan client storage: %w", err)
+	}
+	st.Partial = partial != 0
+	var err error
+	if st.MeasuredAt, err = parseStoredTime("client_storage.measured_at", at); err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
 
 func scanClient(sc scanner) (model.Client, error) {
 	var c model.Client

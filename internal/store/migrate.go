@@ -11,7 +11,7 @@ import (
 
 // schemaVersion is the version this binary writes. It must equal the last entry
 // of migrations (asserted by TestSchemaVersionMatchesLastStep).
-const schemaVersion = 6
+const schemaVersion = 7
 
 // droppedColumns names, per table, the columns a migration is allowed to remove.
 //
@@ -88,6 +88,12 @@ var migrations = []migration{
 	// server's group can read the tree. Defaults to 0: an upgraded database
 	// keeps producing snapshots whose modes mirror the source.
 	{version: 6, name: "group readable snapshots", fkOff: true, apply: applyCanonicalShape},
+	// v7: client_storage, the per-client measurement of the hot store that the
+	// lifecycle pass writes and the pages read. A table added after v1 needs its
+	// CREATE in this step: applyCanonicalShape rebuilds a table that exists and
+	// refuses one that does not (nothing in common to copy), so "canonicalise
+	// everything" alone cannot introduce a table.
+	{version: 7, name: "client disk usage", fkOff: true, apply: applyClientStorage},
 }
 
 // migrationFault is a test seam. When set, it is called at each point inside a
@@ -217,6 +223,16 @@ func applyCanonicalShape(ctx context.Context, tx *sql.Tx, sch schemaDef) error {
 		}
 	}
 	return nil
+}
+
+// applyClientStorage adds the client_storage table (v7) and brings every other
+// table to its canonical shape. The create comes first because a table that does
+// not exist cannot be canonicalised — see the step's comment.
+func applyClientStorage(ctx context.Context, tx *sql.Tx, sch schemaDef) error {
+	if err := applyCreateTables(ctx, tx, sch); err != nil {
+		return err
+	}
+	return applyCanonicalShape(ctx, tx, sch)
 }
 
 // applyRemoteBackendsSupported brings the remotes table to its canonical shape

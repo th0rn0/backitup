@@ -62,6 +62,24 @@ CREATE TABLE IF NOT EXISTS runs (
     log_tail     TEXT    NOT NULL DEFAULT ''   -- capped at model.MaxLogTail (64 KB) before insert
 );
 
+-- How much disk each client's hot store occupies, as measured by the lifecycle
+-- pass. A measurement, not a setting: it is written once per pass and the pages
+-- only read it, so no request ever walks a backup tree.
+--
+-- disk_bytes is ALLOCATED blocks of unique inodes (st_blocks*512, each
+-- (st_dev, st_ino) counted once) — what `du` reports and what the operator pays
+-- for. It is never apparent size: a sparse image and a hardlinked rsync
+-- snapshot both lie under that measure. disk_partial marks a walk that stopped
+-- at its entry cap, which makes disk_bytes a LOWER BOUND that must be rendered
+-- as "≥". measured_at '' means never measured (a client whose first pass has not
+-- run yet), which is different from a measured zero.
+CREATE TABLE IF NOT EXISTS client_storage (
+    client_id    INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+    disk_bytes   INTEGER NOT NULL DEFAULT 0,
+    disk_partial INTEGER NOT NULL DEFAULT 0,
+    measured_at  TEXT    NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS offsite_objects (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     client_id          INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

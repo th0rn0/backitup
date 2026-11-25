@@ -229,6 +229,21 @@ type User struct {
 	CreatedAt    time.Time
 }
 
+// ClientStorage is the last measurement of how much disk a client's hot store
+// occupies. It is a measurement, not a setting: the lifecycle pass writes it and
+// the pages only read it, so no request walks a backup tree.
+//
+// Bytes is ALLOCATED blocks of unique inodes — what `du` reports and what the
+// operator pays for — never apparent file size. Partial means the walk stopped
+// at its entry cap, which makes Bytes a LOWER BOUND that must be shown as "≥".
+// A zero MeasuredAt means the client has never been measured, which is not the
+// same as a measured zero.
+type ClientStorage struct {
+	Bytes      int64
+	Partial    bool
+	MeasuredAt time.Time
+}
+
 // MaxLogTail is the log_tail cap in bytes. The server's status endpoint body
 // limit is MaxLogTail + a small overhead for the other JSON fields.
 const MaxLogTail = 64 * 1024

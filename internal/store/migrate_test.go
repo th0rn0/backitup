@@ -174,7 +174,7 @@ func scalarInt(t *testing.T, db *sql.DB, query string, args ...any) int {
 // canonicalTableNames is schema.sql's table list, in file order. Kept explicit so
 // that a table silently dropped from the file fails a test instead of shrinking
 // what the other tests compare.
-var canonicalTableNames = []string{"clients", "runs", "offsite_objects", "remotes", "offsite_runs", "users", "admin"}
+var canonicalTableNames = []string{"clients", "runs", "client_storage", "offsite_objects", "remotes", "offsite_runs", "users", "admin"}
 
 // A database from an older backitup is rebuilt to exactly the schema a new one is
 // created with: same columns, same column ORDER, same indexes — and no rows lost.
