@@ -544,7 +544,12 @@ side**: each entry keeps the backup account as its Unix owner, and its real `uid
 
 Offsite archives carry the attribute as PAX records (`SCHILY.xattr.user.rsync.%stat`,
 what `tar --xattrs` reads and writes), so ownership is not lost on the way to B2;
-`TestTarGzCarriesUserXattrs` and `TestTarGzXattrRoundTrip` hold that down.
+`TestTarGzCarriesUserXattrs`, `TestTarGzXattrRoundTrip` and the offsite round trip in
+`internal/mode/rsync` hold that down. An archive of a tree **without** any attribute is
+byte-identical to what the writer produced before the feature, and that is what keeps an
+unchanged client deduplicating offsite: the dedupe key is sha256 over the archive, so a
+tree that carried no attributes keeps its existing object instead of uploading a second
+copy (`TestOffsiteDedupeChecksumIsUnaffectedForATreeWithoutXattrs`).
 
 **Group-readable snapshots: fidelity traded for operator access.**
 `rsync -a` copies the source's modes, which is the right default but stops the operator
