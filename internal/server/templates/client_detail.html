@@ -159,7 +159,7 @@
 
         {{if .Client.OffsiteRemote}}
         <!-- ── Offsite tab ── -->
-        <div data-tab="offsite" role="tabpanel" hidden>
+        <div data-tab="offsite" hidden role="tabpanel">
           <h3>Objects</h3>
           {{if eq .Client.OffsiteUploadMode "single"}}
           <p class="help-text">One generation: this client keeps a single object, <code>latest.tar.gz</code>, holding the snapshot below. The next successful upload replaces it — the Download button fetches that object, not a per-snapshot file.</p>
@@ -247,7 +247,7 @@
         {{end}}
 
         <!-- ── Runs tab ── -->
-        <div data-tab="runs" role="tabpanel" hidden>
+        <div data-tab="runs" hidden role="tabpanel">
           {{if .Runs}}
           <table>
             <thead>
@@ -279,7 +279,7 @@
         </div>
 
         <!-- ── Settings tab ── -->
-        <div data-tab="settings" role="tabpanel" hidden>
+        <div data-tab="settings" hidden role="tabpanel">
 
           <div class="settings-group">
             <div class="settings-group-title">Schedule &amp; Retention</div>

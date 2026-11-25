@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +168,25 @@ func TestUXPass_NoConstantColumns(t *testing.T) {
 	})
 	cl, _ := st.GetClientBySlug(ctx, "no-const-col")
 
+	// Plant a snapshot so the snapshot table renders (otherwise the test skips).
+	srv := ts.Config.Handler.(*Server)
+	dir, err := srv.clientDir(*cl)
+	if err != nil {
+		t.Fatalf("clientDir: %v", err)
+	}
+	snaps := filepath.Join(dir, "snapshots")
+	snapID := "20260101-120000"
+	snapDir := filepath.Join(snaps, snapID)
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatalf("mkdir snapshot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapDir, "payload.txt"), []byte("test"), 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	if err := os.Symlink(snapID, filepath.Join(snaps, "latest")); err != nil {
+		t.Fatalf("symlink latest: %v", err)
+	}
+
 	resp, err := c.Get(ts.URL + "/clients/" + cl.Slug)
 	if err != nil {
 		t.Fatalf("get client: %v", err)
@@ -180,7 +201,7 @@ func TestUXPass_NoConstantColumns(t *testing.T) {
 	// Find the snapshot table (it has "Snapshot" and "Created" columns).
 	snapTableStart := strings.Index(html, `<th>Snapshot</th>`)
 	if snapTableStart < 0 {
-		t.Skip("no snapshot table found (no snapshots yet)")
+		t.Fatal("no snapshot table found (snapshot was not planted)")
 	}
 	snapTableEnd := strings.Index(html[snapTableStart:], "</table>")
 	if snapTableEnd < 0 {
