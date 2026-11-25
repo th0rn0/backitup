@@ -97,22 +97,6 @@ steps:
 # Three images: server (control plane), client (dumb uploader), sshd (data plane).
 # Push :latest on main; push :latest + :<tag> on v* tags.
 
-  - name: discord-build-start
-    image: curlimages/curl:8.7.1
-    failure: ignore
-    environment:
-      DISCORD_WEBHOOK_URL:
-        from_secret: discord_webhook_url
-    commands:
-      - |
-        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Build Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
-    when:
-      branch:
-        - main
-      event:
-        - push
-        - tag
-
   - name: build-push-server
     image: plugins/docker
     settings:
@@ -251,22 +235,6 @@ steps:
 # ── Smoke Test ────────────────────────────────────────────────────────────────
 # Pulls the freshly pushed server image, starts it, and hits /healthz.
 # Only runs on push to main or tags (after the Docker push steps).
-
-  - name: discord-smoke-start
-    image: curlimages/curl:8.7.1
-    failure: ignore
-    environment:
-      DISCORD_WEBHOOK_URL:
-        from_secret: discord_webhook_url
-    commands:
-      - |
-        curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "{\"embeds\":[{\"title\":\"$DRONE_REPO - $DRONE_SOURCE_BRANCH - Smoke Test Started!\",\"url\":\"$DRONE_BUILD_LINK\"}]}"
-    when:
-      branch:
-        - main
-      event:
-        - push
-        - tag
 
   - name: smoke-test
     image: docker:27
