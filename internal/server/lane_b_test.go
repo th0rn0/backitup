@@ -19,6 +19,14 @@ import (
 
 // testStack builds a store + httptest server and returns both for setup.
 func testStack(t *testing.T) (*store.Store, *httptest.Server) {
+	st, ts, _ := testStackDir(t)
+	return st, ts
+}
+
+// testStackDir is testStack with a writable backup directory, for tests that
+// plant snapshots on disk. New() defaults backupBaseDir to /srv/backups, which a
+// test cannot write to and must not try.
+func testStackDir(t *testing.T) (*store.Store, *httptest.Server, string) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -27,9 +35,11 @@ func testStack(t *testing.T) (*store.Store, *httptest.Server) {
 	t.Cleanup(func() { _ = st.Close() })
 	srv := New(st, false)
 	srv.dbTimeout = testDBTimeout // assert behaviour, not the machine's speed
+	base := filepath.Join(t.TempDir(), "backups")
+	srv.backupBaseDir = base
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return st, ts
+	return st, ts, base
 }
 
 func setAdmin(t *testing.T, st *store.Store, user, pass string) {

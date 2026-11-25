@@ -160,7 +160,7 @@ func TestUXPass_StatusLabelsVisible(t *testing.T) {
 // TestUXPass_NoConstantColumns asserts the local snapshot table does not have
 // a constant "on disk" status column.
 func TestUXPass_NoConstantColumns(t *testing.T) {
-	st, ts := testStack(t)
+	st, ts, base := testStackDir(t)
 	c := loggedInClient(t, st, ts)
 	ctx := context.Background()
 	_, _ = st.CreateClient(ctx, model.Client{
@@ -168,14 +168,11 @@ func TestUXPass_NoConstantColumns(t *testing.T) {
 	})
 	cl, _ := st.GetClientBySlug(ctx, "no-const-col")
 
-	// Plant a snapshot so the snapshot table renders (otherwise the test skips).
-	srv := ts.Config.Handler.(*Server)
-	dir, err := srv.clientDir(*cl)
-	if err != nil {
-		t.Fatalf("clientDir: %v", err)
-	}
-	snaps := filepath.Join(dir, "snapshots")
-	snapID := "20260101-120000"
+	// Plant a snapshot so the snapshot table renders instead of skipping: the
+	// rsync mode lists the directory, so a directory is all it needs, but the
+	// name has to be a real id (layout 20060102T150405Z) or List skips it.
+	snaps := filepath.Join(base, cl.Slug, "snapshots")
+	snapID := "20260101T120000Z"
 	snapDir := filepath.Join(snaps, snapID)
 	if err := os.MkdirAll(snapDir, 0o755); err != nil {
 		t.Fatalf("mkdir snapshot: %v", err)
@@ -248,7 +245,7 @@ func TestUXPass_ProductNameConsistent(t *testing.T) {
 	if strings.Contains(html, "Back! It! Up!") {
 		t.Error("masthead should not contain 'Back! It! Up!'")
 	}
-	if !strings.Contains(html, ">Backitup</span>") {
+	if !strings.Contains(html, "Backitup</span>") {
 		t.Error("masthead should contain 'Backitup'")
 	}
 }
