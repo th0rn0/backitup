@@ -63,6 +63,11 @@ type ConfigResp struct {
 	PreserveHardlinks bool `json:"preserve_hardlinks"`
 	PreserveACLs      bool `json:"preserve_acls"`
 	PreserveXattrs    bool `json:"preserve_xattrs"`
+
+	// GroupReadable (rsync mode): widen modes for the server's group as the
+	// receiver writes them. A server that predates it omits the key, which
+	// decodes as off — the behaviour that server had.
+	GroupReadable bool `json:"group_readable"`
 }
 
 // FetchConfig retrieves this client's config from the server.

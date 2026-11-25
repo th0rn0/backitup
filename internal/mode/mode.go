@@ -43,6 +43,12 @@ type BackupOpts struct {
 	SSHKey              string      // path to the client's private key
 	KnownHosts          string      // path to known_hosts for host-key verification
 	InsecureSSH         bool        // skip SSH host-key verification (dev/test only)
+
+	// GroupReadable widens modes as the receiver writes them
+	// (--chmod=Dg+rx,Fg+r) so an account in the server's group can read the
+	// snapshot. It deliberately does NOT mirror the source's modes; see
+	// model.Client.GroupReadable.
+	GroupReadable bool
 }
 
 // Logger returns the configured logger, falling back to the default logger.
