@@ -221,8 +221,12 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"run_id": id})
 }
 
-// notifyStatus sends a Discord message for a status change. Failures always
-// fire; all other statuses only fire when verbose mode is enabled.
+// notifyStatus sends a Discord message for a status change. The outcome always
+// fires: a finished backup reports OK or FAILED, because those are the two
+// things an operator acts on. Progress notices do not fire at all — a STARTED
+// message tells you nothing you did not already schedule, and it doubles the
+// traffic for every run. The overlap notice stays behind verbose mode, since it
+// is a diagnostic about cadence rather than an outcome.
 // Call as a goroutine — never blocks the response path.
 func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes int64, ts time.Time) {
 	fmtTime := func(t time.Time) string {
@@ -235,19 +239,10 @@ func (s *Server) notifyStatus(cl *model.Client, st model.RunStatus, files, bytes
 			cl.Name, cl.SourceLabel, fmtTime(ts),
 		))
 	case model.StatusOK:
-		if s.verbose {
-			alert.Discord(s.discordWebhook, fmt.Sprintf(
-				"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s | files=%d size=%s",
-				cl.Name, cl.SourceLabel, fmtTime(ts), files, alert.FormatBytes(bytes),
-			))
-		}
-	case model.StatusRunning:
-		if s.verbose {
-			alert.Discord(s.discordWebhook, fmt.Sprintf(
-				"▶️ **backitup** — `%s` backup **STARTED**\nSource: %s\nStarted: %s",
-				cl.Name, cl.SourceLabel, fmtTime(ts),
-			))
-		}
+		alert.Discord(s.discordWebhook, fmt.Sprintf(
+			"✅ **backitup** — `%s` backup **OK**\nSource: %s\nFinished: %s | files=%d size=%s",
+			cl.Name, cl.SourceLabel, fmtTime(ts), files, alert.FormatBytes(bytes),
+		))
 	case model.StatusOverlap:
 		if s.verbose {
 			alert.Discord(s.discordWebhook, fmt.Sprintf(
