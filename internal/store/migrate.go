@@ -209,6 +209,16 @@ func applyCreateTables(ctx context.Context, tx *sql.Tx, sch schemaDef) error {
 // drops the old table and its indexes with it, and idx_clients_slug needs the slug
 // backfill to have run first.
 func applyCanonicalShape(ctx context.Context, tx *sql.Tx, sch schemaDef) error {
+	// Create first, canonicalise second. schema.sql describes the shape THIS
+	// build expects, so it also lists tables a later step introduces — and
+	// canonicaliseTable refuses a table that does not exist yet. Without this
+	// call, a step at version N fails on a table added at version N+1: a
+	// database at v5 could not reach v7 because step 6 met client_storage, which
+	// only v7 creates. Every DDL in schema.sql is CREATE TABLE IF NOT EXISTS, so
+	// this is a no-op for tables that already exist.
+	if err := applyCreateTables(ctx, tx, sch); err != nil {
+		return err
+	}
 	for _, t := range sch.tables {
 		if err := canonicaliseTable(ctx, tx, t); err != nil {
 			return err
