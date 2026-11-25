@@ -244,19 +244,38 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		localIDs[s.ID] = true
 	}
 
-	// Snapshot IDs recorded in offsite DB but no longer present on local disk.
-	type missingLocalRow struct {
-		ID         string
-		UploadedAt time.Time
-		Bytes      int64
+	// Snapshots the app holds no hot copy of. Since the hot pruner deletes a
+	// snapshot once a strictly newer one is offsite, an offsite record whose
+	// snapshot directory is gone is the designed steady state of a working
+	// retention policy — the bucket holds the copy — not evidence of loss. Only a
+	// row whose last verification reported the object missing is in doubt, and
+	// only that row keeps the alarm colour and the "lost" wording.
+	type offsiteOnlyRow struct {
+		ID               string
+		UploadedAt       time.Time
+		Bytes            int64
+		RemoteMissing    bool
+		RemoteVerifiedAt time.Time
+		// RequireConfirm is true when the app believes the object is still in the
+		// bucket, which is the case where forgetting removes the only index entry
+		// of a live backup: the operator has to confirm it a second time, by name.
+		// Only a verification that ran and reported the object gone lifts the
+		// requirement — "never checked" is not evidence that a copy is gone.
+		RequireConfirm bool
 	}
-	var missingLocalSnaps []missingLocalRow
+	var offsiteOnlySnaps []offsiteOnlyRow
 	for _, o := range offsiteObjects {
-		if !localIDs[o.SnapshotID] {
-			missingLocalSnaps = append(missingLocalSnaps, missingLocalRow{
-				ID: o.SnapshotID, UploadedAt: o.UploadedAt, Bytes: o.Bytes,
-			})
+		if localIDs[o.SnapshotID] {
+			continue
 		}
+		offsiteOnlySnaps = append(offsiteOnlySnaps, offsiteOnlyRow{
+			ID:               o.SnapshotID,
+			UploadedAt:       o.UploadedAt,
+			Bytes:            o.Bytes,
+			RemoteMissing:    o.RemoteMissing,
+			RemoteVerifiedAt: o.RemoteVerifiedAt,
+			RequireConfirm:   !o.RemoteMissing,
+		})
 	}
 
 	// Wrap each offsite object with the local-existence flag (remote status is
@@ -341,7 +360,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"OffsiteRuns":         offsiteRuns,
 		"OffsiteObjects":      offsiteViews,
 		"LocalSnapshots":      localSnapshots,
-		"MissingLocalSnaps":   missingLocalSnaps,
+		"OffsiteOnlySnaps":    offsiteOnlySnaps,
 		"Remotes":             allRemotes,
 		"Flash":               r.URL.Query().Get("msg"),
 		"Error":               r.URL.Query().Get("err"),
@@ -613,8 +632,20 @@ func (s *Server) postUpdateClientGroupReadable(w http.ResponseWriter, r *http.Re
 	http.Redirect(w, r, "/clients/"+c.Slug, http.StatusSeeOther)
 }
 
-// postForgetOffsiteObject removes the offsite tracking record without deleting
-// the remote file. Used for "missing on disk" entries the operator wants to clear.
+// postForgetOffsiteObject stops tracking one offsite object without deleting the
+// remote file.
+//
+// It is a secondary action now, not the only one: a snapshot with no hot copy is
+// normally just a snapshot the pruner aged out once a newer one was offsite, and
+// its row is the only way to list, download and verify the copy that actually
+// exists. So the page demotes it, says what it costs, and — while the object is
+// believed to still be in the bucket — requires a second confirmation that names
+// the snapshot (a form field carrying its id), because a stray POST here removes
+// the index entry of a live backup.
+//
+// Because the row goes, the dedupe records that claimed their content lives in
+// that object go with it (store.ForgetOffsiteObject, one transaction): a chain
+// pointing at a row nobody can read is the failure this card is about.
 func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.storeCtx(r)
 	defer cancel()
@@ -631,14 +662,63 @@ func (s *Server) postForgetOffsiteObject(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	snapshotID := r.PathValue("snapshotID")
-	if err := s.st.ForgetOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote); err != nil {
+	objs, err := s.st.ListOffsiteObjects(ctx, c.ID)
+	if err != nil {
+		if s.storeFailure(w, ctx, fmt.Sprintf("forget offsite: list objects for client %q", c.Name), err) {
+			return
+		}
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	var row *model.OffsiteObject
+	for i := range objs {
+		o := &objs[i]
+		// A dedupe record names no object of its own: it is not what a row on the
+		// page stands for and forgetting it would leave the owner untouched.
+		if o.SnapshotID == snapshotID && o.Remote == c.OffsiteRemote && o.DedupOf == "" {
+			row = o
+			break
+		}
+	}
+	if row == nil {
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", fmt.Sprintf(
+			"no offsite record of %s on %q: nothing to stop tracking", snapshotID, c.OffsiteRemote)),
+			http.StatusSeeOther)
+		return
+	}
+	// Second confirmation while the object is believed present. Only a check that
+	// ran and reported the object gone lifts the requirement: "never verified" is
+	// not evidence that the copy is gone.
+	if !row.RemoteMissing {
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, clientFlashURL(c.Slug, "err", "invalid form"), http.StatusSeeOther)
+			return
+		}
+		if r.PostFormValue("confirm") != snapshotID {
+			http.Redirect(w, r, clientFlashURL(c.Slug, "err", fmt.Sprintf(
+				"stopping tracking of %s was not confirmed: the object is still in %q and this record is the only index entry for it. Nothing was removed.",
+				snapshotID, c.OffsiteRemote)),
+				http.StatusSeeOther)
+			return
+		}
+	}
+	dedupRows, err := s.st.ForgetOffsiteObject(ctx, c.ID, snapshotID, c.OffsiteRemote)
+	if err != nil {
 		if s.storeFailure(w, ctx, fmt.Sprintf("forget offsite: client=%q snap=%q", c.Name, snapshotID), err) {
 			return
 		}
-		http.Redirect(w, r, "/clients/"+c.Slug+"?err=forget+failed", http.StatusSeeOther)
+		http.Redirect(w, r, clientFlashURL(c.Slug, "err", fmt.Sprintf("could not stop tracking %s: the database did not answer", snapshotID)),
+			http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/clients/"+c.Slug+"?msg=entry+removed", http.StatusSeeOther)
+	msg := fmt.Sprintf("stopped tracking %s: the object stays in %q and backitup no longer lists, downloads or verifies it",
+		snapshotID, c.OffsiteRemote)
+	if dedupRows > 0 {
+		msg += fmt.Sprintf("; %d deduplicated run(s) were dropped with it and will be uploaded again", dedupRows)
+	}
+	log.Printf("offsite forget: client=%q snap=%s remote=%s dedupe_rows=%d: tracking removed, object untouched",
+		c.Name, snapshotID, c.OffsiteRemote, dedupRows)
+	http.Redirect(w, r, clientFlashURL(c.Slug, "msg", msg), http.StatusSeeOther)
 }
 
 // postUpdateClientOffsite changes the offsite_remote for an existing client.

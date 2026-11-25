@@ -175,11 +175,16 @@
             </div>
 
             <div data-tab="local-files">
-              {{if or .LocalSnapshots .MissingLocalSnaps}}
+              {{if or .LocalSnapshots .OffsiteOnlySnaps}}
+              {{if .OffsiteOnlySnaps}}
+              <p class="help-text">Rows badged <span class="badge">offsite only</span> have no copy on this server: retention deleted the hot snapshot once a strictly newer one was already offsite, so <strong>{{.Client.OffsiteRemote}}</strong> holds the only copy. Download it from here, or restore it with the <code>rclone</code> command in the runbook. A row badged <span class="badge badge-missing">not in the bucket</span> is the one to look at: the last verification could not see its object either.</p>
+              {{end}}
+              {{if .LocalSnapshots}}
               <div class="bulk-toolbar">
                 <input type="checkbox" data-select-all="local" title="Select all">
                 <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/snapshots/bulk-delete" data-bulk-group="local">Delete selected</button>
               </div>
+              {{end}}
               <table>
                 <thead>
                   <tr>
@@ -208,17 +213,26 @@
                     </td>
                   </tr>
                   {{end}}
-                  {{range .MissingLocalSnaps}}
+                  {{range .OffsiteOnlySnaps}}
                   <tr>
                     <td class="cb-col"></td>
                     <td class="mono">{{.ID}}</td>
                     <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
                     <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
-                    <td><span class="badge badge-missing">missing on disk</span></td>
+                    <td>
+                      {{if .RemoteMissing}}
+                      <span class="badge badge-missing" title="Not on disk — retention pruned the hot copy — and not in the bucket: the verification at {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}} could not see this object in {{$.Client.OffsiteRemote}}. No copy is known to exist.">not in the bucket</span>
+                      {{else}}
+                      <span class="badge" title="Not on disk: retention pruned the hot copy once a newer snapshot was offsite. {{$.Client.OffsiteRemote}} holds this copy{{if .RemoteVerifiedAt.IsZero}} (never verified — it has been listed since upload only){{else}} (last verified {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}){{end}}.">offsite only</span>
+                      {{end}}
+                    </td>
                     <td class="flex-row-sm">
+                      <a href="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/download" class="btn btn-ghost btn-sm" download
+                         {{if .RemoteMissing}}title="The last verification could not see this object; the download may fail"{{else}}title="Stream the copy from {{$.Client.OffsiteRemote}}"{{end}}>Download</a>
                       <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/forget" class="d-inline"
-                            data-confirm="Remove tracking entry for {{.ID}}? The remote file (if any) is NOT deleted.">
-                        <button type="submit" class="btn btn-ghost btn-sm">Delete entry</button>
+                            data-confirm="{{if .RemoteMissing}}Stop tracking {{.ID}}? The object is already gone from {{$.Client.OffsiteRemote}}. This removes the record only: backitup will no longer list, download or verify this snapshot.{{else}}Stop tracking {{.ID}}? This is NOT a delete: the object stays in {{$.Client.OffsiteRemote}}, and backitup will no longer list, download or verify it — the app will have no record of this backup.{{end}}">
+                        {{if .RequireConfirm}}<label class="cb-confirm"><input type="checkbox" name="confirm" value="{{.ID}}" required> still in the bucket — I want to stop tracking it</label>{{end}}
+                        <button type="submit" class="btn btn-ghost btn-sm">Stop tracking</button>
                       </form>
                     </td>
                   </tr>
@@ -260,10 +274,10 @@
                     <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
                     <td class="mono">{{humanBytes .Bytes}}</td>
                     <td>
-                      {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge badge-missing">deleted</span>{{end}}
+                      {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge" title="Not on disk: retention pruned the hot copy, so this object is the only copy">offsite only</span>{{end}}
                     </td>
                     <td>
-                      {{if .RemoteVerifiedAt.IsZero}}<span class="badge">not checked</span>{{else if .RemoteMissing}}<span class="badge badge-missing" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">missing</span>{{else}}<span class="badge badge-ok" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">verified</span>{{end}}
+                      {{if .RemoteVerifiedAt.IsZero}}<span class="badge">not checked</span>{{else if .RemoteMissing}}<span class="badge badge-missing" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">not in the bucket</span>{{else}}<span class="badge badge-ok" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">verified</span>{{end}}
                     </td>
                     <td class="flex-row-sm">
                       <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>

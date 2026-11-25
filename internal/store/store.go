@@ -860,21 +860,12 @@ func (s *Store) UpdateOffsiteRemoteStatus(ctx context.Context, id int64, missing
 	return err
 }
 
-// DeleteOffsiteObject removes an offsite record (after the remote object is gone).
+// DeleteOffsiteObject removes an offsite record after the remote object is gone,
+// together with the dedupe records whose content lived in that object: they must
+// go when it does, or they would claim a remote copy of content that no longer
+// exists anywhere (deleteOffsiteRowAndChain does both in one transaction).
 func (s *Store) DeleteOffsiteObject(ctx context.Context, clientID int64, snapshotID, remote string) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM offsite_objects WHERE client_id=? AND snapshot_id=? AND remote=?`,
-		clientID, snapshotID, remote)
-	return err
-}
-
-// DeleteDedupRecords removes the dedup records whose content lived in the given
-// owner's remote object. They must go when that object does: left behind they
-// would claim a remote copy of content that no longer exists anywhere.
-func (s *Store) DeleteDedupRecords(ctx context.Context, clientID int64, ownerSnapshotID, remote string) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM offsite_objects WHERE client_id=? AND remote=? AND dedup_of=?`,
-		clientID, remote, ownerSnapshotID)
+	_, err := s.deleteOffsiteRowAndChain(ctx, "delete offsite object", clientID, snapshotID, remote)
 	return err
 }
 
@@ -1198,13 +1189,54 @@ func (s *Store) UpdateClientGroupReadable(ctx context.Context, id int64, on bool
 }
 
 // ForgetOffsiteObject removes the offsite tracking record without touching the
-// remote file. Use when the local copy has already been pruned and the operator
-// just wants to clear the stale entry.
-func (s *Store) ForgetOffsiteObject(ctx context.Context, clientID int64, snapshotID, remote string) error {
-	_, err := s.db.ExecContext(ctx,
+// remote file, and with it every dedupe record that claims its content lives in
+// that object. It returns how many dedupe rows went.
+//
+// Forgetting is an index operation, not a delete: the object stays in the
+// bucket. That is exactly why the dedupe rows have to go with the row they name.
+// A dedupe row is an inference — "my content is in that object" — and once the
+// object is untracked nothing can list it, download it or verify it, so the
+// inference has no support left; kept, it would be a chain pointing at a row that
+// does not exist.
+//
+// The snapshots those rows named simply stop counting as offsited, which is the
+// safe direction: offsitedSetFrom (lifecycle) no longer protects their hot copies
+// from the pruner, and a snapshot still on disk is uploaded for real by the next
+// pass (a real upload clears dedup_of). Nothing here changes retention.
+func (s *Store) ForgetOffsiteObject(ctx context.Context, clientID int64, snapshotID, remote string) (int64, error) {
+	return s.deleteOffsiteRowAndChain(ctx, "forget offsite", clientID, snapshotID, remote)
+}
+
+// deleteOffsiteRowAndChain removes one offsite object row and every dedupe row
+// that claims its content, in one transaction, and reports how many dedupe rows
+// went.
+//
+// It is the single place either kind of removal happens — forgetting a record and
+// deleting the object it names both leave the chain pointing at a row nobody can
+// read, and a half-applied pair (owner gone, claims standing) is exactly what the
+// lifecycle reads as "a copy exists elsewhere". So: one transaction, both deletes.
+func (s *Store) deleteOffsiteRowAndChain(ctx context.Context, op string, clientID int64, snapshotID, remote string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("%s: begin: %w", op, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM offsite_objects WHERE client_id=? AND snapshot_id=? AND remote=?`,
-		clientID, snapshotID, remote)
-	return err
+		clientID, snapshotID, remote); err != nil {
+		return 0, fmt.Errorf("%s: delete %s: %w", op, snapshotID, err)
+	}
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM offsite_objects WHERE client_id=? AND remote=? AND dedup_of=?`,
+		clientID, remote, snapshotID)
+	if err != nil {
+		return 0, fmt.Errorf("%s: drop dedupe rows of %s: %w", op, snapshotID, err)
+	}
+	dedupRows, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("%s: commit: %w", op, err)
+	}
+	return dedupRows, nil
 }
 
 // ErrConflict is returned by RotateClientCreds when a concurrent rotation
