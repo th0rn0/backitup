@@ -23,7 +23,7 @@ func diskFigure(st *model.ClientStorage, snapshots int, now time.Time) (value, n
 		if snapshots == 0 {
 			return "—", ""
 		}
-		return "not measured yet", "refreshed by the lifecycle pass"
+		return "Measured on the next lifecycle pass", ""
 	}
 	age := "as of " + relTime(now.Sub(st.MeasuredAt))
 	if st.Partial {

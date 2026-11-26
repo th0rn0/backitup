@@ -347,6 +347,21 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Compute whether any snapshot has a non-zero size (for conditional column rendering).
+	hasSnapshotSizes := false
+	for _, s := range localSnapshots {
+		if s.Bytes > 0 {
+			hasSnapshotSizes = true
+			break
+		}
+	}
+	for _, s := range offsiteOnlySnaps {
+		if s.Bytes > 0 {
+			hasSnapshotSizes = true
+			break
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
 		"Username":            usernameFromContext(r.Context()),
@@ -373,6 +388,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"OffsiteTotalBytes":   offsiteTotalBytes,
 		"ExpectedIntervalStr": expectedIntervalStr,
 		"NextExpected":        nextExpected,
+		"HasSnapshotSizes":    hasSnapshotSizes,
 		// The restore command for a snapshot that records ownership is a pull
 		// from this server, so the page needs the ingest address to state it.
 		"PublicHost": s.publicHost,

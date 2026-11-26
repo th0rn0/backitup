@@ -57,6 +57,33 @@ func offsiteOnlyFixture(t *testing.T) (*store.Store, *http.Client, *httptest.Ser
 	return st, cl, ts, c, objs[0]
 }
 
+// offsiteRow is tableRow scoped to the offsite objects table. The same snapshot
+// id now appears in the local snapshot table as well, so a bare id lookup can
+// land on the local row and read the wrong badges. The offsite row is the one
+// that carries a state badge; since the UX pass removed the constant "on disk"
+// badge from the local table, that is what distinguishes the two.
+func offsiteRow(t *testing.T, body, id string) string {
+	t.Helper()
+	needle := `<td class="mono">` + id + `</td>`
+	rest := body
+	for {
+		i := strings.Index(rest, needle)
+		if i < 0 {
+			t.Fatalf("no offsite row for %s on the page", id)
+		}
+		start := strings.LastIndex(rest[:i], "<tr")
+		end := strings.Index(rest[i:], "</tr>")
+		if start < 0 || end < 0 {
+			t.Fatalf("could not delimit the row for %s", id)
+		}
+		row := rest[start : i+end]
+		if strings.Contains(row, `class="badge`) {
+			return row
+		}
+		rest = rest[i+len(needle):]
+	}
+}
+
 // tableRow returns the rendered <tr> whose first mono cell is the snapshot id, so
 // an assertion is about that row and not about a word appearing somewhere else on
 // a page that renders the same snapshot in two tables.
@@ -80,7 +107,16 @@ func tableRow(t *testing.T, body, id string) string {
 // policy, so the page must say so, offer the download of the copy that does
 // exist, and say why the row is there.
 func TestClientPageCallsAPrunedHotCopyOffsiteOnlyNotLost(t *testing.T) {
-	_, cl, ts, c, _ := offsiteOnlyFixture(t)
+	st, cl, ts, c, _ := offsiteOnlyFixture(t)
+	// The fixture gives only the pruned snapshot an offsite row. Give the
+	// retained one a row too, so both states sit in the same table and the words
+	// can be compared: it still exists on disk, so it is the "on disk" case.
+	if err := st.RecordOffsiteObject(context.Background(), model.OffsiteObject{
+		ClientID: c.ID, SnapshotID: retainedSnap, Remote: "s3",
+		Bytes: 1024, UploadedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record the retained snapshot's offsite object: %v", err)
+	}
 	body := getPage(t, cl, ts.URL+"/clients/"+c.Slug)
 
 	row := tableRow(t, body, offsiteOnlySnap)
@@ -103,7 +139,7 @@ func TestClientPageCallsAPrunedHotCopyOffsiteOnlyNotLost(t *testing.T) {
 		t.Errorf("the row still offers the index-deleting action by that name:\n%s", row)
 	}
 	// Both states are on this page, and they are different words.
-	if got := tableRow(t, body, retainedSnap); !strings.Contains(got, "on disk") {
+	if got := offsiteRow(t, body, retainedSnap); !strings.Contains(got, "on disk") {
 		t.Errorf("the retained snapshot is not badged \"on disk\":\n%s", got)
 	}
 	if !strings.Contains(body, "retention deleted the hot snapshot once a strictly newer one was already offsite") {

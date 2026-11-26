@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>backitup — {{.Client.Name}}</title>
+  <title>Backitup — {{.Client.Name}}</title>
   <link rel="stylesheet" href="/static/app.css">
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 </head>
@@ -81,225 +81,205 @@
         {{end}}
       </div>
 
-      <!-- Main tabs: History | Files | Settings -->
+      <!-- Main tabs: Snapshots | Offsite | Runs | Settings -->
       <div data-tab-group>
-        <div class="tabs">
-          <button class="tab-btn" data-tab-btn="history">History</button>
-          <button class="tab-btn" data-tab-btn="files">Files</button>
-          <button class="tab-btn" data-tab-btn="settings">Settings</button>
+        <div class="tabs" role="tablist">
+          <button class="tab-btn" data-tab-btn="snapshots" role="tab" aria-selected="true">Snapshots</button>
+          {{if .Client.OffsiteRemote}}<button class="tab-btn" data-tab-btn="offsite" role="tab" aria-selected="false">Offsite</button>{{end}}
+          <button class="tab-btn" data-tab-btn="runs" role="tab" aria-selected="false">Runs</button>
+          <button class="tab-btn" data-tab-btn="settings" role="tab" aria-selected="false">Settings</button>
         </div>
 
-        <!-- ── History tab ── -->
-        <div data-tab="history">
-          <div data-tab-group>
-            <div class="tabs">
-              <button class="tab-btn" data-tab-btn="runs">Backups</button>
-              <button class="tab-btn" data-tab-btn="offsite-runs">Offsite</button>
-            </div>
-
-            <div data-tab="runs">
-              {{if .Runs}}
-              <table>
-                <thead>
-                  <tr>
-                    <th>Status</th>
-                    <th>Started</th>
-                    <th>Duration</th>
-                    <th>Files</th>
-                    <th>Size</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{range .Runs}}
-                  <tr>
-                    <td data-label="Status"><span class="status {{.Status}}">{{.Status}}</span></td>
-                    <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
-                    <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
-                    <td data-label="Files" class="mono">{{.Files}}</td>
-                    <td data-label="Size" class="mono">{{humanBytes .Bytes}}</td>
-                    <td>{{if .LogTail}}<a href="/clients/{{$.Client.Slug}}/runs/{{.ID}}">Log</a>{{end}}</td>
-                  </tr>
-                  {{end}}
-                </tbody>
-              </table>
-              {{else}}
-              <p class="help-text">No runs yet. Paste the cron line on the host — this client will appear after its first backup.</p>
-              {{end}}
-            </div>
-
-            <div data-tab="offsite-runs">
-              {{if .OffsiteRuns}}
-              <table>
-                <thead>
-                  <tr>
-                    <th>Status</th>
-                    <th>Started</th>
-                    <th>Duration</th>
-                    <th>Snapshots</th>
-                    <th>Size</th>
-                    <th>Triggered by</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{range .OffsiteRuns}}
-                  <tr>
-                    <td data-label="Status"><span class="status {{.Status}}">{{.Status}}</span></td>
-                    <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
-                    <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
-                    <td data-label="Snapshots" class="mono">{{.SnapshotsUploaded}}</td>
-                    <td data-label="Size" class="mono">{{humanBytes .BytesUploaded}}</td>
-                    <td data-label="Triggered by"><span class="badge">{{.TriggeredBy}}</span></td>
-                  </tr>
-                  {{if .ErrorText}}
-                  <tr>
-                    <td colspan="6" class="error-row-detail">{{.ErrorText}}</td>
-                  </tr>
-                  {{end}}
-                  {{end}}
-                </tbody>
-              </table>
-              {{else}}
-              <p class="help-text">No offsite uploads yet. {{if .Client.OffsiteRemote}}The lifecycle worker will upload on its next pass, or click <strong>Backup now</strong> above.{{else}}Configure an offsite destination in Settings to enable cold storage.{{end}}</p>
-              {{end}}
-            </div>
+        <!-- ── Snapshots tab ── -->
+        <div data-tab="snapshots" role="tabpanel">
+          {{if or .LocalSnapshots .OffsiteOnlySnaps}}
+          {{if .OffsiteOnlySnaps}}
+          <p class="help-text">Rows badged <span class="badge">offsite only</span> have no copy on this server: retention deleted the hot snapshot once a strictly newer one was already offsite, so <strong>{{.Client.OffsiteRemote}}</strong> holds the only copy. Download it from here, or restore it with the <code>rclone</code> command in the runbook. A row badged <span class="badge badge-missing">not in the bucket</span> is the one to look at: the last verification could not see its object either.</p>
+          {{end}}
+          {{if .LocalSnapshots}}
+          <div class="bulk-toolbar">
+            <input type="checkbox" data-select-all="local" title="Select all">
+            <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/snapshots/bulk-delete" data-bulk-group="local">Delete selected</button>
           </div>
+          {{end}}
+          <table>
+            <thead>
+              <tr>
+                <th class="cb-col"></th>
+                <th>Snapshot</th>
+                <th>Created</th>
+                {{if .HasSnapshotSizes}}<th>Size</th>{{end}}
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .LocalSnapshots}}
+              <tr>
+                <td class="cb-col"><input type="checkbox" data-select-group="local" value="{{.ID}}"></td>
+                <td class="mono">{{.ID}}</td>
+                <td class="mono">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                {{if $.HasSnapshotSizes}}<td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{end}}</td>{{end}}
+                <td class="flex-row-sm">
+                  <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}" class="btn btn-ghost btn-sm" download>Download</a>
+                  <form method="POST" action="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}/delete" class="d-inline"
+                        data-confirm="Delete local snapshot {{.ID}}? This cannot be undone.">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                  </form>
+                </td>
+              </tr>
+              {{end}}
+              {{range .OffsiteOnlySnaps}}
+              <tr>
+                <td class="cb-col"></td>
+                <td class="mono">{{.ID}}</td>
+                <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+                {{if $.HasSnapshotSizes}}<td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{end}}</td>{{end}}
+                <td class="flex-row-sm">
+                  {{if .RemoteMissing}}
+                  <span class="badge badge-missing" title="Not on disk — retention pruned the hot copy — and not in the bucket: the verification at {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}} could not see this object in {{$.Client.OffsiteRemote}}. No copy is known to exist.">not in the bucket</span>
+                  {{else}}
+                  <span class="badge" title="Not on disk: retention pruned the hot copy once a newer snapshot was offsite. {{$.Client.OffsiteRemote}} holds this copy{{if .RemoteVerifiedAt.IsZero}} (never verified — it has been listed since upload only){{else}} (last verified {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}){{end}}.">offsite only</span>
+                  {{end}}
+                  <a href="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/download" class="btn btn-ghost btn-sm" download
+                     {{if .RemoteMissing}}title="The last verification could not see this object; the download may fail"{{else}}title="Stream the copy from {{$.Client.OffsiteRemote}}"{{end}}>Download</a>
+                  <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/forget" class="d-inline"
+                        data-confirm="{{if .RemoteMissing}}Stop tracking {{.ID}}? The object is already gone from {{$.Client.OffsiteRemote}}. This removes the record only: backitup will no longer list, download or verify this snapshot.{{else}}Stop tracking {{.ID}}? This is NOT a delete: the object stays in {{$.Client.OffsiteRemote}}, and backitup will no longer list, download or verify it — the app will have no record of this backup.{{end}}">
+                    {{if .RequireConfirm}}<label class="cb-confirm"><input type="checkbox" name="confirm" value="{{.ID}}" required> still in the bucket — I want to stop tracking it</label>{{end}}
+                    <button type="submit" class="btn btn-ghost btn-sm">Stop tracking</button>
+                  </form>
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="help-text">No local snapshots yet.</p>
+          {{end}}
         </div>
 
-        <!-- ── Files tab ── -->
-        <div data-tab="files">
-          <div data-tab-group>
-            <div class="tabs">
-              <button class="tab-btn" data-tab-btn="local-files">Local</button>
-              {{if .Client.OffsiteRemote}}<button class="tab-btn" data-tab-btn="offsite-files">Offsite</button>{{end}}
-            </div>
-
-            <div data-tab="local-files">
-              {{if or .LocalSnapshots .OffsiteOnlySnaps}}
-              {{if .OffsiteOnlySnaps}}
-              <p class="help-text">Rows badged <span class="badge">offsite only</span> have no copy on this server: retention deleted the hot snapshot once a strictly newer one was already offsite, so <strong>{{.Client.OffsiteRemote}}</strong> holds the only copy. Download it from here, or restore it with the <code>rclone</code> command in the runbook. A row badged <span class="badge badge-missing">not in the bucket</span> is the one to look at: the last verification could not see its object either.</p>
-              {{end}}
-              {{if .LocalSnapshots}}
-              <div class="bulk-toolbar">
-                <input type="checkbox" data-select-all="local" title="Select all">
-                <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/snapshots/bulk-delete" data-bulk-group="local">Delete selected</button>
-              </div>
-              {{end}}
-              <table>
-                <thead>
-                  <tr>
-                    <th class="cb-col"></th>
-                    <th>Snapshot</th>
-                    <th>Created</th>
-                    <th>Size</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{range .LocalSnapshots}}
-                  <tr>
-                    <td class="cb-col"><input type="checkbox" data-select-group="local" value="{{.ID}}"></td>
-                    <td class="mono">{{.ID}}</td>
-                    <td class="mono">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
-                    <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
-                    <td><span class="badge badge-ok">on disk</span></td>
-                    <td class="flex-row-sm">
-                      <a href="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}" class="btn btn-ghost btn-sm" download>Download</a>
-                      <form method="POST" action="/clients/{{$.Client.Slug}}/snapshots/{{.ID}}/delete" class="d-inline"
-                            data-confirm="Delete local snapshot {{.ID}}? This cannot be undone.">
-                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-                      </form>
-                    </td>
-                  </tr>
-                  {{end}}
-                  {{range .OffsiteOnlySnaps}}
-                  <tr>
-                    <td class="cb-col"></td>
-                    <td class="mono">{{.ID}}</td>
-                    <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
-                    <td class="mono">{{if .Bytes}}{{humanBytes .Bytes}}{{else}}—{{end}}</td>
-                    <td>
-                      {{if .RemoteMissing}}
-                      <span class="badge badge-missing" title="Not on disk — retention pruned the hot copy — and not in the bucket: the verification at {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}} could not see this object in {{$.Client.OffsiteRemote}}. No copy is known to exist.">not in the bucket</span>
-                      {{else}}
-                      <span class="badge" title="Not on disk: retention pruned the hot copy once a newer snapshot was offsite. {{$.Client.OffsiteRemote}} holds this copy{{if .RemoteVerifiedAt.IsZero}} (never verified — it has been listed since upload only){{else}} (last verified {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}){{end}}.">offsite only</span>
-                      {{end}}
-                    </td>
-                    <td class="flex-row-sm">
-                      <a href="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/download" class="btn btn-ghost btn-sm" download
-                         {{if .RemoteMissing}}title="The last verification could not see this object; the download may fail"{{else}}title="Stream the copy from {{$.Client.OffsiteRemote}}"{{end}}>Download</a>
-                      <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.ID}}/forget" class="d-inline"
-                            data-confirm="{{if .RemoteMissing}}Stop tracking {{.ID}}? The object is already gone from {{$.Client.OffsiteRemote}}. This removes the record only: backitup will no longer list, download or verify this snapshot.{{else}}Stop tracking {{.ID}}? This is NOT a delete: the object stays in {{$.Client.OffsiteRemote}}, and backitup will no longer list, download or verify it — the app will have no record of this backup.{{end}}">
-                        {{if .RequireConfirm}}<label class="cb-confirm"><input type="checkbox" name="confirm" value="{{.ID}}" required> still in the bucket — I want to stop tracking it</label>{{end}}
-                        <button type="submit" class="btn btn-ghost btn-sm">Stop tracking</button>
-                      </form>
-                    </td>
-                  </tr>
-                  {{end}}
-                </tbody>
-              </table>
-              {{else}}
-              <p class="help-text">No local snapshots yet.</p>
-              {{end}}
-            </div>
-
-            {{if .Client.OffsiteRemote}}
-            <div data-tab="offsite-files">
-              {{if eq .Client.OffsiteUploadMode "single"}}
-              <p class="help-text">One generation: this client keeps a single object, <code>latest.tar.gz</code>, holding the snapshot below. The next successful upload replaces it — the Download button fetches that object, not a per-snapshot file.</p>
-              {{end}}
-              {{if .OffsiteObjects}}
-              <div class="bulk-toolbar">
-                <input type="checkbox" data-select-all="offsite" title="Select all">
-                <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/offsite/bulk-delete" data-bulk-group="offsite">Delete selected</button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th class="cb-col"></th>
-                    <th>Snapshot</th>
-                    <th>Uploaded</th>
-                    <th>Size</th>
-                    <th>Local</th>
-                    <th>Remote</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{range .OffsiteObjects}}
-                  <tr>
-                    <td class="cb-col"><input type="checkbox" data-select-group="offsite" value="{{.SnapshotID}}"></td>
-                    <td class="mono">{{.SnapshotID}}</td>
-                    <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
-                    <td class="mono">{{humanBytes .Bytes}}</td>
-                    <td>
-                      {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge" title="Not on disk: retention pruned the hot copy, so this object is the only copy">offsite only</span>{{end}}
-                    </td>
-                    <td>
-                      {{if .RemoteVerifiedAt.IsZero}}<span class="badge">not checked</span>{{else if .RemoteMissing}}<span class="badge badge-missing" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">not in the bucket</span>{{else}}<span class="badge badge-ok" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">verified</span>{{end}}
-                    </td>
-                    <td class="flex-row-sm">
-                      <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>
-                      <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/delete" class="d-inline"
-                            data-confirm="Delete offsite object {{.SnapshotID}}? This cannot be undone.">
-                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-                      </form>
-                    </td>
-                  </tr>
-                  {{end}}
-                </tbody>
-              </table>
-              {{else}}
-              <p class="help-text">No offsite objects yet.</p>
-              {{end}}
-            </div>
-            {{end}}
+        {{if .Client.OffsiteRemote}}
+        <!-- ── Offsite tab ── -->
+        <div data-tab="offsite" hidden role="tabpanel">
+          <h3>Objects</h3>
+          {{if eq .Client.OffsiteUploadMode "single"}}
+          <p class="help-text">One generation: this client keeps a single object, <code>latest.tar.gz</code>, holding the snapshot below. The next successful upload replaces it — the Download button fetches that object, not a per-snapshot file.</p>
+          {{end}}
+          {{if .OffsiteObjects}}
+          <div class="bulk-toolbar">
+            <input type="checkbox" data-select-all="offsite" title="Select all">
+            <button class="btn btn-danger btn-sm" data-bulk-action="/clients/{{.Client.Slug}}/offsite/bulk-delete" data-bulk-group="offsite">Delete selected</button>
           </div>
+          <table>
+            <thead>
+              <tr>
+                <th class="cb-col"></th>
+                <th>Snapshot</th>
+                <th>Uploaded</th>
+                <th>Size</th>
+                <th>Local</th>
+                <th>Remote</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .OffsiteObjects}}
+              <tr>
+                <td class="cb-col"><input type="checkbox" data-select-group="offsite" value="{{.SnapshotID}}"></td>
+                <td class="mono">{{.SnapshotID}}</td>
+                <td class="mono">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+                <td class="mono">{{humanBytes .Bytes}}</td>
+                <td>
+                  {{if .LocalExists}}<span class="badge badge-ok">on disk</span>{{else}}<span class="badge" title="Not on disk: retention pruned the hot copy, so this object is the only copy">offsite only</span>{{end}}
+                </td>
+                <td>
+                  {{if .RemoteVerifiedAt.IsZero}}<span class="badge">not checked</span>{{else if .RemoteMissing}}<span class="badge badge-missing" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">not in the bucket</span>{{else}}<span class="badge badge-ok" title="Last checked {{.RemoteVerifiedAt.Format "2006-01-02 15:04"}}">verified</span>{{end}}
+                </td>
+                <td class="flex-row-sm">
+                  <a href="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/download" class="btn btn-ghost btn-sm" download>Download</a>
+                  <form method="POST" action="/clients/{{$.Client.Slug}}/offsite/{{.SnapshotID}}/delete" class="d-inline"
+                        data-confirm="Delete offsite object {{.SnapshotID}}? This cannot be undone.">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                  </form>
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="help-text">No offsite objects yet.</p>
+          {{end}}
+
+          <h3>Upload history</h3>
+          {{if .OffsiteRuns}}
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th>Snapshots</th>
+                <th>Size</th>
+                <th>Triggered by</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .OffsiteRuns}}
+              <tr>
+                <td data-label="Status"><span class="status {{.Status}}"><span class="dot" aria-hidden="true">{{statusIcon .Status}}</span> {{.Status}}</span></td>
+                <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
+                <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
+                <td data-label="Snapshots" class="mono">{{.SnapshotsUploaded}}</td>
+                <td data-label="Size" class="mono">{{humanBytes .BytesUploaded}}</td>
+                <td data-label="Triggered by"><span class="badge">{{.TriggeredBy}}</span></td>
+              </tr>
+              {{if .ErrorText}}
+              <tr>
+                <td colspan="6" class="error-row-detail">{{.ErrorText}}</td>
+              </tr>
+              {{end}}
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="help-text">No offsite uploads yet. The lifecycle worker will upload on its next pass, or click <strong>Backup now</strong> above.</p>
+          {{end}}
+        </div>
+        {{end}}
+
+        <!-- ── Runs tab ── -->
+        <div data-tab="runs" hidden role="tabpanel">
+          {{if .Runs}}
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th>Files</th>
+                <th>Size</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Runs}}
+              <tr>
+                <td data-label="Status"><span class="status {{.Status}}"><span class="dot" aria-hidden="true">{{statusIcon .Status}}</span> {{.Status}}</span></td>
+                <td data-label="Started" class="mono">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
+                <td data-label="Duration" class="mono">{{humanDuration .StartedAt .FinishedAt}}</td>
+                <td data-label="Files" class="mono">{{.Files}}</td>
+                <td data-label="Size" class="mono">{{humanBytes .Bytes}}</td>
+                <td>{{if .LogTail}}<a href="/clients/{{$.Client.Slug}}/runs/{{.ID}}">Log</a>{{end}}</td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="help-text">No runs yet. Paste the cron line on the host — this client will appear after its first backup.</p>
+          {{end}}
         </div>
 
         <!-- ── Settings tab ── -->
-        <div data-tab="settings">
+        <div data-tab="settings" hidden role="tabpanel">
 
           <div class="settings-group">
             <div class="settings-group-title">Schedule &amp; Retention</div>

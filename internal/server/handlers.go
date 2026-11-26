@@ -168,6 +168,7 @@ func (s *Server) postLogout(w http.ResponseWriter, r *http.Request) {
 
 type fleetStatusResp struct {
 	Summary struct {
+		Total   int `json:"total"`
 		OK      int `json:"ok"`
 		Stale   int `json:"stale"`
 		Failed  int `json:"failed"`
@@ -198,6 +199,7 @@ func (s *Server) getFleetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var resp fleetStatusResp
+	resp.Summary.Total = view.Summary.Total()
 	resp.Summary.OK = view.Summary.OK
 	resp.Summary.Stale = view.Summary.Stale
 	resp.Summary.Failed = view.Summary.Failed

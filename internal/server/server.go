@@ -118,6 +118,18 @@ func New(st *store.Store, secure bool) *Server {
 			}
 			return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 		},
+		"statusIcon": func(status string) string {
+			switch status {
+			case "ok":
+				return "●"
+			case "failed":
+				return "✖"
+			case "running":
+				return "◎"
+			default:
+				return "○"
+			}
+		},
 	}
 	return &Server{
 		st:            st,
