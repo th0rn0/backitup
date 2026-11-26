@@ -30,7 +30,7 @@ func (s *Server) getNewClient(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	remotes, _ := s.st.ListRemotes(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
+	s.render(w, "clients_new.html", map[string]any{
 		"Username":    usernameFromContext(r.Context()),
 		"ActivePage":  "clients/new",
 		"Remotes":     remotes,
@@ -159,7 +159,7 @@ func (s *Server) postClients(w http.ResponseWriter, r *http.Request) {
 	kh := knownHostsLine(s.publicHost, s.sshHostKeyPath)
 	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, source, secrets, kh != "")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
+	s.render(w, "client_created.html", map[string]any{
 		"Username":          usernameFromContext(r.Context()),
 		"Name":              name,
 		"Mode":              string(mode),
@@ -377,7 +377,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	exampleName := model.OffsiteObjectName(*c, s.namePrefixDefault, exampleSnap)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
+	s.render(w, "client_detail.html", map[string]any{
 		"Username":            usernameFromContext(r.Context()),
 		"ActivePage":          "",
 		"Client":              c,
@@ -469,7 +469,7 @@ func (s *Server) getRunLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "run_log.html", map[string]any{
+	s.render(w, "run_log.html", map[string]any{
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "",
 		"Client":     c,
@@ -542,7 +542,7 @@ func (s *Server) postRotateClient(w http.ResponseWriter, r *http.Request) {
 	kh := knownHostsLine(s.publicHost, s.sshHostKeyPath)
 	dockerKnown, dockerInsecure := s.dockerCmds(token, apiBase, source, secrets, kh != "")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "client_created.html", map[string]any{
+	s.render(w, "client_created.html", map[string]any{
 		"Username":          usernameFromContext(r.Context()),
 		"Name":              c.Name,
 		"Mode":              string(c.Mode),
@@ -1132,7 +1132,7 @@ func (s *Server) renderNewClientError(w http.ResponseWriter, r *http.Request, ms
 	remotes, _ := s.st.ListRemotes(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
-	_ = s.tmpl.ExecuteTemplate(w, "clients_new.html", map[string]any{
+	s.render(w, "clients_new.html", map[string]any{
 		"Username":    usernameFromContext(r.Context()),
 		"ActivePage":  "clients/new",
 		"Remotes":     remotes,

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -126,8 +127,12 @@ func New(st *store.Store, secure bool) *Server {
 			}
 			return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 		},
-		"statusIcon": func(status string) string {
-			switch status {
+		// statusIcon takes any, not string: the template calls it with
+		// model.RunStatus, a named string type, and text/template will not
+		// convert that to string for a function argument. The mismatch is an
+		// execution error, which kills the page mid-render.
+		"statusIcon": func(status any) string {
+			switch fmt.Sprint(status) {
 			case "ok":
 				return "●"
 			case "failed":
@@ -320,4 +325,22 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// render executes a template into a buffer and only then writes it.
+//
+// ExecuteTemplate writing straight to the ResponseWriter leaves a half page in
+// the response when a template errors: HTTP 200, headers already sent, and
+// everything after the failing node silently missing. That is indistinguishable
+// from an empty tab, and it hid a real bug for a week. Buffering turns the same
+// error into a 500 and a log line.
+func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		log.Printf("template %s: %v", name, err)
+		http.Error(w, "template error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(buf.Bytes())
 }

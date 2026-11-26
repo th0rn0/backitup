@@ -79,7 +79,7 @@ func (s *Server) getLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderLogin(w http.ResponseWriter, code int, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = s.tmpl.ExecuteTemplate(w, "login.html", map[string]any{"Error": errMsg})
+	s.render(w, "login.html", map[string]any{"Error": errMsg})
 }
 
 // tooManyLoginsBody is the answer once a login budget is spent. It names the
