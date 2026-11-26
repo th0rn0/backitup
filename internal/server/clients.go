@@ -391,6 +391,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		"LocalSnapshots":      localSnapshots,
 		"OffsiteOnlySnaps":    offsiteOnlySnaps,
 		"Remotes":             allRemotes,
+		"ActiveTab":           clientTab(r.URL.Query().Get("tab")),
 		"Flash":               r.URL.Query().Get("msg"),
 		"Error":               r.URL.Query().Get("err"),
 		"LastBackupAge":       lastBackupAge,
@@ -1368,4 +1369,15 @@ func knownHostsLine(publicHost, keyPath string) string {
 		addr = fmt.Sprintf("[%s]:%s", host, port)
 	}
 	return fmt.Sprintf("%s %s %s", addr, fields[0], fields[1])
+}
+
+// clientTab whitelists the ?tab= parameter of the client page. An unknown or
+// empty value falls back to the first tab rather than rendering a page with
+// every panel waiting for JavaScript to reveal one.
+func clientTab(q string) string {
+	switch q {
+	case "offsite", "runs", "settings":
+		return q
+	}
+	return "snapshots"
 }

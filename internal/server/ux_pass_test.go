@@ -70,21 +70,29 @@ func TestUXPass_UnselectedPanelsHidden(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
 
-	// The Snapshots tab is selected by default, so it should NOT have hidden.
-	// The Runs and Settings tabs should have hidden.
-	if !strings.Contains(html, `data-tab="runs" hidden`) {
-		t.Error("Runs tab panel should have hidden attribute")
+	// The Snapshots tab is selected by default, so it should NOT have hidden;
+	// the others should. Match the element rather than a literal attribute
+	// order: `hidden` is legitimately emitted after `role="tabpanel"` once the
+	// server decides which panel to render, and an assertion on the exact
+	// string only tests the template's formatting.
+	panelTag := func(name string) string {
+		start := strings.Index(html, `data-tab="`+name+`"`)
+		if start < 0 {
+			return ""
+		}
+		end := strings.Index(html[start:], ">")
+		if end < 0 {
+			return ""
+		}
+		return html[start : start+end]
 	}
-	if !strings.Contains(html, `data-tab="settings" hidden`) {
-		t.Error("Settings tab panel should have hidden attribute")
+	for _, name := range []string{"runs", "settings", "offsite"} {
+		if tag := panelTag(name); !strings.Contains(tag, "hidden") {
+			t.Errorf("%s panel should carry hidden when another tab is selected (tag: %q)", name, tag)
+		}
 	}
-
-	// The offsite empty-state text should not be visible when Snapshots is selected.
-	// Since the offsite panel is hidden, its content should not appear in the
-	// visible DOM (though it's still in the HTML, just hidden).
-	// We verify the panel exists but is hidden.
-	if !strings.Contains(html, `data-tab="offsite" hidden`) {
-		t.Error("Offsite tab panel should have hidden attribute when not selected")
+	if tag := panelTag("snapshots"); strings.Contains(tag, "hidden") {
+		t.Errorf("the selected snapshots panel must not be hidden (tag: %q)", tag)
 	}
 }
 

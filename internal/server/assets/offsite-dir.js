@@ -104,6 +104,17 @@
     var group = btn.closest('[data-tab-group]');
     if (!group) return;
     var target = btn.getAttribute('data-tab-btn');
+    // The tabs are real links: the server renders the panel named in ?tab=, so
+    // they work with no JavaScript at all. When the script is running, keep the
+    // switch in place (no reload) and put the tab in the address bar so a
+    // refresh, a bookmark or a shared URL lands on the same panel.
+    var href = btn.getAttribute('href');
+    if (href) {
+      e.preventDefault();
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', href);
+      }
+    }
     activate(group, target);
   });
 
