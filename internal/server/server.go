@@ -246,7 +246,7 @@ func (s *Server) SyncAuthorizedKeys(ctx context.Context) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(mustSub(assetFS))))
+	mux.HandleFunc("GET /static/{name...}", s.serveAsset)
 
 	mux.HandleFunc("GET /login", s.getLogin)
 	mux.HandleFunc("POST /login", s.postLogin)

@@ -85,9 +85,9 @@
       <div class="aggr-strip">
         <div class="aggr-tile"><div class="k">On disk</div><div class="v">{{.OnDiskValue}}</div></div>
         <div class="aggr-tile"><div class="k">Snapshots</div><div class="v">{{.LocalCount}}</div></div>
-        <div class="aggr-tile"><div class="k">Newest</div><div class="v" style="font-size:14px">{{.LastBackupAge}}</div></div>
+        <div class="aggr-tile"><div class="k">Newest</div><div class="v v-sm">{{.LastBackupAge}}</div></div>
         {{if .Client.OffsiteRemote}}
-        <div class="aggr-tile"><div class="k">Offsite</div><div class="v" style="font-size:14px">{{.OffsiteCount}} object{{if ne .OffsiteCount 1}}s{{end}}</div></div>
+        <div class="aggr-tile"><div class="k">Offsite</div><div class="v v-sm">{{.OffsiteCount}} object{{if ne .OffsiteCount 1}}s{{end}}</div></div>
         {{end}}
       </div>
 
@@ -294,7 +294,7 @@
           <div class="settings-group">
             <div class="settings-group-title">Schedule &amp; Retention</div>
             <p class="section-hint">How long backups are kept and the expected upload cadence.</p>
-            <form method="POST" action="/clients/{{.Client.Slug}}/retention" class="form" style="margin-top:0">
+            <form method="POST" action="/clients/{{.Client.Slug}}/retention" class="form form-tight">
               <label for="retention_days">Hot retention (days)</label>
               <input type="number" id="retention_days" name="retention_days" min="1" value="{{.Client.RetentionDays}}" required>
               <div class="field-hint">Local snapshots older than this are deleted once safely offsite. Offsite objects follow the bucket lifecycle.</div>
@@ -312,7 +312,7 @@
           <div class="settings-group">
             <div class="settings-group-title">Offsite destination</div>
             <p class="section-hint">Where to tier cold copies of this client's backups. Configure remotes on the <a href="/settings/remotes">Remote storage</a> page.</p>
-            <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form" style="margin-top:0">
+            <form method="POST" action="/clients/{{.Client.Slug}}/offsite" class="form form-tight">
               <label for="offsite_remote">Remote</label>
               <select id="offsite_remote" name="offsite_remote">
                 <option value=""{{if eq .Client.OffsiteRemote ""}} selected{{end}}>None (disabled)</option>
@@ -366,7 +366,7 @@
           <div class="settings-group">
             <div class="settings-group-title">What the snapshot captures</div>
             <p class="section-hint">rsync mode only — a targz client ignores these. Changes apply to the next run; existing snapshots keep their shape.</p>
-            <form method="POST" action="/clients/{{.Client.Slug}}/fidelity" class="form" style="margin-top:0">
+            <form method="POST" action="/clients/{{.Client.Slug}}/fidelity" class="form form-tight">
               <label class="checkbox-label">
                 <input type="checkbox" name="preserve_sparse" value="1"{{if .Client.PreserveSparse}} checked{{end}}>
                 <span>
@@ -407,7 +407,7 @@
           <div class="settings-group">
             <div class="settings-group-title">Group-readable snapshots</div>
             <p class="section-hint">rsync mode only. Lets a group account walk into the store without root.</p>
-            <form method="POST" action="/clients/{{.Client.Slug}}/group-readable" class="form" style="margin-top:0">
+            <form method="POST" action="/clients/{{.Client.Slug}}/group-readable" class="form form-tight">
               <label class="checkbox-label">
                 <input type="checkbox" name="group_readable" value="1"{{if .Client.GroupReadable}} checked{{end}}>
                 <span>
@@ -425,7 +425,7 @@
           <div class="settings-group">
             <div class="settings-group-title">Ownership in snapshots</div>
             <p class="section-hint">rsync mode only. Records real uid/gid in xattrs so restores can recover ownership without root.</p>
-            <form method="POST" action="/clients/{{.Client.Slug}}/ownership" class="form" style="margin-top:0">
+            <form method="POST" action="/clients/{{.Client.Slug}}/ownership" class="form form-tight">
               <label class="checkbox-label">
                 <input type="checkbox" name="record_ownership" value="1"{{if .Client.RecordOwnership}} checked{{end}}>
                 <span>
