@@ -94,14 +94,18 @@
       <!-- Main tabs: Snapshots | Offsite | Runs | Settings -->
       <div data-tab-group>
         <div class="tabs" role="tablist">
-          <button class="tab-btn" data-tab-btn="snapshots" role="tab" aria-selected="true">Snapshots</button>
-          {{if .Client.OffsiteRemote}}<button class="tab-btn" data-tab-btn="offsite" role="tab" aria-selected="false">Offsite</button>{{end}}
-          <button class="tab-btn" data-tab-btn="runs" role="tab" aria-selected="false">Runs</button>
-          <button class="tab-btn" data-tab-btn="settings" role="tab" aria-selected="false">Settings</button>
+          {{/* Links, not buttons: the server decides which panel to render, so the
+               tabs work with no JavaScript at all. They used to be <button>s wired
+               by offsite-dir.js, which meant a stale, blocked or 404'd script left
+               four controls that did nothing when clicked. */}}
+          <a class="tab-btn" href="?tab=snapshots" data-tab-btn="snapshots" role="tab"{{if eq .ActiveTab "snapshots"}} aria-selected="true"{{else}} aria-selected="false"{{end}}>Snapshots</a>
+          {{if .Client.OffsiteRemote}}<a class="tab-btn" href="?tab=offsite" data-tab-btn="offsite" role="tab"{{if eq .ActiveTab "offsite"}} aria-selected="true"{{else}} aria-selected="false"{{end}}>Offsite</a>{{end}}
+          <a class="tab-btn" href="?tab=runs" data-tab-btn="runs" role="tab"{{if eq .ActiveTab "runs"}} aria-selected="true"{{else}} aria-selected="false"{{end}}>Runs</a>
+          <a class="tab-btn" href="?tab=settings" data-tab-btn="settings" role="tab"{{if eq .ActiveTab "settings"}} aria-selected="true"{{else}} aria-selected="false"{{end}}>Settings</a>
         </div>
 
         <!-- ── Snapshots tab ── -->
-        <div data-tab="snapshots" role="tabpanel">
+        <div data-tab="snapshots" role="tabpanel"{{if ne .ActiveTab "snapshots"}} hidden{{end}}>
           {{if or .LocalSnapshots .OffsiteOnlySnaps}}
           {{if .OffsiteOnlySnaps}}
           <p class="help-text">Rows badged <span class="badge">offsite only</span> have no copy on this server: retention deleted the hot snapshot once a strictly newer one was already offsite, so <strong>{{.Client.OffsiteRemote}}</strong> holds the only copy. Download it from here, or restore it with the <code>rclone</code> command in the runbook. A row badged <span class="badge badge-missing">not in the bucket</span> is the one to look at: the last verification could not see its object either.</p>
@@ -169,7 +173,7 @@
 
         {{if .Client.OffsiteRemote}}
         <!-- ── Offsite tab ── -->
-        <div data-tab="offsite" hidden role="tabpanel">
+        <div data-tab="offsite" role="tabpanel"{{if ne .ActiveTab "offsite"}} hidden{{end}}>
           <h3>Objects</h3>
           {{if eq .Client.OffsiteUploadMode "single"}}
           <p class="help-text">One generation: this client keeps a single object, <code>latest.tar.gz</code>, holding the snapshot below. The next successful upload replaces it — the Download button fetches that object, not a per-snapshot file.</p>
@@ -257,7 +261,7 @@
         {{end}}
 
         <!-- ── Runs tab ── -->
-        <div data-tab="runs" hidden role="tabpanel">
+        <div data-tab="runs" role="tabpanel"{{if ne .ActiveTab "runs"}} hidden{{end}}>
           {{if .Runs}}
           <table>
             <thead>
@@ -289,7 +293,7 @@
         </div>
 
         <!-- ── Settings tab ── -->
-        <div data-tab="settings" hidden role="tabpanel">
+        <div data-tab="settings" role="tabpanel"{{if ne .ActiveTab "settings"}} hidden{{end}}>
 
           <div class="settings-group">
             <div class="settings-group-title">Schedule &amp; Retention</div>
