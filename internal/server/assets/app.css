@@ -776,3 +776,11 @@ pre.log {
   height: 22px;
   width: 100%;
 }
+
+/* Layout modifiers that used to be inline styles. The app ships a
+   `style-src 'self'` CSP, which blocks style attributes outright (a hash cannot
+   whitelist an attribute without 'unsafe-hashes'), so every visual adjustment
+   lives in a class here. */
+.v-sm { font-size: 14px; }
+.form-tight { margin-top: 0; }
+.copy-tight { margin-top: 6px; }
