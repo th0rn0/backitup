@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -199,21 +200,83 @@ func (s *Server) postOffsiteObjectDelete(w http.ResponseWriter, r *http.Request)
 // The bucket and prefix belong to the remote (model.Remote.RootPath); a remote
 // configured directly in rclone.conf has no row and therefore no root, which
 // keeps the path exactly as it was before buckets moved onto the remote.
+//
+// The name comes from model.OffsiteObjectName and may be the LEGACY unprefixed
+// spelling: a bucket written before name prefixes existed holds those objects,
+// so a download or a delete has to address the one that is really there. The
+// decision needs the directory listing, which is why it is made here and not in
+// the naming function — see offsiteObjectNameNow.
 func (s *Server) offsiteObjectPath(ctx context.Context, c *model.Client, offsiteDir, snapshotID string) (objectPath, objectName string, err error) {
-	root := ""
-	if c.OffsiteRemote != "" {
-		r, rErr := s.st.GetRemoteByName(ctx, c.OffsiteRemote)
-		if rErr != nil {
-			return "", "", rErr
-		}
-		if r != nil {
-			root = r.RootPath()
-		}
+	root, err := s.offsiteRoot(ctx, c)
+	if err != nil {
+		return "", "", err
 	}
-	objectName = model.OffsiteObjectName(c.Mode, c.OffsiteUploadMode, snapshotID)
+	objectName = s.offsiteObjectNameNow(ctx, c, root, offsiteDir, snapshotID)
 	// model.ObjectPath is the same join the offsite worker uploads with, so a
 	// download or delete addresses the object that was actually written.
 	return model.ObjectPath(root, offsiteDir, objectName), objectName, nil
+}
+
+// offsiteRoot is the path prefix inside the remote (bucket and optional prefix)
+// that a client's objects live under. "" is a valid answer: a remote with no row
+// keeps the path it had before buckets moved onto the remote.
+func (s *Server) offsiteRoot(ctx context.Context, c *model.Client) (string, error) {
+	if c.OffsiteRemote == "" {
+		return "", nil
+	}
+	r, err := s.st.GetRemoteByName(ctx, c.OffsiteRemote)
+	if err != nil {
+		return "", err
+	}
+	if r == nil {
+		return "", nil
+	}
+	return r.RootPath(), nil
+}
+
+// listOffsiteNames lists the filenames in a client's remote directory. A
+// failure is not an error for the caller: without a listing the current name is
+// the right guess, and rclone's own error is what the download or delete
+// reports.
+func (s *Server) listOffsiteNames(ctx context.Context, c *model.Client, root, offsiteDir string) ([]string, error) {
+	if s.rcloneConfig == "" {
+		return nil, errors.New("rclone is not configured")
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return lifecycle.NewRclone(s.rcloneConfig).Lsf(listCtx, c.OffsiteRemote, model.ObjectDir(root, offsiteDir))
+}
+
+// offsiteObjectNameNow returns the name to address for one snapshot: the
+// current (prefixed) name when the bucket has it, else the legacy unprefixed
+// name when the bucket has THAT, else the current name — so an object that is
+// really gone is reported under the name it should have had.
+//
+// One listing per call, and only when the two names differ: a client with no
+// prefix has exactly one possible name and costs no round trip.
+func (s *Server) offsiteObjectNameNow(ctx context.Context, c *model.Client, root, offsiteDir, snapshotID string) string {
+	names := model.OffsiteObjectNameCandidates(*c, s.namePrefixDefault, snapshotID)
+	if len(names) == 1 {
+		return names[0]
+	}
+	listed, err := s.listOffsiteNames(ctx, c, root, offsiteDir)
+	if err != nil {
+		return names[0]
+	}
+	return pickOffsiteName(names, listed)
+}
+
+// pickOffsiteName returns the first candidate the listing contains, else the
+// first candidate (the current name).
+func pickOffsiteName(candidates, listing []string) string {
+	for _, want := range candidates {
+		for _, have := range listing {
+			if have == want {
+				return want
+			}
+		}
+	}
+	return candidates[0]
 }
 
 // hotSnapshots lists a client's snapshots on the hot store as the UI should see
@@ -404,6 +467,15 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 	if offsiteDir == "" {
 		offsiteDir = c.Slug
 	}
+	// Resolve the remote root and list the directory ONCE for the whole batch:
+	// the name of an object depends on which spelling is really in the bucket
+	// (current or legacy), and listing per id would turn "delete selected" into
+	// one rclone call per row.
+	root, rootErr := s.offsiteRoot(ctx, c)
+	var listed []string
+	if rootErr == nil {
+		listed, _ = s.listOffsiteNames(ctx, c, root, offsiteDir)
+	}
 	rclone := lifecycle.NewRclone(s.rcloneConfig)
 	var failed, skipped []string
 	var firstErr error
@@ -416,16 +488,16 @@ func (s *Server) postBulkDeleteOffsiteObjects(w http.ResponseWriter, r *http.Req
 			skipped = append(skipped, fmt.Sprintf("%q", id))
 			continue
 		}
-		var objectPath string
-		objectPath, _, pathErr := s.offsiteObjectPath(ctx, c, offsiteDir, id)
-		if pathErr != nil {
-			log.Printf("bulk offsite delete: client=%s snap=%s: resolve path: %v", c.Name, id, pathErr)
+		if rootErr != nil {
+			log.Printf("bulk offsite delete: client=%s snap=%s: resolve path: %v", c.Name, id, rootErr)
 			failed = append(failed, fmt.Sprintf("%q", id))
 			if firstErr == nil {
-				firstErr = pathErr
+				firstErr = rootErr
 			}
 			continue
 		}
+		objectPath := model.ObjectPath(root, offsiteDir,
+			pickOffsiteName(model.OffsiteObjectNameCandidates(*c, s.namePrefixDefault, id), listed))
 		if err := rclone.Delete(ctx, c.OffsiteRemote, objectPath); err != nil {
 			log.Printf("bulk offsite delete: client=%s snap=%s: %v", c.Name, id, err)
 			failed = append(failed, fmt.Sprintf("%q", id))

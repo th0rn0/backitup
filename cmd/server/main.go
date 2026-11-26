@@ -9,10 +9,12 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/th0rn0/backitup/internal/auth"
 	"github.com/th0rn0/backitup/internal/lifecycle"
+	"github.com/th0rn0/backitup/internal/model"
 	"github.com/th0rn0/backitup/internal/server"
 	"github.com/th0rn0/backitup/internal/store"
 
@@ -53,6 +55,15 @@ func main() {
 		getenv("BACKITUP_SSH_HOST_KEY", "/srv/hostkeys/ssh_host_ed25519_key.pub"),
 	)
 	srv.ConfigureRclone(getenv("BACKITUP_RCLONE_CONFIG", "/data/rclone.conf"))
+	// The fleet-wide default for the prefix on offsite object names. Empty means
+	// "use each client's slug", which is the readable default; a value is a NAME,
+	// so it goes through the same rule a slug does and a bad one refuses startup
+	// rather than writing an object into a different directory.
+	namePrefixDefault := strings.TrimSpace(os.Getenv(model.NamePrefixDefaultEnv))
+	if reason := model.InvalidNamePrefix(namePrefixDefault); reason != "" {
+		log.Fatalf("backitup server: %s: %s", model.NamePrefixDefaultEnv, reason)
+	}
+	srv.ConfigureNamePrefixDefault(namePrefixDefault)
 	if err := srv.RegenerateRcloneConfig(context.Background()); err != nil {
 		log.Printf("warn: regenerate rclone config: %v", err)
 	}
@@ -103,6 +114,8 @@ func main() {
 		StaleRunTimeout:  parseInterval(getenv("BACKITUP_STALE_RUN_TIMEOUT", "2h")),
 		DiscordWebhook:   os.Getenv("BACKITUP_DISCORD_WEBHOOK"),
 		Verbose:          verbose,
+
+		NamePrefixDefault: namePrefixDefault,
 	}
 	stopLifecycle := lifecycle.StartWorker(context.Background(), lcDeps, parseInterval(getenv("BACKITUP_LIFECYCLE_INTERVAL", "5m")))
 	defer stopLifecycle()

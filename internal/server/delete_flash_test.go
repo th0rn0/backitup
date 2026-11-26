@@ -168,7 +168,7 @@ func TestBulkDeleteOffsiteObjectsEndToEnd(t *testing.T) {
 	srv, c, ts := deleteStack(t)
 	client, _ := makeClient(t, srv, c, ts, "nas", model.ModeRsync)
 	ctx := context.Background()
-	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all"); err != nil {
+	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all", nil); err != nil {
 		t.Fatalf("set offsite remote: %v", err)
 	}
 	for _, id := range []string{obj1, obj2} {
@@ -194,7 +194,9 @@ func TestBulkDeleteOffsiteObjectsEndToEnd(t *testing.T) {
 		t.Fatalf("read rclone calls: %v", err)
 	}
 	for _, id := range []string{obj1, obj2} {
-		want := "deletefile gdrive:nas/" + id + ".tar.gz"
+		// The object carries the client's name in front of the snapshot id, so a
+		// file found in the bucket is identifiable without the database.
+		want := "deletefile gdrive:nas/nas-" + id + ".tar.gz"
 		if !strings.Contains(string(callsBody), want) {
 			t.Errorf("rclone was not asked to %q; calls:\n%s", want, callsBody)
 		}
@@ -206,8 +208,8 @@ func TestBulkDeleteOffsiteObjectsEndToEnd(t *testing.T) {
 	if len(objs) != 0 {
 		t.Errorf("offsite records left behind after a successful delete: %+v", objs)
 	}
-	if strings.Contains(page, obj1) || strings.Contains(page, obj2) {
-		t.Errorf("deleted offsite objects are still listed on the page")
+	if strings.Contains(page, "/offsite/"+obj1+"/download") || strings.Contains(page, "/offsite/"+obj2+"/download") {
+		t.Errorf("deleted offsite objects are still listed on the page (their download links survived)")
 	}
 }
 
@@ -226,7 +228,7 @@ func TestBulkDeleteOffsiteFailureNamesIDsAndCount(t *testing.T) {
 	srv, c, ts := deleteStack(t)
 	client, _ := makeClient(t, srv, c, ts, "nas", model.ModeRsync)
 	ctx := context.Background()
-	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all"); err != nil {
+	if err := srv.st.UpdateClientOffsite(ctx, client.ID, "gdrive", "", "", "all", nil); err != nil {
 		t.Fatalf("set offsite remote: %v", err)
 	}
 	for _, id := range []string{ok, bad} {

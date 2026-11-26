@@ -250,8 +250,8 @@ func TestScheduledOffsiteUploadSurvivesCorruptTimestampRow(t *testing.T) {
 			"offsite uploads — that is the silent retention stall this pass exists to remove", len(off.up), off.up)
 	}
 	for obj := range off.up {
-		if !strings.HasSuffix(obj, "/backup-20260618T000002Z-000.tar.gz") {
-			t.Errorf("uploaded %q, want the never-offsited snapshot backup-20260618T000002Z-000.tar.gz", obj)
+		if !strings.HasSuffix(obj, "/"+defaultPrefix("c")+"backup-20260618T000002Z-000.tar.gz") {
+			t.Errorf("uploaded %q, want the never-offsited snapshot under the client's prefix (c-backup-20260618T000002Z-000.tar.gz)", obj)
 		}
 	}
 }

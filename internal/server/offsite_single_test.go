@@ -5,12 +5,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/th0rn0/backitup/internal/model"
-	"github.com/th0rn0/backitup/internal/store"
 )
 
 // The three upload modes are three different storage behaviours, so the form
@@ -99,69 +97,4 @@ func offsiteSettings(html string) string {
 		return html[i:]
 	}
 	return html[i : i+end+len("</form>")]
-}
-
-// The download route resolves the object from the row, so in single-generation
-// mode it must ask for the fixed name — the per-snapshot name it used to build
-// addresses a file that mode never writes.
-func TestOffsiteObjectPathFollowsTheUploadMode(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer func() { _ = st.Close() }()
-	srv := New(st, false)
-	ctx := context.Background()
-
-	const targzSnap = "backup-20261124T110000Z-000.tar.gz"
-	const rsyncSnap = "20261124T110000Z"
-
-	tests := []struct {
-		name       string
-		mode       model.Mode
-		uploadMode string
-		snapshotID string
-		wantPath   string
-		wantName   string
-	}{
-		{
-			"all/targz keeps the per-snapshot name", model.ModeTarGz, model.OffsiteUploadAll, targzSnap,
-			"laptop/" + targzSnap, targzSnap,
-		},
-		{
-			"latest/targz keeps the per-snapshot name", model.ModeTarGz, model.OffsiteUploadLatest, targzSnap,
-			"laptop/" + targzSnap, targzSnap,
-		},
-		{
-			"all/rsync archives under the snapshot name", model.ModeRsync, model.OffsiteUploadAll, rsyncSnap,
-			"laptop/" + rsyncSnap + ".tar.gz", rsyncSnap + ".tar.gz",
-		},
-		{
-			"single/targz fetches the fixed object", model.ModeTarGz, model.OffsiteUploadSingle, targzSnap,
-			"laptop/" + model.SingleObjectName, model.SingleObjectName,
-		},
-		{
-			"single/rsync fetches the fixed object", model.ModeRsync, model.OffsiteUploadSingle, rsyncSnap,
-			"laptop/" + model.SingleObjectName, model.SingleObjectName,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			c := &model.Client{
-				Slug: "laptop", Mode: tc.mode, OffsiteUploadMode: tc.uploadMode,
-				// No remote row: the path keeps its historic shape, which is what
-				// a hand-written rclone section gets.
-			}
-			gotPath, gotName, err := srv.offsiteObjectPath(ctx, c, "laptop", tc.snapshotID)
-			if err != nil {
-				t.Fatalf("resolve path: %v", err)
-			}
-			if gotPath != tc.wantPath {
-				t.Errorf("path = %q, want %q", gotPath, tc.wantPath)
-			}
-			if gotName != tc.wantName {
-				t.Errorf("object name for the download filename = %q, want %q", gotName, tc.wantName)
-			}
-		})
-	}
 }

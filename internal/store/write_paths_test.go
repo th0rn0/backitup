@@ -782,7 +782,7 @@ func TestUpdateClientOffsite(t *testing.T) {
 	ctx := t.Context()
 	id := mkClient(t, st, "c")
 
-	if err := st.UpdateClientOffsite(ctx, id, "b2-main", "cold/c", "", ""); err != nil {
+	if err := st.UpdateClientOffsite(ctx, id, "b2-main", "cold/c", "", "", nil); err != nil {
 		t.Fatalf("UpdateClientOffsite: %v", err)
 	}
 	got, err := st.GetClient(ctx, id)
@@ -796,7 +796,7 @@ func TestUpdateClientOffsite(t *testing.T) {
 		t.Errorf("upload mode = %q, want the default %q", got.OffsiteUploadMode, model.OffsiteUploadAll)
 	}
 
-	if err := st.UpdateClientOffsite(ctx, id, "b2-main", "cold/c", "0 3 * * *", model.OffsiteUploadSingle); err != nil {
+	if err := st.UpdateClientOffsite(ctx, id, "b2-main", "cold/c", "0 3 * * *", model.OffsiteUploadSingle, nil); err != nil {
 		t.Fatalf("UpdateClientOffsite (single): %v", err)
 	}
 	got, _ = st.GetClient(ctx, id)
@@ -805,14 +805,69 @@ func TestUpdateClientOffsite(t *testing.T) {
 	}
 
 	// Disabling offsite is an empty remote, not a deleted client.
-	if err := st.UpdateClientOffsite(ctx, id, "", "", "", ""); err != nil {
+	if err := st.UpdateClientOffsite(ctx, id, "", "", "", "", nil); err != nil {
 		t.Fatalf("disable offsite: %v", err)
 	}
 	if got, _ = st.GetClient(ctx, id); got.OffsiteRemote != "" {
 		t.Errorf("offsite remote = %q after disabling", got.OffsiteRemote)
 	}
 
-	if err := st.UpdateClientOffsite(ctx, 9999, "b2-main", "", "", ""); err == nil {
+	if err := st.UpdateClientOffsite(ctx, 9999, "b2-main", "", "", "", nil); err == nil {
 		t.Error("updating a client that does not exist reported success")
+	}
+}
+
+// The name prefix column is nullable for a reason: NULL ("nobody chose one", so
+// follow the fleet default and then the slug) and ” ("no prefix", the names an
+// older backitup wrote) are different settings, and a plain string column would
+// collapse them into one.
+func TestUpdateClientOffsiteNamePrefixIsThreeState(t *testing.T) {
+	st := openTestStore(t)
+	ctx := t.Context()
+	id := mkClient(t, st, "c")
+
+	// A client created without a prefix has no choice recorded at all.
+	if got, err := st.GetClient(ctx, id); err != nil || got == nil {
+		t.Fatalf("GetClient: %+v, %v", got, err)
+	} else if got.NamePrefixSet {
+		t.Errorf("a new client already has a chosen prefix %q", got.NamePrefix)
+	}
+
+	chosen := "nas"
+	if err := st.UpdateClientOffsite(ctx, id, "b2-main", "", "", "all", &chosen); err != nil {
+		t.Fatalf("set prefix: %v", err)
+	}
+	got, err := st.GetClient(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("GetClient: %+v, %v", got, err)
+	}
+	if !got.NamePrefixSet || got.NamePrefix != "nas" {
+		t.Errorf("prefix = %q (set=%v), want nas (set)", got.NamePrefix, got.NamePrefixSet)
+	}
+
+	// An explicit "no prefix" is stored as '' and stays distinguishable from
+	// "never chosen".
+	none := ""
+	if err := st.UpdateClientOffsite(ctx, id, "b2-main", "", "", "all", &none); err != nil {
+		t.Fatalf("clear prefix: %v", err)
+	}
+	got, err = st.GetClient(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("GetClient: %+v, %v", got, err)
+	}
+	if !got.NamePrefixSet || got.NamePrefix != "" {
+		t.Errorf("prefix = %q (set=%v), want the empty, chosen \"no prefix\"", got.NamePrefix, got.NamePrefixSet)
+	}
+
+	// nil clears the choice again.
+	if err := st.UpdateClientOffsite(ctx, id, "b2-main", "", "", "all", nil); err != nil {
+		t.Fatalf("unset prefix: %v", err)
+	}
+	got, err = st.GetClient(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("GetClient: %+v, %v", got, err)
+	}
+	if got.NamePrefixSet {
+		t.Errorf("prefix still marked as chosen (%q) after nil", got.NamePrefix)
 	}
 }

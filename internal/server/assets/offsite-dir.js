@@ -16,6 +16,7 @@
     var input  = document.getElementById('offsite-dir-input');
     var hint   = document.getElementById('offsite-dir-hint');
     var intRow = document.getElementById('offsite-interval-row');
+    var prefixRow = document.getElementById('offsite-prefix-row');
     if (!row) return;
 
     var opt     = sel.options[sel.selectedIndex];
@@ -27,6 +28,7 @@
     var show = !!remote;
     row.classList.toggle('hidden', !show);
     if (intRow) intRow.classList.toggle('hidden', !show);
+    if (prefixRow) prefixRow.classList.toggle('hidden', !show);
 
     if (!show) return;
 
@@ -34,6 +36,32 @@
     if (label) label.textContent = info.label;
     if (input) input.placeholder = info.placeholder;
     if (hint)  hint.textContent  = info.hint;
+  }
+
+  // The backup-name prefix field: show what the object will be called as the
+  // operator types, or while the "no prefix" box is ticked. The directory and
+  // the unprefixed name come from the server (data-*), so this never re-derives
+  // the naming rule in the browser — it only moves the prefix in front of it.
+  function updatePrefixExample() {
+    var ex     = document.getElementById('offsite-prefix-example');
+    var input  = document.getElementById('name_prefix');
+    if (!ex || !input) return;
+    var none   = document.getElementById('name_prefix_none');
+    var legacy = ex.getAttribute('data-legacy') || '';
+    var fallback = ex.getAttribute('data-fallback') || '';
+    var prefix = (none && none.checked) ? '' : (input.value.trim() || fallback);
+    var name = prefix ? prefix + '-' + legacy : legacy;
+    var dir = ex.getAttribute('data-dir') || '';
+    if (dir) name = dir + '/' + name;
+    ex.textContent = name;
+  }
+
+  var prefixInput = document.getElementById('name_prefix');
+  var prefixNone  = document.getElementById('name_prefix_none');
+  if (prefixInput) {
+    prefixInput.addEventListener('input', updatePrefixExample);
+    if (prefixNone) prefixNone.addEventListener('change', updatePrefixExample);
+    updatePrefixExample();
   }
 
   var sel = document.getElementById('offsite_remote');

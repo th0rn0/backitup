@@ -126,6 +126,14 @@ type Deps struct {
 	DiscordWebhook string              // empty disables Discord alerts
 	Verbose        bool                // log offsite uploads/deletes and status changes
 	staleAlerted   map[int64]time.Time // keyed by client ID; set by StartWorker
+
+	// NamePrefixDefault is BACKITUP_NAME_PREFIX_DEFAULT: the prefix every
+	// client's offsite object names carry when the client has not chosen one.
+	// Empty means "use each client's slug". It is only a default — a client's
+	// own name_prefix wins — and it is resolved by model.NamePrefix, so the
+	// uploader, the verification pass and the server's download route cannot
+	// disagree about what a client's objects are called.
+	NamePrefixDefault string
 }
 
 func (d Deps) now() time.Time {
@@ -610,8 +618,8 @@ func offsiteSingleSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.
 		return 0, false, fmt.Errorf("checksum %s: %w", newest.ID, err)
 	}
 
-	live := objectPathFor(root, c, newest.ID)
-	part := model.ObjectPath(root, offsiteDir(c), model.SingleObjectPartName)
+	live := objectPathFor(d, root, c, newest.ID)
+	part := model.ObjectPath(root, offsiteDir(c), model.OffsiteObjectPartName(c, d.NamePrefixDefault))
 
 	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, part)
 	if err != nil {
@@ -728,7 +736,7 @@ func offsiteSnapshot(ctx context.Context, d Deps, c model.Client, sm mode.Server
 		return 0, false, nil
 	}
 
-	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPathFor(root, c, s.ID))
+	bytes, err := d.Offsite.Upload(ctx, obj, c.OffsiteRemote, objectPathFor(d, root, c, s.ID))
 	if err != nil {
 		return 0, false, fmt.Errorf("offsite upload %s: %w", s.ID, err)
 	}
@@ -1229,8 +1237,23 @@ func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root stri
 
 	now := d.now().UTC()
 	missingOwners := make(map[string]bool, len(objects))
+	legacyOnly := 0
 	for _, o := range objects {
-		missing := !fileSet[objectNameFor(c, o.SnapshotID)]
+		// Both spellings are accepted, from the ONE listing above: an object
+		// written before name prefixes existed sits under its legacy name, and
+		// reporting it missing would read as data loss and un-protect the hot
+		// copy that is now the only one. The current name is tested first so a
+		// renamed object is not also counted as legacy.
+		name := objectNameFor(d, c, o.SnapshotID)
+		found := fileSet[name]
+		if !found {
+			if legacy := model.OffsiteObjectLegacyName(c, o.SnapshotID); legacy != name {
+				if found = fileSet[legacy]; found {
+					legacyOnly++
+				}
+			}
+		}
+		missing := !found
 		if err := d.Store.UpdateOffsiteRemoteStatus(ctx, o.ID, missing, now); err != nil {
 			log.Printf("lifecycle: offsite verify: update: %v", err)
 			continue
@@ -1238,8 +1261,16 @@ func verifyOffsiteObjects(ctx context.Context, d Deps, c model.Client, root stri
 		if missing {
 			missingOwners[o.SnapshotID] = true
 			log.Printf("lifecycle: offsite verify: client=%s snap=%s object %s missing from %s",
-				c.Name, o.SnapshotID, objectNameFor(c, o.SnapshotID), c.OffsiteRemote)
+				c.Name, o.SnapshotID, name, c.OffsiteRemote)
 		}
+	}
+	if legacyOnly > 0 {
+		// Once per client per pass, not once per object: a fleet that upgraded
+		// keeps writing new prefixed objects while the older ones stay under
+		// their legacy names until the bucket rule expires them, and an operator
+		// reading the log wants the count and the reason in one line.
+		log.Printf("lifecycle: offsite verify: client=%s: %d object(s) are still under their legacy unprefixed name in %s; they are counted as present",
+			c.Name, legacyOnly, c.OffsiteRemote)
 	}
 	flagGoneDedupOwners(ctx, d, c, all, missingOwners, now)
 }
@@ -1286,7 +1317,7 @@ func flagGoneDedupOwners(ctx context.Context, d Deps, c model.Client, all []mode
 		more = fmt.Sprintf(" (and %d more run(s) deduplicated against the same object)", n)
 	}
 	log.Printf("lifecycle: offsite object %s referenced by run %s is gone (expired by the bucket lifecycle rule): re-uploading%s",
-		objectNameFor(c, first.DedupOf), objectNameFor(c, first.SnapshotID), more)
+		objectNameFor(d, c, first.DedupOf), objectNameFor(d, c, first.SnapshotID), more)
 }
 
 // offsiteDue returns true when the client's cron schedule has a tick between
@@ -1418,19 +1449,20 @@ func remoteDir(root, dir string) string {
 }
 
 // objectNameFor is the file name one snapshot has inside the remote directory,
-// for this client's upload mode: its own name in the immutable modes, the fixed
-// name in single-generation mode. model.OffsiteObjectName owns the rule so the
+// for this client's upload mode and name prefix: its own name in the immutable
+// modes, the fixed name in single-generation mode, the client's prefix in front
+// of either. model.OffsiteObjectName owns the rule so the uploader, this
 // verification pass and the server's download route cannot drift from it.
-func objectNameFor(c model.Client, snapshotID string) string {
-	return model.OffsiteObjectName(c.Mode, c.OffsiteUploadMode, snapshotID)
+func objectNameFor(d Deps, c model.Client, snapshotID string) string {
+	return model.OffsiteObjectName(c, d.NamePrefixDefault, snapshotID)
 }
 
 // objectPathFor returns the path of one snapshot's offsite object:
 // "<root>/<dir>/<file>", where root is the bucket (and optional prefix) the
 // remote was configured with — "" for a remote backitup has no row for, which
 // keeps the old path.
-func objectPathFor(root string, c model.Client, snapshotID string) string {
-	return model.ObjectPath(root, offsiteDir(c), objectNameFor(c, snapshotID))
+func objectPathFor(d Deps, root string, c model.Client, snapshotID string) string {
+	return model.ObjectPath(root, offsiteDir(c), objectNameFor(d, c, snapshotID))
 }
 
 // fileChecksum returns the SHA-256 hex digest of the file at path.

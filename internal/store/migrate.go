@@ -11,7 +11,7 @@ import (
 
 // schemaVersion is the version this binary writes. It must equal the last entry
 // of migrations (asserted by TestSchemaVersionMatchesLastStep).
-const schemaVersion = 8
+const schemaVersion = 9
 
 // droppedColumns names, per table, the columns a migration is allowed to remove.
 //
@@ -98,6 +98,12 @@ var migrations = []migration{
 	// defaults to 0, so every existing client keeps the command it has and the
 	// snapshot shape it already produces until an operator turns it on.
 	{version: 8, name: "record source ownership", fkOff: true, apply: applyCanonicalShape},
+	// v9: name_prefix, the prefix a client's offsite object names carry. The
+	// column is nullable on purpose: NULL means "not chosen", which resolves to
+	// the fleet default and otherwise the client's slug — so an upgraded
+	// database starts naming new objects after their client — while '' is a
+	// deliberate "no prefix" that keeps the old names.
+	{version: 9, name: "backup name prefix", fkOff: true, apply: applyCanonicalShape},
 }
 
 // migrationFault is a test seam. When set, it is called at each point inside a
