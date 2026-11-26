@@ -362,6 +362,20 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Name prefix, for the Settings field: the stored text (empty when nobody
+	// chose one), the number a blank field falls back to, the "no prefix"
+	// checkbox state, and an example of the resulting object name built by the
+	// SAME function the uploader uses.
+	namePrefixFallback := s.namePrefixDefault
+	if namePrefixFallback == "" {
+		namePrefixFallback = c.Slug
+	}
+	exampleSnap := "20260101T000000Z"
+	if len(localSnapshots) > 0 {
+		exampleSnap = localSnapshots[0].ID
+	}
+	exampleName := model.OffsiteObjectName(*c, s.namePrefixDefault, exampleSnap)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.ExecuteTemplate(w, "client_detail.html", map[string]any{
 		"Username":            usernameFromContext(r.Context()),
@@ -392,7 +406,30 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 		// The restore command for a snapshot that records ownership is a pull
 		// from this server, so the page needs the ingest address to state it.
 		"PublicHost": s.publicHost,
+
+		// Backup name prefix: what the field holds, what blank means, and a
+		// live example of the object name it produces. NamePrefixExampleDir is
+		// the directory the example sits in, so the page can show the whole
+		// object path without guessing the remote's root.
+		"NamePrefixInput":         c.NamePrefix,
+		"NamePrefixNone":          c.NamePrefixSet && c.NamePrefix == "",
+		"NamePrefixFallback":      namePrefixFallback,
+		"NamePrefixExample":       exampleName,
+		"NamePrefixExampleDir":    offsiteDirForPage(*c),
+		"NamePrefixExampleLegacy": model.OffsiteObjectLegacyName(*c, exampleSnap),
+		"NamePrefixSingle":        c.OffsiteUploadMode == model.OffsiteUploadSingle,
 	})
+}
+
+// offsiteDirForPage is the directory component a client's objects live in, as
+// the page must show it: the configured subdirectory, else the slug. It is the
+// same rule lifecycle.offsiteDir applies, kept here so a template never has to
+// know it.
+func offsiteDirForPage(c model.Client) string {
+	if c.OffsiteDir != "" {
+		return c.OffsiteDir
+	}
+	return c.Slug
 }
 
 // getRunLog renders the log output for a single run.
@@ -840,6 +877,23 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// The name prefix is three-state. "No prefix" is a checkbox, so it survives
+	// a browser that leaves a text input blank; a blank text input with the box
+	// clear means "nobody chose one", written as NULL so the client follows the
+	// fleet default and then its slug.
+	namePrefix := resolveNamePrefixForm(r.PostFormValue("name_prefix"), r.PostFormValue("name_prefix_none") == "1")
+	if namePrefix != nil {
+		// Validated here as well as in the model because this is where the
+		// operator typed it: a prefix with a separator would add a path
+		// component, and the refusal has to name the offender on the page
+		// rather than answer a bare 400.
+		if reason := model.InvalidNamePrefix(*namePrefix); reason != "" {
+			http.Redirect(w, r, clientFlashURL(r.PathValue("name"),
+				"err", "backup name prefix refused: "+reason), http.StatusSeeOther)
+			return
+		}
+	}
+
 	ctx, cancel := s.storeCtx(r)
 	defer cancel()
 
@@ -874,7 +928,7 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, cronExpr, uploadMode); err != nil {
+	if err := s.st.UpdateClientOffsite(ctx, c.ID, remote, dir, cronExpr, uploadMode, namePrefix); err != nil {
 		if s.storeFailure(w, ctx, fmt.Sprintf("offsite: update client %d (%q)", c.ID, c.Name), err) {
 			return
 		}
@@ -883,6 +937,26 @@ func (s *Server) postUpdateClientOffsite(w http.ResponseWriter, r *http.Request)
 	}
 
 	http.Redirect(w, r, "/clients/"+r.PathValue("name"), http.StatusSeeOther)
+}
+
+// resolveNamePrefixForm turns the Settings form's two controls into the model's
+// three-state prefix:
+//
+//	"no prefix" checked        -> "" (a deliberate "no prefix": the old names)
+//	text non-empty             -> that text, trimmed (validated by the caller)
+//	text empty, box clear      -> nil (nobody chose one: fleet default, then slug)
+//
+// The checkbox exists because a single text input cannot tell "blank, use the
+// default" from "blank, write no prefix", and those two are different settings.
+func resolveNamePrefixForm(text string, none bool) *string {
+	if none {
+		empty := ""
+		return &empty
+	}
+	if v := strings.TrimSpace(text); v != "" {
+		return &v
+	}
+	return nil
 }
 
 // postTestClientOffsite checks connectivity for a client's configured rclone

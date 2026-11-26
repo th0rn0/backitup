@@ -167,6 +167,21 @@ type Client struct {
 	Enabled   bool
 	CreatedAt time.Time
 	Version   int // compare-and-swap guard for credential rotation
+
+	// NamePrefix is the prefix this client's offsite object names carry, and
+	// NamePrefixSet says whether anyone chose one. The pair is three-state on
+	// purpose, and the two are kept apart because the difference is the
+	// behaviour an operator asks for:
+	//
+	//	unset       -> the fleet default (BACKITUP_NAME_PREFIX_DEFAULT), else
+	//	               the client's slug. What every client gets on upgrade.
+	//	set to ""   -> no prefix at all: the names backitup wrote before this
+	//	               setting existed, for an operator who wants them back.
+	//	set to "x"  -> "x", validated by InvalidNamePrefix.
+	//
+	// It names objects; it never becomes part of a path (see NamePrefix).
+	NamePrefix    string
+	NamePrefixSet bool
 }
 
 // Run is one execution of a client backup, recorded from POST /api/v1/status.

@@ -318,6 +318,16 @@
                 <div id="offsite-dir-hint" class="field-hint"></div>
               </div>
 
+              <div id="offsite-prefix-row" class="hidden">
+                <label for="name_prefix">Backup name prefix</label>
+                <input id="name_prefix" name="name_prefix" value="{{.NamePrefixInput}}" placeholder="{{.NamePrefixFallback}}" autocomplete="off" aria-describedby="offsite-prefix-example">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="name_prefix_none" name="name_prefix_none" value="1"{{if .NamePrefixNone}} checked{{end}}>
+                  <span>No prefix — write objects under their snapshot id, as older backitup did</span>
+                </label>
+                <div class="field-hint">blank = <code>{{.NamePrefixFallback}}</code> · the object is named <code id="offsite-prefix-example" data-dir="{{.NamePrefixExampleDir}}" data-fallback="{{.NamePrefixFallback}}" data-legacy="{{.NamePrefixExampleLegacy}}">{{.NamePrefixExample}}</code></div>
+              </div>
+
               <div id="offsite-interval-row" class="hidden">
                 <label for="offsite_cron">Upload schedule (cron)</label>
                 <input id="offsite_cron" name="offsite_cron" value="{{.Client.OffsiteCron}}" placeholder="e.g. 0 2 * * *" autocomplete="off">

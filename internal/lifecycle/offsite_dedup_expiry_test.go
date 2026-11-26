@@ -87,7 +87,7 @@ func TestDedupedRunIsFlaggedAndReuploadedWhenItsOwnerObjectExpires(t *testing.T)
 	if err := RunOnce(ctx, deps); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	want := "offsite object " + owner + " referenced by run " + dependent +
+	want := "offsite object " + defaultPrefix("c") + owner + " referenced by run " + defaultPrefix("c") + dependent +
 		" is gone (expired by the bucket lifecycle rule): re-uploading"
 	if !strings.Contains(logs.String(), want) {
 		t.Fatalf("the pass must name the expired object and the run that deduped against it;\nwant: %s\ngot:\n%s", want, logs.String())
@@ -277,7 +277,7 @@ func offsiteRow(t *testing.T, st *store.Store, clientID int64, snapshotID string
 // not. It reports whether anything was removed.
 func deleteObject(off *fakeOffsite, snapshotID string) bool {
 	for obj := range off.up {
-		if strings.HasSuffix(obj, "/"+snapshotID) || obj == snapshotID {
+		if objectIsFor(obj, snapshotID) {
 			delete(off.up, obj)
 			return true
 		}
@@ -288,9 +288,17 @@ func deleteObject(off *fakeOffsite, snapshotID string) bool {
 // remoteHolds reports whether the fake remote still has that object.
 func remoteHolds(off *fakeOffsite, snapshotID string) bool {
 	for obj := range off.up {
-		if strings.HasSuffix(obj, "/"+snapshotID) || obj == snapshotID {
+		if objectIsFor(obj, snapshotID) {
 			return true
 		}
 	}
 	return false
+}
+
+// objectIsFor reports whether an object name on the fake remote holds that
+// snapshot. Objects are named "<dir>/<prefix>-<snapshot id>", or
+// "<dir>/<snapshot id>" for a client with no prefix (and for every object a
+// bucket written before name prefixes holds), so both spellings match.
+func objectIsFor(obj, snapshotID string) bool {
+	return strings.HasSuffix(obj, "/"+snapshotID) || strings.HasSuffix(obj, "-"+snapshotID) || obj == snapshotID
 }

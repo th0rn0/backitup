@@ -295,14 +295,14 @@ func (s *Store) CreateClient(ctx context.Context, c model.Client) (int64, error)
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, skip_symlinks,
 			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs,
-			group_readable, record_ownership)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			group_readable, record_ownership, name_prefix)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Name, c.Slug, string(c.Mode), c.SourceLabel, string(excludes), c.RetentionDays,
 		c.ExpectedIntervalSecs, c.OffsiteRemote, c.OffsiteDir,
 		c.OffsiteCron, c.SSHPubKey, c.TokenHash, c.TokenPrefix, b2i(c.Enabled), time.Now().UTC().Format(rfc3339),
 		b2i(c.SkipSymlinks), c.OffsiteUploadMode,
 		b2i(c.PreserveSparse), b2i(c.PreserveHardlinks), b2i(c.PreserveACLs), b2i(c.PreserveXattrs),
-		b2i(c.GroupReadable), b2i(c.RecordOwnership))
+		b2i(c.GroupReadable), b2i(c.RecordOwnership), nullablePrefix(c))
 	if err != nil {
 		// A concurrent create can slip past the pre-check; the unique index is
 		// what actually guarantees one client per slug.
@@ -323,7 +323,7 @@ func (s *Store) ListClients(ctx context.Context) ([]model.Client, error) {
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
 			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs,
-			group_readable, record_ownership
+			group_readable, record_ownership, name_prefix
 		FROM clients ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -352,7 +352,7 @@ func (s *Store) GetClientBySlug(ctx context.Context, slug string) (*model.Client
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
 			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs,
-			group_readable, record_ownership
+			group_readable, record_ownership, name_prefix
 		FROM clients WHERE slug = ?`, slug)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -371,7 +371,7 @@ func (s *Store) GetClient(ctx context.Context, id int64) (*model.Client, error) 
 			expected_interval_secs, offsite_remote, offsite_dir,
 			offsite_cron, ssh_pubkey, token_hash, token_prefix, enabled, created_at, version, skip_symlinks,
 			offsite_upload_mode, preserve_sparse, preserve_hardlinks, preserve_acls, preserve_xattrs,
-			group_readable, record_ownership
+			group_readable, record_ownership, name_prefix
 		FROM clients WHERE id = ?`, id)
 	c, err := scanClient(row)
 	if err == sql.ErrNoRows {
@@ -1122,13 +1122,18 @@ func (s *Store) DeleteRemote(ctx context.Context, name string) error {
 
 // UpdateClientOffsite changes the offsite destination settings for a client.
 // An empty remote disables offsite tiering for this client.
-func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir, cronExpr, uploadMode string) error {
+//
+// namePrefix is three-state, and nil is not the same as a pointer to "": nil
+// clears the choice so the client follows the fleet default and then its slug,
+// while "" is a client that must not carry a prefix at all. See
+// model.Client.NamePrefix.
+func (s *Store) UpdateClientOffsite(ctx context.Context, id int64, remote, dir, cronExpr, uploadMode string, namePrefix *string) error {
 	if uploadMode == "" {
 		uploadMode = "all"
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_cron=?, offsite_upload_mode=? WHERE id=?`,
-		remote, dir, cronExpr, uploadMode, id)
+		`UPDATE clients SET offsite_remote=?, offsite_dir=?, offsite_cron=?, offsite_upload_mode=?, name_prefix=? WHERE id=?`,
+		remote, dir, cronExpr, uploadMode, namePrefix, id)
 	if err != nil {
 		return fmt.Errorf("update offsite remote: %w", err)
 	}
@@ -1416,6 +1421,16 @@ func b2i(b bool) int {
 	return 0
 }
 
+// nullablePrefix turns the model's two-field prefix into the column's three
+// states: an unset prefix is NULL (follow the fleet default, then the slug), a
+// chosen one is stored as-is (” included, which means "no prefix").
+func nullablePrefix(c model.Client) any {
+	if !c.NamePrefixSet {
+		return nil
+	}
+	return c.NamePrefix
+}
+
 type scanner interface{ Scan(...any) error }
 
 // scanClientStorage reads one client_storage row. sql.ErrNoRows is not an
@@ -1443,10 +1458,11 @@ func scanClient(sc scanner) (model.Client, error) {
 	var mode, excludes, createdAt string
 	var enabled, skipSymlinks int
 	var sparse, hardlinks, acls, xattrs, groupReadable, ownership int
+	var namePrefix sql.NullString
 	if err := sc.Scan(&c.ID, &c.Name, &c.Slug, &mode, &c.SourceLabel, &excludes, &c.RetentionDays,
 		&c.ExpectedIntervalSecs, &c.OffsiteRemote, &c.OffsiteDir,
 		&c.OffsiteCron, &c.SSHPubKey, &c.TokenHash, &c.TokenPrefix, &enabled, &createdAt, &c.Version, &skipSymlinks,
-		&c.OffsiteUploadMode, &sparse, &hardlinks, &acls, &xattrs, &groupReadable, &ownership); err != nil {
+		&c.OffsiteUploadMode, &sparse, &hardlinks, &acls, &xattrs, &groupReadable, &ownership, &namePrefix); err != nil {
 		return c, err
 	}
 	c.Mode = model.Mode(mode)
@@ -1458,6 +1474,9 @@ func scanClient(sc scanner) (model.Client, error) {
 	c.PreserveXattrs = xattrs != 0
 	c.RecordOwnership = ownership != 0
 	c.GroupReadable = groupReadable != 0
+	// NULL and '' are different answers, so the NULL-ness carries through to the
+	// model: unset follows the fleet default, '' means "no prefix".
+	c.NamePrefix, c.NamePrefixSet = namePrefix.String, namePrefix.Valid
 	if excludes != "" {
 		_ = json.Unmarshal([]byte(excludes), &c.Excludes)
 	}

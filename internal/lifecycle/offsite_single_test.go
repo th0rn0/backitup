@@ -27,6 +27,12 @@ func singleModeClient(t *testing.T, st *store.Store, name string, retentionDays 
 	})
 }
 
+// defaultPrefix is the prefix a client with no fleet default carries: its own
+// slug (model.NamePrefix). The fixtures here set no BACKITUP_NAME_PREFIX_DEFAULT,
+// so an object is called "<slug>-<snapshot id>"; the assertions spell that out
+// instead of calling the function under test.
+func defaultPrefix(slug string) string { return slug + "-" }
+
 // singleObjectKeys returns the object names the fake remote holds, sorted.
 func singleObjectKeys(up map[string]int64) []string {
 	keys := make([]string, 0, len(up))
@@ -49,7 +55,7 @@ func TestSingleModeKeepsOneObjectOneRowAndTheNewestPayload(t *testing.T) {
 	off := deps.Offsite.(*fakeOffsite)
 	ctx := context.Background()
 
-	live := model.ObjectPath("", "laptop", model.SingleObjectName)
+	live := model.ObjectPath("", "laptop", defaultPrefix("laptop")+model.SingleObjectName)
 	first := filepath.Join(dir, "backup-20261124T090000Z-000.tar.gz")
 	mkArchiveContent(t, first, now.Add(-3*time.Hour), "payload-one")
 
@@ -147,7 +153,7 @@ func TestSingleModeFailedUploadLeavesThePreviousCopyAndRow(t *testing.T) {
 	off := deps.Offsite.(*fakeOffsite)
 	ctx := context.Background()
 
-	live := model.ObjectPath("", "laptop", model.SingleObjectName)
+	live := model.ObjectPath("", "laptop", defaultPrefix("laptop")+model.SingleObjectName)
 	first := filepath.Join(dir, "backup-20261124T090000Z-000.tar.gz")
 	mkArchiveContent(t, first, now.Add(-3*time.Hour), "payload-one")
 	if err := RunOffsiteOnce(ctx, deps); err != nil {
@@ -203,7 +209,7 @@ func TestSingleModeVerificationReportsTheFixedObjectMissing(t *testing.T) {
 	off := deps.Offsite.(*fakeOffsite)
 	ctx := context.Background()
 
-	live := model.ObjectPath("", "laptop", model.SingleObjectName)
+	live := model.ObjectPath("", "laptop", defaultPrefix("laptop")+model.SingleObjectName)
 	mkArchiveContent(t, filepath.Join(dir, "backup-20261124T090000Z-000.tar.gz"), now.Add(-1*time.Hour), "payload-one")
 	if err := RunOffsiteOnce(ctx, deps); err != nil {
 		t.Fatalf("upload: %v", err)
@@ -414,7 +420,7 @@ func TestSingleModeUploadsToTheStagingNameThenMovesItIntoPlace(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("a single-generation upload must issue exactly two rclone calls (copyto, moveto), got %d:\n%s", len(lines), log)
 	}
-	live := "offsite:my-backups/backups/laptop/" + model.SingleObjectName
+	live := "offsite:my-backups/backups/laptop/" + defaultPrefix("laptop") + model.SingleObjectName
 	part := live + ".part"
 	if want := "copyto " + archive + " " + part; !strings.Contains(lines[0], want) {
 		t.Fatalf("first call is not the upload to the staging name;\nwant an invocation containing: %s\ngot: %s", want, lines[0])
@@ -537,7 +543,7 @@ func TestSingleModeEndToEndThroughTheLocalBackend(t *testing.T) {
 
 	// The name the download route resolves is the one that exists, and it
 	// decrypts to the newest snapshot — not the first one ever uploaded.
-	objectPath := model.ObjectPath("", "laptop", model.SingleObjectName)
+	objectPath := model.ObjectPath("", "laptop", defaultPrefix("laptop")+model.SingleObjectName)
 	out, err := exec.Command(rcloneBin, "--config", confPath, "cat", "vault:"+objectPath).Output()
 	if err != nil {
 		t.Fatalf("rclone cat vault:%s: %v", objectPath, err)

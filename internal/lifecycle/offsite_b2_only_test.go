@@ -75,7 +75,7 @@ func TestOffsiteUploadAddressesTheRemoteBucketAndPrefix(t *testing.T) {
 	}
 
 	log := rcloneCalls(t, calls)
-	want := "copyto " + archive + " offsite:my-backups/backups/c/backup-20261118T100000Z-000.tar.gz"
+	want := "copyto " + archive + " offsite:my-backups/backups/c/" + defaultPrefix("c") + "backup-20261118T100000Z-000.tar.gz"
 	if !strings.Contains(log, want) {
 		t.Fatalf("offsite upload did not address the bucket and prefix;\nwant an invocation containing: %s\ngot:\n%s", want, log)
 	}
@@ -142,7 +142,8 @@ func TestUnsupportedRemoteSkipsOffsiteAndKeepsHotCopies(t *testing.T) {
 
 // A client whose remote has no row at all — a section the operator wrote in
 // rclone.conf by hand — keeps the path it has always had: the bucket/prefix
-// only exist when a remote row was configured through the UI.
+// only exist when a remote row was configured through the UI. The backup's NAME
+// is not affected either way: it still carries the client's prefix.
 func TestHandWrittenRemoteKeepsTheUnprefixedPath(t *testing.T) {
 	calls := installRecordingRclone(t)
 	st := openStore(t)
@@ -163,7 +164,7 @@ func TestHandWrittenRemoteKeepsTheUnprefixedPath(t *testing.T) {
 	if err := RunOffsiteOnce(context.Background(), deps); err != nil {
 		t.Fatalf("RunOffsiteOnce: %v", err)
 	}
-	want := "copyto " + archive + " byhand:c/backup-20261118T100000Z-000.tar.gz"
+	want := "copyto " + archive + " byhand:c/" + defaultPrefix("c") + "backup-20261118T100000Z-000.tar.gz"
 	if log := rcloneCalls(t, calls); !strings.Contains(log, want) {
 		t.Fatalf("a hand-written remote's path changed;\nwant an invocation containing: %s\ngot:\n%s", want, log)
 	}

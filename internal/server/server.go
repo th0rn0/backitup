@@ -61,6 +61,13 @@ type Server struct {
 	// offsiteTrigger runs an immediate offsite pass for a single client.
 	// Nil disables the "Backup now" button. Wired by ConfigureOffsiteTrigger.
 	offsiteTrigger func(ctx context.Context, clientID int64) error
+
+	// namePrefixDefault is BACKITUP_NAME_PREFIX_DEFAULT: the prefix a client's
+	// offsite object names carry when the client has not chosen one, empty
+	// meaning "use the slug". Wired by ConfigureNamePrefixDefault; model.NamePrefix
+	// is what resolves it, so the server, the lifecycle uploader and the
+	// verification pass all name an object the same way.
+	namePrefixDefault string
 }
 
 // New returns a Server backed by the given store. secure marks session cookies
@@ -201,6 +208,15 @@ func (s *Server) ConfigureRclone(path string) {
 	if path != "" {
 		s.rcloneConfig = path
 	}
+}
+
+// ConfigureNamePrefixDefault sets BACKITUP_NAME_PREFIX_DEFAULT: the prefix a
+// client's offsite object names carry when the client has not chosen one.
+// Empty means "use each client's slug". The value is validated by the caller
+// (model.InvalidNamePrefix): a prefix that could become a path must never reach
+// an object name.
+func (s *Server) ConfigureNamePrefixDefault(prefix string) {
+	s.namePrefixDefault = prefix
 }
 
 // SyncAuthorizedKeys regenerates the sshd authorized_keys file from the current

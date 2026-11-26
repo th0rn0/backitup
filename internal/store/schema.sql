@@ -52,7 +52,16 @@ CREATE TABLE IF NOT EXISTS clients (
     -- snapshot belongs to the receiver account, which is what every existing
     -- client keeps on upgrade: a tree that suddenly carried pseudo-ownership
     -- would confuse every operator and every restore script that predates it.
-    record_ownership        INTEGER NOT NULL DEFAULT 0
+    record_ownership        INTEGER NOT NULL DEFAULT 0,
+    -- Prefix on this client's offsite object names and download filenames.
+    -- NULL and '' are different states, which is why the column is nullable:
+    -- NULL = nobody chose one, so the client follows
+    -- BACKITUP_NAME_PREFIX_DEFAULT and otherwise its own slug (what every
+    -- client gets on upgrade); '' = a deliberate "no prefix", the names an
+    -- older backitup wrote. Collapsing the two would leave an operator who
+    -- wants the old names no way to ask for them, or would silently keep
+    -- every existing client on the old names. See model.Client.NamePrefix.
+    name_prefix             TEXT
 );
 
 CREATE TABLE IF NOT EXISTS runs (

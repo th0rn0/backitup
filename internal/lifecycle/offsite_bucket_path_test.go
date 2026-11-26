@@ -72,7 +72,7 @@ func TestOffsiteObjectPathNamesTheBucketOnce(t *testing.T) {
 	}
 
 	log := rcloneCalls(t, calls)
-	want := "tehHulk-source:tehhulk-source/" + snap
+	want := "tehHulk-source:tehhulk-source/" + defaultPrefix("tehhulk-source") + snap
 	if dst := copyDestination(log); dst != want {
 		t.Fatalf("the object path does not address the bucket once:\n got: %s\nwant: %s\nfull rclone log:\n%s", dst, want, log)
 	}
