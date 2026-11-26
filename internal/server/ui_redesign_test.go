@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -253,30 +255,51 @@ func TestNavHitBox(t *testing.T) {
 	}
 }
 
-// TestContrastRatios computes body text on background (must be >=7:1) and muted
-// text on background (>=4.5:1).
+// TestContrastRatios reads the text tokens out of app.css and asserts body text
+// on the background is at least 7:1 and every dimmer text token at least 4.5:1.
+//
+// It parses the stylesheet rather than hard-coding the hexes: the first version
+// of this test checked only --text and --text-dim as literals, and passed while
+// --text-dimmer (the small uppercase field labels, 10.5px) rendered at 3.77:1.
+// A contrast test that cannot see a token the page actually uses is not a test.
 func TestContrastRatios(t *testing.T) {
-	// Design tokens:
-	// --bg: #0d1014 = rgb(13, 16, 20)
-	// --text: #e9eef4 = rgb(233, 238, 244)
-	// --text-dim: #8d9aa8 = rgb(141, 154, 168)
+	css := readAsset(t, "app.css")
+	tokens := map[string][3]int{}
+	for _, name := range []string{"bg", "text", "text-dim", "text-dimmer", "never"} {
+		tokens[name] = cssHexToken(t, css, name)
+	}
+	ratio := func(name string) float64 {
+		a, b := tokens[name], tokens["bg"]
+		return contrastRatio(relativeLuminance(a[0], a[1], a[2]), relativeLuminance(b[0], b[1], b[2]))
+	}
 
-	bgLum := relativeLuminance(13, 16, 20)
-	textLum := relativeLuminance(233, 238, 244)
-	dimLum := relativeLuminance(141, 154, 168)
-
-	bodyRatio := contrastRatio(textLum, bgLum)
-	mutedRatio := contrastRatio(dimLum, bgLum)
-
-	t.Logf("Body text contrast: %.2f:1 (must be >= 7:1)", bodyRatio)
-	t.Logf("Muted text contrast: %.2f:1 (must be >= 4.5:1)", mutedRatio)
-
+	bodyRatio := ratio("text")
+	t.Logf("body text contrast: %.2f:1 (must be >= 7:1)", bodyRatio)
 	if bodyRatio < 7.0 {
 		t.Errorf("body text contrast %.2f:1 < 7:1", bodyRatio)
 	}
-	if mutedRatio < 4.5 {
-		t.Errorf("muted text contrast %.2f:1 < 4.5:1", mutedRatio)
+	for _, name := range []string{"text-dim", "text-dimmer", "never"} {
+		r := ratio(name)
+		t.Logf("--%s contrast: %.2f:1 (must be >= 4.5:1)", name, r)
+		if r < 4.5 {
+			t.Errorf("--%s contrast %.2f:1 < 4.5:1 — it is used for small text, not decoration", name, r)
+		}
 	}
+}
+
+// cssHexToken returns the RGB of a :root custom property, e.g. `--text-dim: #8d9aa8;`.
+func cssHexToken(t *testing.T, css, name string) [3]int {
+	t.Helper()
+	re := regexp.MustCompile(`--` + regexp.QuoteMeta(name) + `:\s*#([0-9a-fA-F]{6})`)
+	m := re.FindStringSubmatch(css)
+	if m == nil {
+		t.Fatalf("token --%s not found in app.css", name)
+	}
+	v, err := strconv.ParseUint(m[1], 16, 32)
+	if err != nil {
+		t.Fatalf("token --%s: %v", name, err)
+	}
+	return [3]int{int(v>>16) & 0xff, int(v>>8) & 0xff, int(v) & 0xff}
 }
 
 // TestKeyboardFocusVisible asserts :focus-visible is defined in app.css with a

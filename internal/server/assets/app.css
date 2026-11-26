@@ -6,12 +6,12 @@
   --hairline: #1a212a;
   --text:     #e9eef4;
   --text-dim: #8d9aa8;
-  --text-dimmer: #63707e;
+  --text-dimmer: #75828f;
   --accent:   #7c93ff;
   --ok:       #3ad29f;
   --stale:    #e8b64b;
   --failed:   #ff6b6b;
-  --never:    #63707e;
+  --never:    #75828f;
   --r:        6px;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: "Geist", "Inter", system-ui, sans-serif;
