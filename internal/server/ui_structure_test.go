@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/th0rn0/backitup/internal/model"
 )
@@ -55,6 +56,54 @@ func TestClientPageCarriesStatsAndTabs(t *testing.T) {
 	body = getPage(t, c, ts.URL+"/clients/structure-offsite")
 	if !strings.Contains(body, `data-tab-btn="offsite"`) {
 		t.Error("client page hides the Offsite tab even though the client has a remote")
+	}
+}
+
+// TestClientPageRendersCompletelyWithRuns asserts a client page with run history
+// renders to the end.
+//
+// statusIcon took a string while the template passed model.RunStatus, and
+// text/template does not convert a named type for a function argument. The
+// execution error killed the page at the first runs row, and because the handler
+// wrote straight to the ResponseWriter the client got HTTP 200 with a truncated
+// document: the Settings panel and every form in it simply were not there. It
+// only showed up once a client had a run, which no page test had.
+func TestClientPageRendersCompletelyWithRuns(t *testing.T) {
+	st, ts := testStack(t)
+	c := loggedInClient(t, st, ts)
+	ctx := context.Background()
+	id, err := st.CreateClient(ctx, model.Client{
+		Name: "with-runs", Mode: model.ModeRsync, RetentionDays: 7, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		if _, err := st.RecordRun(ctx, model.Run{
+			ClientID:   id,
+			StartedAt:  now.Add(-time.Duration(i+1) * time.Hour),
+			FinishedAt: now.Add(-time.Duration(i+1)*time.Hour + time.Minute),
+			Status:     model.StatusOK,
+			Bytes:      1024,
+			Files:      7,
+			SnapshotID: "2026010" + string(rune('1'+i)) + "T000000Z",
+			LogTail:    "rsync: sent 1 MB",
+		}); err != nil {
+			t.Fatalf("record run %d: %v", i, err)
+		}
+	}
+
+	for _, path := range []string{"/clients/with-runs", "/clients/with-runs?tab=runs", "/clients/with-runs?tab=settings"} {
+		body := getPage(t, c, ts.URL+path)
+		if !strings.Contains(body, "</html>") {
+			t.Errorf("%s: response is truncated (no </html>); a template error is cutting the page short", path)
+		}
+		for _, want := range []string{`data-tab="settings"`, "Retention", `data-tab="runs"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: missing %q — the page stopped early", path, want)
+			}
+		}
 	}
 }
 

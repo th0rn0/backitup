@@ -88,7 +88,7 @@ func (s *Server) getRemotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "remotes.html", map[string]any{
+	s.render(w, "remotes.html", map[string]any{
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "remotes",
 		"Remotes":    remotes,
@@ -244,7 +244,7 @@ func (s *Server) getEditRemote(w http.ResponseWriter, r *http.Request) {
 	def := model.FindBackend(remote.Backend)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "remote_edit.html", map[string]any{
+	s.render(w, "remote_edit.html", map[string]any{
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "remotes",
 		"Remote":     remote,

@@ -21,7 +21,7 @@ func (s *Server) getUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.ExecuteTemplate(w, "users.html", map[string]any{
+	s.render(w, "users.html", map[string]any{
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "users",
 		"Users":      users,
@@ -110,7 +110,7 @@ func (s *Server) renderUsersError(w http.ResponseWriter, r *http.Request, msg st
 	users, _ := s.st.ListUsers(ctx)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
-	_ = s.tmpl.ExecuteTemplate(w, "users.html", map[string]any{
+	s.render(w, "users.html", map[string]any{
 		"Username":   usernameFromContext(r.Context()),
 		"ActivePage": "users",
 		"Users":      users,
