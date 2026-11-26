@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
@@ -137,6 +138,19 @@ func New(st *store.Store, secure bool) *Server {
 				return "○"
 			}
 		},
+		"sparkJSON": func(runs []int64) string {
+			if len(runs) == 0 {
+				return "[]"
+			}
+			// Reverse so oldest is first (sparkline reads left-to-right as time advances).
+			reversed := make([]int64, len(runs))
+			for i, v := range runs {
+				reversed[len(runs)-1-i] = v
+			}
+			b, _ := json.Marshal(reversed)
+			return string(b)
+		},
+		"add": func(a, b int) int { return a + b },
 	}
 	return &Server{
 		st:            st,

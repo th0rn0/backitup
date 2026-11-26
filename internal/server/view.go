@@ -42,7 +42,8 @@ type clientRow struct {
 	Size             string
 	Retention        string
 	Offsite          string
-	OffsiteUploading bool // true while an adhoc offsite run is in progress
+	OffsiteUploading bool    // true while an adhoc offsite run is in progress
+	RecentRuns       []int64 // bytes of the last 10 runs (newest first) for sparkline
 }
 
 // buildDashboard loads the fleet and shapes it for the template: per-client
@@ -79,6 +80,12 @@ func (s *Server) buildDashboard(ctx context.Context) (dashboardView, error) {
 			Retention:        fmt.Sprintf("%dd", c.RetentionDays),
 			Offsite:          offsiteLabel(c, latestOffsites[c.ID]),
 			OffsiteUploading: uploading[c.ID],
+		}
+		// Populate RecentRuns for sparkline (last 10 runs, newest first).
+		if runs, err := s.st.ListRuns(ctx, c.ID, 10); err == nil {
+			for _, r := range runs {
+				row.RecentRuns = append(row.RecentRuns, r.Bytes)
+			}
 		}
 		switch {
 		case latest == nil:

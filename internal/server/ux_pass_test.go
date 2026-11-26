@@ -275,9 +275,9 @@ func TestUXPass_DashboardClientTotal(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
 
-	// Should show "3 clients" somewhere in the fleet meta.
-	if !strings.Contains(html, "3 clients") {
-		t.Error("dashboard should show total client count")
+	// Should show "3" in the Clients aggregate tile.
+	if !strings.Contains(html, ">3<") {
+		t.Error("dashboard should show total client count in aggregate tile")
 	}
 }
 

@@ -13,63 +13,45 @@
 
     <main class="main">
       <div class="topbar">
-        <div class="fleet-meta" role="status">
-          <span class="total">{{.Summary.Total}} client{{if ne .Summary.Total 1}}s{{end}}</span>
-          {{if .Summary.Running}}<span class="running">{{.Summary.Running}} running</span>{{end}}
-          <span class="ok">{{.Summary.OK}} OK</span>
-          <span class="stale">{{.Summary.Stale}} stale</span>
-          <span class="failed">{{.Summary.Failed}} failed</span>
-          <span class="never">{{.Summary.Never}} never</span>
-        </div>
+        <h1>Fleet</h1>
         <a class="btn" href="/clients/new">+ Add client</a>
       </div>
 
       {{if .Clients}}
-      <div class="storage-stats">
-        <div class="stat-chip">
-          <span class="stat-label" title="Allocated blocks on disk, each inode counted once — not apparent file size">On disk (allocated)</span>
-          <span class="stat-value">{{if .Storage.HotMeasured}}{{if .Storage.HotPartial}}≥ {{end}}{{humanBytes .Storage.HotBytes}}{{else}}measuring…{{end}}</span>
-          {{if .Storage.HotAsOf}}<span class="stat-sub">as of {{.Storage.HotAsOf}}{{if .Storage.HotMissing}} · {{.Storage.HotMissing}} client{{if ne .Storage.HotMissing 1}}s{{end}} pending measurement{{end}}</span>{{end}}
+      <!-- Aggregate tiles -->
+      <div class="aggr-strip" role="status">
+        <div class="aggr-tile"><div class="k">Clients</div><div class="v">{{.Summary.Total}}</div></div>
+        <div class="aggr-tile">
+          <div class="k">On disk</div>
+          <div class="v">{{if .Storage.HotMeasured}}{{if .Storage.HotPartial}}≥ {{end}}{{humanBytes .Storage.HotBytes}}{{else}}—{{end}}</div>
         </div>
-        <div class="stat-chip">
-          <span class="stat-label">On remote</span>
-          <span class="stat-value">{{humanBytes .Storage.ColdBytes}}</span>
+        <div class="aggr-tile">
+          <div class="k">Offsite</div>
+          <div class="v">{{humanBytes .Storage.ColdBytes}}</div>
         </div>
+        <div class="aggr-tile needs-you"><div class="k">Needs you</div><div class="v">{{add .Summary.Failed .Summary.Stale}}</div></div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Status</th>
-            <th>Client</th>
-            <th>Mode</th>
-            <th>Last backup</th>
-            <th>Size</th>
-            <th>Retention</th>
-            <th>Offsite</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Clients}}
-          <tr data-slug="{{.Slug}}">
-            <td data-label="Status" data-field="status">
-              <span class="status {{.Health}}">
-                <span class="dot" aria-hidden="true">{{.Icon}}</span>
-                <span class="label">{{.HealthLabel}}</span>
-              </span>
-            </td>
-            <td data-label="Client"><a href="/clients/{{.Slug}}">{{.Name}}</a></td>
-            <td data-label="Mode"><span class="badge">{{.Mode}}</span></td>
-            <td data-label="Last backup" class="mono" data-field="last_backup">{{.LastBackup}}</td>
-            <td data-label="Size" class="mono" data-field="size">{{.Size}}</td>
-            <td data-label="Retention" class="mono">{{.Retention}}</td>
-            <td data-label="Offsite" class="mono">
-              {{if .OffsiteUploading}}<span class="status running"><span class="dot" aria-hidden="true">◎</span>uploading…</span>
-              {{else}}{{.Offsite}}{{end}}
-            </td>
-          </tr>
+
+      <!-- Fleet cards -->
+      <div class="fleet-grid">
+        {{range .Clients}}
+        <div class="fleet-card health-{{.Health}}" data-slug="{{.Slug}}" data-spark='{{sparkJSON .RecentRuns}}'>
+          <div class="hd">
+            <span class="pill pill-{{.Health}}">{{.Icon}} {{.HealthLabel}}</span>
+            <span class="nm"><a href="/clients/{{.Slug}}">{{.Name}}</a></span>
+            <span class="mo">{{.Mode}}</span>
+          </div>
+          <div class="kv">
+            <span>Last backup</span><b data-field="last_backup">{{.LastBackup}}</b>
+            <span>On disk</span><b data-field="size">{{.Size}}</b>
+            <span>Offsite</span><b>{{if .OffsiteUploading}}<span class="status running"><span class="dot" aria-hidden="true">◎</span>uploading…</span>{{else}}{{.Offsite}}{{end}}</b>
+          </div>
+          {{if eq .Health "failed"}}
+          <p class="warnline">Last run failed — check the run log for details.</p>
           {{end}}
-        </tbody>
-      </table>
+        </div>
+        {{end}}
+      </div>
       {{else}}
       <section class="empty">
         <h2>No clients yet</h2>
@@ -77,7 +59,7 @@
         <ol class="steps">
           <li>Add a client — you'll get a key + token</li>
           <li>Paste the cron line on the host you want backed up</li>
-          <li>Watch its row turn <span class="status ok"><span class="dot">●</span> ok</span></li>
+          <li>Watch its card turn <span class="pill pill-ok">● OK</span></li>
         </ol>
         <br>
         <a class="btn" href="/clients/new">+ Add your first client</a>

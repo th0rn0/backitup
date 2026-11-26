@@ -81,6 +81,16 @@
         {{end}}
       </div>
 
+      <!-- Aggregate strip (above tabs) -->
+      <div class="aggr-strip">
+        <div class="aggr-tile"><div class="k">On disk</div><div class="v">{{.OnDiskValue}}</div></div>
+        <div class="aggr-tile"><div class="k">Snapshots</div><div class="v">{{.LocalCount}}</div></div>
+        <div class="aggr-tile"><div class="k">Newest</div><div class="v" style="font-size:14px">{{.LastBackupAge}}</div></div>
+        {{if .Client.OffsiteRemote}}
+        <div class="aggr-tile"><div class="k">Offsite</div><div class="v" style="font-size:14px">{{.OffsiteCount}} object{{if ne .OffsiteCount 1}}s{{end}}</div></div>
+        {{end}}
+      </div>
+
       <!-- Main tabs: Snapshots | Offsite | Runs | Settings -->
       <div data-tab-group>
         <div class="tabs" role="tablist">
