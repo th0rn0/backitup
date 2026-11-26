@@ -287,7 +287,7 @@
             <form method="POST" action="/clients/{{.Client.Slug}}/retention" class="form" style="margin-top:0">
               <label for="retention_days">Hot retention (days)</label>
               <input type="number" id="retention_days" name="retention_days" min="1" value="{{.Client.RetentionDays}}" required>
-              <div class="field-hint">Local snapshots older than this are deleted once safely in offsite (or if offsite is disabled). Offsite objects are not deleted by backitup at all — that is the B2 bucket's lifecycle rule.</div>
+              <div class="field-hint">Local snapshots older than this are deleted once safely offsite. Offsite objects follow the bucket lifecycle.</div>
 
               <label for="expected_interval_secs">Expected interval (seconds)</label>
               <input type="number" id="expected_interval_secs" name="expected_interval_secs" min="0" value="{{.Client.ExpectedIntervalSecs}}">
@@ -321,7 +321,8 @@
               <div id="offsite-interval-row" class="hidden">
                 <label for="offsite_cron">Upload schedule (cron)</label>
                 <input id="offsite_cron" name="offsite_cron" value="{{.Client.OffsiteCron}}" placeholder="e.g. 0 2 * * *" autocomplete="off">
-                <div class="field-hint">Standard 5-field cron expression (minute hour day month weekday) for when to upload. Leave blank to upload on every lifecycle pass. Examples: <code>0 2 * * *</code> = 2am daily · <code>0 2 * * 0</code> = 2am Sundays · <code>0 */6 * * *</code> = every 6 hours.</div>
+                <div class="field-hint">5-field cron (minute hour day month weekday). Blank = every lifecycle pass.</div>
+                <details class="field-details"><summary>Cron examples</summary><code>0 2 * * *</code> = 2am daily · <code>0 2 * * 0</code> = 2am Sundays · <code>0 */6 * * *</code> = every 6 hours.</details>
               </div>
 
               <label>Upload scope</label>
@@ -330,10 +331,11 @@
                 <label><input type="radio" name="offsite_upload_mode" value="latest"{{if eq .Client.OffsiteUploadMode "latest"}} checked{{end}}> Latest only</label>
                 <label><input type="radio" name="offsite_upload_mode" value="single"{{if eq .Client.OffsiteUploadMode "single"}} checked{{end}}> Single generation (one object)</label>
               </div>
-              <div class="field-hint">All: every local snapshot is mirrored offsite as its own object. Latest: only the newest un-uploaded snapshot is uploaded each pass, but the earlier objects stay until the bucket rule expires them — it bounds work, not storage.</div>
-              <div class="field-hint mode-warn-hint">⚠ Single generation keeps <strong>one</strong> object, <code>latest.tar.gz</code>, which every successful upload overwrites. There is no point-in-time restore: older snapshots exist offsite only until the next upload replaces them, and a bad backup replaces a good one on the next successful run. It is the only mode that bounds what cold storage holds without backitup deleting anything.</div>
-
-              <div class="field-hint">Deleting offsite objects is not scheduled here. Retention in cold storage is the B2 bucket's lifecycle rule; the life of an object is decided there, per bucket, not per client.</div>
+              <div class="field-hint">All = every snapshot mirrored. Latest = newest un-uploaded only; earlier objects stay until bucket expiry.</div>
+              <div class="field-hint mode-warn-hint">⚠ Single generation keeps <strong>one</strong> object, <code>latest.tar.gz</code>, which every upload overwrites. No point-in-time restore: a bad backup replaces a good one on the next run.</div>
+              <details class="field-details"><summary>More</summary>
+                <p>Deleting offsite objects is not scheduled here. Retention in cold storage is the B2 bucket's lifecycle rule; the life of an object is decided there, per bucket, not per client.</p>
+              </details>
 
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
@@ -343,13 +345,13 @@
 
           <div class="settings-group">
             <div class="settings-group-title">What the snapshot captures</div>
-            <p class="section-hint">rsync mode only — a targz client ignores these. Changing one affects the <em>next</em> run; snapshots already on disk keep the shape they were written with.</p>
+            <p class="section-hint">rsync mode only — a targz client ignores these. Changes apply to the next run; existing snapshots keep their shape.</p>
             <form method="POST" action="/clients/{{.Client.Slug}}/fidelity" class="form" style="margin-top:0">
               <label class="checkbox-label">
                 <input type="checkbox" name="preserve_sparse" value="1"{{if .Client.PreserveSparse}} checked{{end}}>
                 <span>
                   Preserve sparse files (<code>-S</code>)
-                  <span class="hint">A hole stays a hole instead of becoming zeros on the server. Measured: a tree of 1.9 MB on disk with a 1 GiB hole landed as 1.0 GB without it and 3.0 MB with it.</span>
+                  <span class="hint">Sparse files stay sparse instead of becoming zeros.</span>
                 </span>
               </label>
               <label class="checkbox-label">
@@ -363,7 +365,7 @@
                 <input type="checkbox" name="preserve_acls" value="1"{{if .Client.PreserveACLs}} checked{{end}}>
                 <span>
                   Preserve ACLs (<code>-A</code>)
-                  <span class="hint">Keeps POSIX ACLs. A receiver that refuses the option fails the run with the flag named in the log, never silently.</span>
+                  <span class="hint">Keeps POSIX ACLs. Incompatible receivers fail loudly.</span>
                 </span>
               </label>
               <label class="checkbox-label">
@@ -373,7 +375,9 @@
                   <span class="hint">Keeps <code>user.*</code> and <code>security.capability</code> attributes.</span>
                 </span>
               </label>
-              <div class="field-hint">Ownership (uid/gid) is <strong>not</strong> preserved by these four flags: the receiver runs unprivileged, so every file in a snapshot belongs to the server's backup user. targz snapshots record the numeric owner in the archive instead; rsync snapshots can record it with the <em>Ownership in snapshots</em> setting below.</div>
+              <details class="field-details"><summary>More</summary>
+                <p>Ownership (uid/gid) is <strong>not</strong> preserved by these four flags: the receiver runs unprivileged, so every file in a snapshot belongs to the server's backup user. targz snapshots record the numeric owner in the archive instead; rsync snapshots can record it with the <em>Ownership in snapshots</em> setting below.</p>
+              </details>
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
               </div>
@@ -382,16 +386,16 @@
 
           <div class="settings-group">
             <div class="settings-group-title">Group-readable snapshots</div>
-            <p class="section-hint">rsync mode only. The backup user's own directories are <code>0750</code> (owner rwx, group r-x), so an account in the server's group — <code>gid 10001</code> in the shipped image — can walk into the store without root. What sits <em>inside</em> a snapshot is different: the rsync receiver copies the source's modes, so a source directory at <code>0700</code> lands at <code>0700</code> and the operator's group still cannot enter it.</p>
+            <p class="section-hint">rsync mode only. Lets a group account walk into the store without root.</p>
             <form method="POST" action="/clients/{{.Client.Slug}}/group-readable" class="form" style="margin-top:0">
               <label class="checkbox-label">
                 <input type="checkbox" name="group_readable" value="1"{{if .Client.GroupReadable}} checked{{end}}>
                 <span>
                   Make this client's snapshots group-readable (<code>--chmod=Dg+rx,Fg+r</code>)
-                  <span class="hint">Adds group read+execute to every directory and group read to every regular file as the receiver writes it — one pass, applied during the transfer itself, not a second chmod walk afterwards.</span>
+                  <span class="hint">Adds group read+execute to directories and group read to files during transfer.</span>
                 </span>
               </label>
-              <div class="field-hint mode-warn-hint">⚠ This trades fidelity for access, deliberately. <strong>Modes in the snapshot no longer match the source</strong>: a <code>0600</code> file lands group-readable. And because an unchanged file is a <strong>hardlink shared with earlier snapshots</strong>, the mode lives on the inode — turning this on <strong>also changes the modes of earlier snapshots</strong> that share those files. ACLs are not affected by the flag, but an ACL that denies group read will still deny it.</div>
+              <div class="field-hint mode-warn-hint">⚠ Modes in the snapshot no longer match the source. Because unchanged files are hardlinks, turning this on <strong>also changes earlier snapshots</strong> that share those files.</div>
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
               </div>
@@ -400,18 +404,20 @@
 
           <div class="settings-group">
             <div class="settings-group-title">Ownership in snapshots</div>
-            <p class="section-hint">rsync mode only. The receiver is an unprivileged account (<code>uid 10001</code> in the shipped image), so it cannot <code>chown</code> — normally every file in a snapshot belongs to the backup account, whatever the source said, and the run still exits 0. Turning this on makes the server record each file's real <code>uid</code>/<code>gid</code> and mode in a <code>user.rsync.%stat</code> extended attribute as it writes, so a restore can put the ownership back without ever giving the receiver root.</p>
+            <p class="section-hint">rsync mode only. Records real uid/gid in xattrs so restores can recover ownership without root.</p>
             <form method="POST" action="/clients/{{.Client.Slug}}/ownership" class="form" style="margin-top:0">
               <label class="checkbox-label">
                 <input type="checkbox" name="record_ownership" value="1"{{if .Client.RecordOwnership}} checked{{end}}>
                 <span>
                   Record the source's uid/gid in each snapshot (<code>rsync --fake-super</code>, server side)
-                  <span class="hint">Files in the <em>hot tier</em> stay owned by the backup account, so the server keeps its read and delete rights — that is what makes this safe, and why the receiver is not switched to root. The ownership lives in the xattr, not on the inode.</span>
+                  <span class="hint">Files stay owned by the backup account; ownership lives in the xattr.</span>
                 </span>
               </label>
-              <div class="field-hint">Turning this on rewrites this client's <code>authorized_keys</code> line, so it applies to the next run — the client needs no change and no new credentials. Existing snapshots are untouched: a tree written before this was on keeps the backup account as its owner.</div>
-              <div class="field-hint mode-warn-hint">⚠ The backups volume must support <strong>user extended attributes</strong>. ext4, xfs and btrfs do; an NFS volume exposed without xattr support may not. If the receiver refuses them the run fails and the log names xattrs — it does not silently store the snapshot without the ownership. Because the owner is in an xattr, <strong>a plain <code>cp</code> or <code>tar</code> out of a snapshot loses it</strong>: extract with <code>tar --xattrs</code>, or read the directory with <code>rsync --fake-super</code>.</div>
-              <div class="field-hint">Restoring: run the pull on the target host and the server's own command adds the flag — <code>rsync -a --numeric-ids -e 'ssh -i &lt;key&gt;' backup@{{.PublicHost}}:snapshots/&lt;snapshot&gt;/ /restore/</code> as root. Do <strong>not</strong> add <code>--fake-super</code> to the restoring end: it would write a new pseudo-owner instead of <code>chown</code>ing. From an offsite archive, extract it first (<code>tar --xattrs -xzf &lt;archive&gt; -C /stage</code>) and then copy it to the target with <code>rsync -a --fake-super /stage/ root@&lt;target&gt;:/restore/</code>, where the plain root receiver applies the recorded owner. Neither helps a file the client could not read in the first place (a root-owned <code>0600</code> qcow2 image): that is a source permission problem, not a receiver setting.</div>
+              <div class="field-hint">Applies to the next run. Existing snapshots keep the backup account as owner.</div>
+              <div class="field-hint mode-warn-hint">⚠ Volume must support <strong>user xattrs</strong> (ext4/xfs/btrfs do). A plain <code>cp</code> or <code>tar</code> loses the ownership — use <code>tar --xattrs</code> or <code>rsync --fake-super</code>.</div>
+              <details class="field-details"><summary>Restoring</summary>
+                <p>Run the pull on the target host and the server's own command adds the flag — <code>rsync -a --numeric-ids -e 'ssh -i &lt;key&gt;' backup@{{.PublicHost}}:snapshots/&lt;snapshot&gt;/ /restore/</code> as root. Do <strong>not</strong> add <code>--fake-super</code> to the restoring end. From an offsite archive, extract first (<code>tar --xattrs -xzf &lt;archive&gt; -C /stage</code>) then copy with <code>rsync -a --fake-super /stage/ root@&lt;target&gt;:/restore/</code>.</p>
+              </details>
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
               </div>
@@ -422,7 +428,7 @@
             <div class="settings-group-title">Danger zone</div>
             <div class="danger-row">
               <div>
-                <p class="section-hint">Issues a new SSH key and bearer token. The old key and token stop working immediately, so update the token in the host's cron line after rotating: the next run fails with 401 until you do.</p>
+                <p class="section-hint">Issues new credentials. Old ones stop working immediately — update the cron token.</p>
                 <form method="POST" action="/clients/{{.Client.Slug}}/rotate">
                   <label class="checkbox-label">
                     <input type="checkbox" name="confirm" value="1" required>
