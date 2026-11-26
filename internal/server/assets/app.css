@@ -1,15 +1,17 @@
 :root {
-  --bg:       #0d1117;
-  --surface:  #161b22;
-  --surface-2:#1c2230;
-  --border:   #21262d;
-  --text:     #e6edf3;
-  --text-dim: #8b949e;
-  --accent:   #2dd4bf;
-  --ok:       #3fb950;
-  --stale:    #d29922;
-  --failed:   #f85149;
-  --never:    #6e7681;
+  --bg:       #0d1014;
+  --surface:  #141920;
+  --surface-2:#10151b;
+  --border:   #212932;
+  --hairline: #1a212a;
+  --text:     #e9eef4;
+  --text-dim: #8d9aa8;
+  --text-dimmer: #75828f;
+  --accent:   #7c93ff;
+  --ok:       #3ad29f;
+  --stale:    #e8b64b;
+  --failed:   #ff6b6b;
+  --never:    #75828f;
   --r:        6px;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: "Geist", "Inter", system-ui, sans-serif;
@@ -132,7 +134,7 @@ h2 {
 
 /* ── Sections ── */
 .section { border-top: 1px solid var(--border); padding-top: 24px; }
-.danger-section { border-top: 1px solid rgba(248,81,73,0.25); padding-top: 24px; }
+.danger-section { border-top: 1px solid rgba(255,107,107,0.25); padding-top: 24px; }
 .danger-section h2 { color: var(--failed); }
 
 /* ── Breadcrumb ── */
@@ -204,7 +206,7 @@ h2 {
   align-items: center;
   gap: 6px;
   background: var(--accent);
-  color: #031a17;
+  color: var(--bg);
   border: none;
   border-radius: var(--r);
   padding: 8px 14px;
@@ -227,7 +229,7 @@ h2 {
 
 .btn-danger {
   background: var(--failed);
-  color: #fff;
+  color: var(--text);
 }
 .btn-danger:hover { opacity: 0.9; }
 
@@ -252,9 +254,9 @@ h2 {
   display: flex;
   gap: 8px;
 }
-.alert-warn  { background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.4); color: var(--stale); }
-.alert-error { background: rgba(248,81,73,0.1);  border: 1px solid rgba(248,81,73,0.4);  color: var(--failed); }
-.alert-ok    { background: rgba(63,185,80,0.1);  border: 1px solid rgba(63,185,80,0.4);  color: #3fb950; }
+.alert-warn  { background: rgba(232,182,75,0.1); border: 1px solid rgba(232,182,75,0.4); color: var(--stale); }
+.alert-error { background: rgba(255,107,107,0.1);  border: 1px solid rgba(255,107,107,0.4);  color: var(--failed); }
+.alert-ok    { background: rgba(58,210,159,0.1);  border: 1px solid rgba(58,210,159,0.4);  color: var(--ok); }
 
 /* ── Tables ── */
 table { width: 100%; border-collapse: collapse; }
@@ -317,19 +319,19 @@ td.mono { font-family: var(--mono); font-size: 12px; }
   color: var(--text-dim);
 }
 .badge-missing {
-  border-color: #c0392b44;
-  color: #c0392b;
-  background: #c0392b0d;
+  border-color: rgba(255,107,107,0.27);
+  color: var(--failed);
+  background: rgba(255,107,107,0.05);
 }
 .badge-ok {
-  border-color: #27ae6044;
-  color: #27ae60;
-  background: #27ae600d;
+  border-color: rgba(58,210,159,0.27);
+  color: var(--ok);
+  background: rgba(58,210,159,0.05);
 }
 .badge-warn {
-  border-color: #e6700044;
-  color: #b35900;
-  background: #e670000d;
+  border-color: rgba(232,182,75,0.27);
+  color: var(--stale);
+  background: rgba(232,182,75,0.05);
 }
 /* The second confirmation on a destructive-to-the-index action: a checkbox the
    operator has to tick before "Stop tracking" names a live offsite object. */
@@ -610,7 +612,7 @@ pre.log {
   margin-bottom: 4px;
 }
 .danger-group {
-  border-bottom-color: rgba(248,81,73,0.2);
+  border-bottom-color: rgba(255,107,107,0.2);
 }
 .danger-group .settings-group-title { color: var(--failed); }
 .danger-row {
@@ -635,4 +637,142 @@ pre.log {
   td::before { content: attr(data-label) "  "; color: var(--text-dim); font-size: 11px; }
   .kv td, .kv td::before { display: revert; }
   .form .row { flex-direction: column; }
+}
+
+/* ── Tabular numerals ── */
+.mono, .stat-value, .client-stat-value, .client-stat-sub,
+[data-field="last_backup"], [data-field="size"],
+.fleet-card .kv b, .fleet-card .nm,
+.aggr .v, .aggr-tile .v {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Sidebar nav: position + z-index so nothing overlays it ── */
+.sidebar {
+  position: relative;
+  z-index: 10;
+}
+.nav a {
+  position: relative;
+  z-index: 11;
+}
+
+/* ── Focus visible: explicit outline for keyboard users ── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Aggregate tiles (fleet + client detail) ── */
+.aggr-strip {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.aggr-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 10px 14px;
+  min-width: 108px;
+}
+.aggr-tile .k {
+  font-size: 10.5px;
+  color: var(--text-dimmer);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.aggr-tile .v {
+  font-size: 18px;
+  font-weight: 640;
+  margin-top: 2px;
+  color: var(--text);
+}
+.aggr-tile.needs-you .v { color: var(--failed); }
+
+/* ── Fleet cards ── */
+.fleet-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 800px) {
+  .fleet-grid { grid-template-columns: 1fr; }
+}
+.fleet-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 15px;
+  transition: border-color 0.12s;
+}
+.fleet-card:hover { border-color: var(--border); filter: brightness(1.15); }
+.fleet-card.health-failed {
+  border-color: var(--failed);
+  box-shadow: 0 0 0 1px rgba(255,107,107,0.25);
+}
+.fleet-card .hd {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+}
+.fleet-card .nm {
+  font-weight: 620;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.fleet-card .nm a { color: var(--text); }
+.fleet-card .nm a:hover { color: var(--accent); text-decoration: none; }
+.fleet-card .mo {
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 1px 7px;
+}
+.fleet-card .kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.fleet-card .kv b {
+  font-weight: 560;
+  color: var(--text);
+  justify-self: end;
+}
+.fleet-card .warnline {
+  font-size: 12px;
+  color: var(--failed);
+  margin: 9px 0 0;
+}
+
+/* ── Status pill badges (fleet cards) ── */
+.pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid transparent;
+  font-weight: 560;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pill-ok   { background: rgba(58,210,159,0.12); color: var(--ok);     border-color: rgba(58,210,159,0.28); }
+.pill-stale{ background: rgba(232,182,75,0.12); color: var(--stale);  border-color: rgba(232,182,75,0.28); }
+.pill-failed{background: rgba(255,107,107,0.12);color: var(--failed); border-color: rgba(255,107,107,0.28); }
+.pill-never{ background: var(--surface-2);       color: var(--text-dim); border-color: var(--border); }
+.pill-running{background: rgba(124,147,255,0.12);color: var(--accent); border-color: rgba(124,147,255,0.28); }
+
+/* ── Sparkline ── */
+.sparkline {
+  display: block;
+  margin: 10px 0 0;
+  opacity: 0.85;
+  height: 22px;
+  width: 100%;
 }

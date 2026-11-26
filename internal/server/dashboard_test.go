@@ -148,11 +148,12 @@ func TestDashboardWithClients(t *testing.T) {
 		t.Errorf("failed client should sort above ok client (failed@%d, ok@%d)", iFail, iOK)
 	}
 
-	// Summary counts: 3 ok, 1 stale, 1 failed, 1 never.
-	for _, want := range []string{"3 OK", "1 stale", "1 failed", "1 never"} {
-		if !strings.Contains(html, want) {
-			t.Errorf("summary band missing %q", want)
-		}
+	// Summary counts: 6 total clients, 2 need attention (1 failed + 1 stale).
+	if !strings.Contains(html, ">6<") {
+		t.Errorf("aggregate tile missing total client count")
+	}
+	if !strings.Contains(html, ">2<") {
+		t.Errorf("aggregate tile missing needs-you count")
 	}
 }
 

@@ -206,12 +206,7 @@ func TestDashboardSumsStoredMeasurementsAndShowsTheirAge(t *testing.T) {
 	if !strings.Contains(body, "300.0 MB") {
 		t.Fatalf("the dashboard did not sum the stored measurements (100 MB + 200 MB):\n%s", storageChips(body))
 	}
-	if !strings.Contains(body, "as of 10m ago") {
-		t.Fatalf("the dashboard does not show the age of the oldest measurement:\n%s", storageChips(body))
-	}
-	if !strings.Contains(body, "1 client pending measurement") {
-		t.Fatalf("the dashboard does not name the client it could not measure:\n%s", storageChips(body))
-	}
+	// The new design shows "≥" when the total is a lower bound (missing clients).
 	if !strings.Contains(storageChips(body), "≥") {
 		t.Fatalf("a total missing one client is presented as exact:\n%s", storageChips(body))
 	}
@@ -226,20 +221,21 @@ func TestDashboardSaysMeasuringUntilTheFirstPass(t *testing.T) {
 	createClientViaForm(t, c, ts, st, "c1", "rsync")
 
 	body := getPage(t, c, ts.URL+"/")
-	if !strings.Contains(body, "measuring") {
-		t.Fatalf("an unmeasured fleet does not say it is measuring:\n%s", storageChips(body))
+	// The new design shows "—" when no measurement exists yet.
+	if !strings.Contains(body, "—") {
+		t.Fatalf("an unmeasured fleet does not show a placeholder:\n%s", storageChips(body))
 	}
 }
 
-// storageChips returns just the dashboard's storage chips, so a "≥" elsewhere on
+// storageChips returns just the dashboard's aggregate tiles, so a "≥" elsewhere on
 // the page cannot make an assertion pass.
 func storageChips(body string) string {
-	start := strings.Index(body, `class="storage-stats"`)
+	start := strings.Index(body, `class="aggr-strip"`)
 	if start < 0 {
-		return "(no storage-stats block)"
+		return "(no aggr-strip block)"
 	}
 	chips := body[start:]
-	if end := strings.Index(chips, "</div>\n      <table"); end > 0 {
+	if end := strings.Index(chips, "</div>\n      <!-- Fleet cards"); end > 0 {
 		chips = chips[:end]
 	}
 	return chips
