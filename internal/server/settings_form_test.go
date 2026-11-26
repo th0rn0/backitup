@@ -190,10 +190,24 @@ func TestSettingsForm_HintsAreConcise(t *testing.T) {
 		t.Error("ownership section hint should be behind a disclosure, not inline")
 	}
 
-	// The restoring tutorial should be behind a disclosure.
-	if strings.Contains(html, "rsync -a --numeric-ids -e") {
+	// The restoring tutorial must stay reachable but behind a disclosure. A bare
+	// Contains cannot tell "hidden behind <details>" from "rendered inline": the
+	// tutorial is in the markup either way, so check where it sits.
+	if !insideDetails(html, "rsync -a --numeric-ids -e") {
 		t.Error("restoring tutorial should be behind a disclosure, not inline")
 	}
+}
+
+// insideDetails reports whether needle appears between an opening <details> and
+// its closing tag, i.e. hidden behind a disclosure rather than rendered inline.
+func insideDetails(html, needle string) bool {
+	i := strings.Index(html, needle)
+	if i < 0 {
+		return false
+	}
+	open := strings.LastIndex(html[:i], "<details")
+	closed := strings.LastIndex(html[:i], "</details>")
+	return open > closed
 }
 
 // TestSettingsForm_DestructiveWarningsInline asserts that destructive warnings

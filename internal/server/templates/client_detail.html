@@ -332,7 +332,7 @@
                 <label><input type="radio" name="offsite_upload_mode" value="single"{{if eq .Client.OffsiteUploadMode "single"}} checked{{end}}> Single generation (one object)</label>
               </div>
               <div class="field-hint">All = every snapshot mirrored. Latest = newest un-uploaded only; earlier objects stay until bucket expiry.</div>
-              <div class="field-hint mode-warn-hint">⚠ Single generation keeps <strong>one</strong> object, <code>latest.tar.gz</code>, which every upload overwrites. No point-in-time restore: a bad backup replaces a good one on the next run.</div>
+              <div class="field-hint mode-warn-hint">⚠ Single generation keeps <strong>one</strong> object, <code>latest.tar.gz</code>, which every upload overwrites. There is no point-in-time restore: a bad backup replaces a good one on the next run.</div>
               <details class="field-details"><summary>More</summary>
                 <p>Deleting offsite objects is not scheduled here. Retention in cold storage is the B2 bucket's lifecycle rule; the life of an object is decided there, per bucket, not per client.</p>
               </details>
@@ -376,7 +376,7 @@
                 </span>
               </label>
               <details class="field-details"><summary>More</summary>
-                <p>Ownership (uid/gid) is <strong>not</strong> preserved by these four flags: the receiver runs unprivileged, so every file in a snapshot belongs to the server's backup user. targz snapshots record the numeric owner in the archive instead; rsync snapshots can record it with the <em>Ownership in snapshots</em> setting below.</p>
+                <p>Ownership (uid/gid) is <strong>not</strong> preserved by these four flags: the receiver runs unprivileged, so every file in a snapshot belongs to the server's backup user. targz snapshots record the numeric owner in the archive instead; rsync snapshots can record it with the <em>Ownership in snapshots</em> setting below, which writes each file's <code>uid</code>/<code>gid</code> into a <code>user.rsync.%stat</code> xattr instead of <code>chown</code>ing.</p>
               </details>
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
@@ -414,9 +414,9 @@
                 </span>
               </label>
               <div class="field-hint">Applies to the next run. Existing snapshots keep the backup account as owner.</div>
-              <div class="field-hint mode-warn-hint">⚠ Volume must support <strong>user xattrs</strong> (ext4/xfs/btrfs do). A plain <code>cp</code> or <code>tar</code> loses the ownership — use <code>tar --xattrs</code> or <code>rsync --fake-super</code>.</div>
+              <div class="field-hint mode-warn-hint">⚠ Volume must support <strong>user xattrs</strong> (ext4/xfs/btrfs do, NFS may not). Because the owner lives in an xattr, <strong>a plain <code>cp</code> or <code>tar</code> out of a snapshot loses it</strong>: extract with <code>tar --xattrs</code> or read it with <code>rsync --fake-super</code>.</div>
               <details class="field-details"><summary>Restoring</summary>
-                <p>Run the pull on the target host and the server's own command adds the flag — <code>rsync -a --numeric-ids -e 'ssh -i &lt;key&gt;' backup@{{.PublicHost}}:snapshots/&lt;snapshot&gt;/ /restore/</code> as root. Do <strong>not</strong> add <code>--fake-super</code> to the restoring end. From an offsite archive, extract first (<code>tar --xattrs -xzf &lt;archive&gt; -C /stage</code>) then copy with <code>rsync -a --fake-super /stage/ root@&lt;target&gt;:/restore/</code>.</p>
+                <p>Run the pull on the target host and the server's own command adds the flag — <code>rsync -a --numeric-ids -e 'ssh -i &lt;key&gt;' backup@{{.PublicHost}}:snapshots/&lt;snapshot&gt;/ /restore/</code> as root. Do <strong>not</strong> add <code>--fake-super</code> to the restoring end: it would write a new pseudo-owner instead of <code>chown</code>ing. From an offsite archive, extract first (<code>tar --xattrs -xzf &lt;archive&gt; -C /stage</code>) then copy with <code>rsync -a --fake-super /stage/ root@&lt;target&gt;:/restore/</code>. Neither helps a file the client could not read in the first place (a root-owned <code>0600</code> qcow2 image): that is a source permission problem, not a receiver setting.</p>
               </details>
               <div class="form-actions">
                 <button type="submit" class="btn">Save</button>
